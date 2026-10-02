@@ -36,7 +36,7 @@ The prefix is **kept on every request inside Stoliki**. Whatever routes traffic 
 
 | Layer | Setting |
 |---|---|
-| Tailscale mapping | Dedicated `serve` mapping (never Funnel) on a separate HTTPS port. Its target includes the prefix, e.g. `http://127.0.0.1:<port>/wesele`, in case `--set-path` strips the mount path. **DevOps verifies empirically and records the result here.** |
+| Tailscale mapping | **Wired and verified (2026-10-02):** `sudo tailscale serve --bg --https=8444 --set-path /wesele http://127.0.0.1:8094/wesele` — tailnet-only (`tailscale serve status` shows "tailnet only"; the port is absent from `tailscale funnel status`). Final URL: `https://<pi-host>.<tailnet>.ts.net:8444/wesele/`. Verified through the real hostname: `/wesele/api/health` 200, `/wesele` 301 → `/wesele/`, `/wesele/`, `/wesele/goscie`, `/wesele/druk/10` all 200. Because the Go server only serves full `/wesele/...` paths and answers 200 through the mapping, the prefix reaches the container intact: the target's `/wesele` suffix is required (the mount path is consumed and the target path re-added). The pre-existing mappings (`/`, `/sibling-a/`, `/sibling-b/`, `:8443`) were diffed against a snapshot taken before the change and still answer 200. The `sudo` is needed once because the user is not a Tailscale operator; do not run `serve reset` / `funnel`. |
 | Go server | `BASE_PATH=/wesele`. Routes: `/wesele/api/*` (API); `/wesele/*` (static SPA from `WEB_ROOT`, falling back to `index.html` for unknown non-API paths); `/wesele` → 301 `/wesele/` |
 | Vite | `base: '/wesele/'` (dev: proxy `/wesele/api` → `http://localhost:8080`) |
 | React Router | `basename: '/wesele'` |
