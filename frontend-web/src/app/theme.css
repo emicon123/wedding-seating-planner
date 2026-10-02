@@ -1,0 +1,171 @@
+/*
+ * VISUAL DIRECTION — "Plan sali" (the venue floor plan, drawn by hand)
+ *
+ * Subject: a couple and a few helpers placing ~100 guests at 8/10/12-seat tables,
+ * mostly on a desktop, sometimes checking the plan on a phone at the venue.
+ * The one thing the app is about is SPACE, so the whole UI borrows from a
+ * drafting table, not from a SaaS dashboard:
+ *
+ *   - Paper:   cool chalk-grey sheet (not cream) with a faint dot grid, like the
+ *              plotting paper a floor plan is drawn on. Cards are lighter "overlays".
+ *   - Ink:     one deep navy (#1c2540) for text, header and primary buttons.
+ *   - Brass:   a small metallic accent (#c9a24a) for the place-card details:
+ *              pins, the active-tab rule, seat dots. Used sparingly.
+ *   - Groups:  the meaning of a guest group is carried by colour AND form, never colour alone:
+ *              group 0 = wine + solid link (bound together), group 1 = teal + solid outline,
+ *              group 2 = ochre + dashed outline (fallback). Violations = brick red + icon + text.
+ *   - Type:    Fraunces (a soft, slightly "wedding stationery" serif) is only for headings and
+ *              the big numerals (table number, fill 7/10). Figtree carries all UI text:
+ *              friendly, very legible at small sizes on a phone. Both self-hosted
+ *              (@fontsource), no external requests from the Pi.
+ *   - Shape:   6-10px radii, thin ink-tinted borders and almost no shadows: things look
+ *              drawn on the paper, not floating above it. Tables are circles, seats are dots.
+ *   - Boldness lives in ONE place: the table-with-seats glyph (see TableGlyph) that the
+ *              brand mark and the plan tiles share. Everything else stays quiet.
+ *   - Light theme only (YAGNI): venues are bright, and a printed plan is paper anyway.
+ *
+ * Tokens follow the shadcn/ui convention (--background, --primary, ...) so the copied
+ * components in components/ui pick them up unchanged.
+ */
+
+:root {
+  --paper: #eef0f2;
+  --paper-deep: #e2e6ea;
+  --card-surface: #fafbfb;
+  --ink: #1c2540;
+  --ink-soft: #55607a;
+  --brass: #c9a24a;
+  --brass-ink: #6d5416;
+  --wine: #8e2c4e;
+  --teal: #1b7384;
+  --ochre: #a8741a;
+  --sage: #3a6e5c;
+  --brick: #b3342f;
+
+  --radius: 0.5rem;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--card-surface);
+  --card-foreground: var(--ink);
+  --popover: var(--card-surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: #f6f4ef;
+  --secondary: var(--paper-deep);
+  --secondary-foreground: var(--ink);
+  --muted: var(--paper-deep);
+  --muted-foreground: var(--ink-soft);
+  --accent: #dfe5ec;
+  --accent-foreground: var(--ink);
+  --destructive: var(--brick);
+  --border: #ccd3dc;
+  --input: #b9c2ce;
+  --ring: var(--teal);
+}
+
+@theme inline {
+  --font-sans: 'Figtree Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-paper-deep: var(--paper-deep);
+  --color-brass: var(--brass);
+  --color-brass-ink: var(--brass-ink);
+  --color-wine: var(--wine);
+  --color-teal: var(--teal);
+  --color-ochre: var(--ochre);
+  --color-sage: var(--sage);
+  --color-brick: var(--brick);
+
+  /* Guest groups (003-frontend-design: legible at a glance, never colour alone). */
+  --color-group-0: var(--wine);
+  --color-group-1: var(--teal);
+  --color-group-2: var(--ochre);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    /* The drafting-paper dot grid. Decorative only. */
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--ink) 14%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 22px 22px;
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/*
+ * PRINT (features/plans/PrintView): A4, 14 mm margins, no dot grid, page numbers where the
+ * browser supports margin boxes. Utilities (print:hidden, break-inside-avoid, ...) do the rest.
+ */
+@page {
+  size: A4;
+  margin: 14mm;
+
+  @bottom-right {
+    content: counter(page) ' / ' counter(pages);
+    font-size: 9pt;
+  }
+}
+
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    background-image: none !important;
+    font-size: 11pt;
+    color: #000;
+  }
+}
