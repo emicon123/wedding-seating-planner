@@ -1,0 +1,24 @@
+parameters:
+  - $ref: ../components/parameters.yaml#/Capacity
+  - $ref: ../components/parameters.yaml#/TableNumber
+delete:
+  tags: [scenarios]
+  operationId: deleteTable
+  summary: Remove a table from a plan (UC-13)
+  description: Its guests become unseated (pins cleared); later tables are renumbered down by one.
+  responses:
+    '200':
+      description: The updated plan with its evaluation.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ScenarioResponse
+          examples:
+            removed:
+              $ref: ../components/examples.yaml#/Scenario10
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

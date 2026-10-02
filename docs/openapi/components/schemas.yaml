@@ -1,0 +1,669 @@
+# ---------- envelopes & errors ----------
+Meta:
+  type: object
+  description: Response metadata.
+  required: [requestId]
+  properties:
+    requestId:
+      type: string
+      readOnly: true
+      description: Correlates the response with server logs.
+      example: 01JB8Z6Q0K3N
+Page:
+  type: object
+  description: List metadata. Lists are small (≤ ~100 guests) and returned whole; no pagination parameters.
+  required: [total]
+  properties:
+    total:
+      type: integer
+      minimum: 0
+      readOnly: true
+      example: 3
+ErrorCode:
+  type: string
+  enum:
+    - bad_request
+    - validation_failed
+    - duplicate_name
+    - not_found
+    - version_conflict
+    - import_invalid
+    - payload_too_large
+    - internal_error
+ErrorItem:
+  type: object
+  required: [code, field, message]
+  properties:
+    code:
+      $ref: '#/ErrorCode'
+    field:
+      type: [string, 'null']
+      description: Offending field (JSON property, path/query parameter or `row N` for imports); null if not field-specific.
+      example: firstName
+    message:
+      type: string
+      description: Human-readable (English) explanation; the UI maps `code` to Polish copy.
+      example: firstName must not be empty.
+ErrorResponse:
+  type: object
+  required: [errors, meta]
+  properties:
+    errors:
+      type: array
+      minItems: 1
+      items:
+        $ref: '#/ErrorItem'
+    meta:
+      $ref: '#/Meta'
+
+# ---------- guests & links ----------
+LinkLevel:
+  type: integer
+  enum: [0, 1, 2]
+  description: 0 = must sit together (hard), 1 = preferred (weight 1.0), 2 = acceptable if unavoidable (weight 0.5).
+  example: 1
+GuestLinkRef:
+  type: object
+  description: One link as seen from a guest.
+  required: [guestId, level]
+  properties:
+    guestId:
+      type: integer
+      format: int64
+      description: The other guest.
+      example: 6
+    level:
+      $ref: '#/LinkLevel'
+Guest:
+  type: object
+  required: [id, firstName, lastName, displayName, notes, isChild, enabled, version, links, createdAt, updatedAt]
+  properties:
+    id:
+      type: integer
+      format: int64
+      readOnly: true
+      example: 4
+    firstName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      example: Maciek
+    lastName:
+      type: [string, 'null']
+      minLength: 1
+      maxLength: 100
+      example: null
+    displayName:
+      type: string
+      readOnly: true
+      description: firstName + optional " " + lastName; unique ignoring case.
+      example: Maciek
+    notes:
+      type: string
+      maxLength: 2000
+      example: wegetarianin
+    isChild:
+      type: boolean
+      example: false
+    enabled:
+      type: boolean
+      description: Disabled guests stay on the list but are ignored by all three plans.
+      example: true
+    version:
+      type: integer
+      minimum: 1
+      readOnly: true
+      example: 3
+    links:
+      type: array
+      readOnly: true
+      description: All links touching this guest (each link appears on both guests).
+      items:
+        $ref: '#/GuestLinkRef'
+    createdAt:
+      type: string
+      format: date-time
+      readOnly: true
+      example: '2026-10-02T09:15:00Z'
+    updatedAt:
+      type: string
+      format: date-time
+      readOnly: true
+      example: '2026-10-02T09:20:00Z'
+GuestCreate:
+  type: object
+  required: [firstName]
+  additionalProperties: false
+  properties:
+    firstName:
+      type: string
+      minLength: 1
+      maxLength: 100
+    lastName:
+      type: [string, 'null']
+      minLength: 1
+      maxLength: 100
+    notes:
+      type: string
+      maxLength: 2000
+      default: ''
+    isChild:
+      type: boolean
+      default: false
+    enabled:
+      type: boolean
+      default: true
+GuestUpdate:
+  type: object
+  description: Partial update; omitted fields are unchanged. `lastName` null clears it.
+  required: [version]
+  additionalProperties: false
+  properties:
+    version:
+      type: integer
+      minimum: 1
+      description: The version the edit is based on (optimistic lock).
+    firstName:
+      type: string
+      minLength: 1
+      maxLength: 100
+    lastName:
+      type: [string, 'null']
+      minLength: 1
+      maxLength: 100
+    notes:
+      type: string
+      maxLength: 2000
+    isChild:
+      type: boolean
+    enabled:
+      type: boolean
+GuestBulkToggle:
+  type: object
+  description: Enable or disable many guests at once (last write wins, no version check). Also used for a single toggle.
+  required: [guestIds, enabled]
+  additionalProperties: false
+  properties:
+    guestIds:
+      type: array
+      minItems: 1
+      uniqueItems: true
+      items:
+        type: integer
+        format: int64
+    enabled:
+      type: boolean
+GuestResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/Guest'
+    meta:
+      $ref: '#/Meta'
+GuestListResponse:
+  type: object
+  required: [data, meta, page]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/Guest'
+    meta:
+      $ref: '#/Meta'
+    page:
+      $ref: '#/Page'
+GuestLink:
+  type: object
+  required: [key, guestIds, level]
+  properties:
+    key:
+      type: string
+      readOnly: true
+      description: Normalised `{smallerId}-{largerId}`.
+      example: 4-6
+    guestIds:
+      type: array
+      readOnly: true
+      minItems: 2
+      maxItems: 2
+      items:
+        type: integer
+        format: int64
+      example: [4, 6]
+    level:
+      $ref: '#/LinkLevel'
+GuestLinkUpsert:
+  type: object
+  required: [level]
+  additionalProperties: false
+  properties:
+    level:
+      $ref: '#/LinkLevel'
+GuestLinkResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/GuestLink'
+    meta:
+      $ref: '#/Meta'
+
+# ---------- clusters ----------
+ClusterAffinity:
+  type: object
+  required: [clusterKey, level]
+  properties:
+    clusterKey:
+      type: integer
+      format: int64
+      description: The other cluster.
+      example: 6
+    level:
+      type: integer
+      enum: [1, 2]
+      example: 1
+Cluster:
+  type: object
+  description: Connected component of group-0 links over ALL guests (derived, never stored).
+  required: [key, guestIds, enabledGuestIds, seatedSize, affinities]
+  properties:
+    key:
+      type: integer
+      format: int64
+      readOnly: true
+      description: Smallest member guest id; stable while the group-0 links do not change.
+      example: 4
+    guestIds:
+      type: array
+      readOnly: true
+      items:
+        type: integer
+        format: int64
+      example: [4, 5]
+    enabledGuestIds:
+      type: array
+      readOnly: true
+      items:
+        type: integer
+        format: int64
+      example: [4, 5]
+    seatedSize:
+      type: integer
+      minimum: 0
+      readOnly: true
+      description: Number of enabled members (seats the cluster takes). 0 = ignored by plans.
+      example: 2
+    affinities:
+      type: array
+      readOnly: true
+      description: Group-1/2 relation to other clusters (cluster ↔ cluster).
+      items:
+        $ref: '#/ClusterAffinity'
+DataWarning:
+  type: object
+  required: [code, message, guestIds]
+  properties:
+    code:
+      type: string
+      enum: [cluster_exceeds_8, cluster_exceeds_12, conflicting_link_levels]
+      example: cluster_exceeds_8
+    message:
+      type: string
+      example: A group-0 cluster of 9 enabled guests does not fit the 8-seat plan.
+    guestIds:
+      type: array
+      items:
+        type: integer
+        format: int64
+      example: [1, 2, 3, 9, 10, 11, 12, 13, 14]
+ClusterOverview:
+  type: object
+  required: [clusters, warnings]
+  properties:
+    clusters:
+      type: array
+      items:
+        $ref: '#/Cluster'
+    warnings:
+      type: array
+      items:
+        $ref: '#/DataWarning'
+ClusterOverviewResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/ClusterOverview'
+    meta:
+      $ref: '#/Meta'
+
+# ---------- import ----------
+ImportProblem:
+  type: object
+  required: [row, severity, code, message]
+  properties:
+    row:
+      type: [integer, 'null']
+      description: 1-based CSV row (header = 1); null for file-level problems.
+      example: 14
+    severity:
+      type: string
+      enum: [error, warning]
+      description: Errors block the commit; warnings do not (the offending link is dropped).
+      example: warning
+    code:
+      type: string
+      enum: [malformed_csv, missing_column, missing_first_name, duplicate_name, unmatched_name, ambiguous_name, self_link, conflicting_levels]
+      example: unmatched_name
+    message:
+      type: string
+      example: '"Tadzio" in grupa0 matches no guest; link dropped.'
+    value:
+      type: [string, 'null']
+      description: The offending cell value, if any.
+      example: Tadzio
+ImportCounts:
+  type: object
+  required: [guests, children, links, clusters]
+  properties:
+    guests:
+      type: integer
+      example: 92
+    children:
+      type: integer
+      example: 7
+    links:
+      type: integer
+      example: 140
+    clusters:
+      type: integer
+      example: 41
+ImportReport:
+  type: object
+  required: [dryRun, committed, counts, problems]
+  properties:
+    dryRun:
+      type: boolean
+      example: true
+    committed:
+      type: boolean
+      description: True only when dryRun=false and there were no errors.
+      example: false
+    counts:
+      $ref: '#/ImportCounts'
+    problems:
+      type: array
+      items:
+        $ref: '#/ImportProblem'
+ImportReportResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/ImportReport'
+    meta:
+      $ref: '#/Meta'
+
+# ---------- scenarios ----------
+Capacity:
+  type: integer
+  enum: [8, 10, 12]
+  description: Seats per table; identifies one of the three plans.
+  example: 10
+ClusterPlacement:
+  type: object
+  description: A cluster as placed in a plan (only enabled members are listed).
+  required: [clusterKey, guestIds, pinned]
+  properties:
+    clusterKey:
+      type: integer
+      format: int64
+      example: 4
+    guestIds:
+      type: array
+      items:
+        type: integer
+        format: int64
+      example: [4, 5]
+    pinned:
+      type: boolean
+      example: false
+PlanTable:
+  type: object
+  required: [number, fill, score, clusters]
+  properties:
+    number:
+      type: integer
+      minimum: 1
+      example: 1
+    fill:
+      type: integer
+      minimum: 0
+      description: Enabled guests at the table.
+      example: 9
+    score:
+      type: number
+      description: Sum of the guests' satisfaction.
+      example: 21.5
+    clusters:
+      type: array
+      items:
+        $ref: '#/ClusterPlacement'
+GuestScore:
+  type: object
+  required: [guestId, tableNumber, satisfaction, preferredTotal, preferredAtTable, fallbackAtTable, strangersAtTable]
+  properties:
+    guestId:
+      type: integer
+      format: int64
+      example: 4
+    tableNumber:
+      type: [integer, 'null']
+      description: Null when unseated.
+      example: 1
+    satisfaction:
+      type: number
+      description: Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5).
+      example: 5.5
+    preferredTotal:
+      type: integer
+      description: Enabled effective group-1 companions in the whole guest list.
+      example: 20
+    preferredAtTable:
+      type: integer
+      example: 5
+    fallbackAtTable:
+      type: integer
+      example: 1
+    strangersAtTable:
+      type: integer
+      example: 0
+Violation:
+  type: object
+  required: [code, message, tableNumber, guestIds]
+  properties:
+    code:
+      type: string
+      enum: [cluster_split, over_capacity, under_floor, unseated_guests, oversized_cluster]
+      example: under_floor
+    message:
+      type: string
+      example: Table 3 has 4 guests (minimum 6).
+    tableNumber:
+      type: [integer, 'null']
+      example: 3
+    guestIds:
+      type: array
+      items:
+        type: integer
+        format: int64
+      example: []
+PlanSummary:
+  type: object
+  required: [tableCount, seatedCount, unseatedCount, score, violationCount, needsRecalculation]
+  properties:
+    tableCount:
+      type: integer
+      example: 10
+    seatedCount:
+      type: integer
+      example: 92
+    unseatedCount:
+      type: integer
+      example: 0
+    score:
+      type: number
+      example: 318.5
+    violationCount:
+      type: integer
+      example: 0
+    needsRecalculation:
+      type: boolean
+      description: |
+        True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
+        cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
+        cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
+        regenerates on its own. Always false for a proposal without violations.
+      example: false
+SeatingPlan:
+  type: object
+  description: Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
+  required: [summary, tables, unseated, guestScores, violations]
+  properties:
+    summary:
+      $ref: '#/PlanSummary'
+    tables:
+      type: array
+      items:
+        $ref: '#/PlanTable'
+    unseated:
+      type: array
+      description: Clusters with at least one enabled member and no table.
+      items:
+        $ref: '#/ClusterPlacement'
+    guestScores:
+      type: array
+      description: One entry per enabled guest.
+      items:
+        $ref: '#/GuestScore'
+    violations:
+      type: array
+      items:
+        $ref: '#/Violation'
+Scenario:
+  type: object
+  required: [capacity, version, plan]
+  properties:
+    capacity:
+      $ref: '#/Capacity'
+    version:
+      type: integer
+      minimum: 1
+      readOnly: true
+      example: 7
+    plan:
+      $ref: '#/SeatingPlan'
+ScenarioResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/Scenario'
+    meta:
+      $ref: '#/Meta'
+ScenarioListResponse:
+  type: object
+  required: [data, meta, page]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/Scenario'
+    meta:
+      $ref: '#/Meta'
+    page:
+      $ref: '#/Page'
+Proposal:
+  type: object
+  description: Transient auto-seating result for one plan (never stored).
+  required: [capacity, basedOnVersion, plan]
+  properties:
+    capacity:
+      $ref: '#/Capacity'
+    basedOnVersion:
+      type: integer
+      minimum: 1
+      description: Scenario version the proposal was computed from; send it back when accepting.
+      example: 7
+    plan:
+      $ref: '#/SeatingPlan'
+ProposalListResponse:
+  type: object
+  required: [data, meta, page]
+  properties:
+    data:
+      type: array
+      description: Always exactly three proposals, ordered 8, 10, 12.
+      items:
+        $ref: '#/Proposal'
+    meta:
+      $ref: '#/Meta'
+    page:
+      $ref: '#/Page'
+TableLayout:
+  type: object
+  required: [number, guestIds]
+  properties:
+    number:
+      type: integer
+      minimum: 1
+    guestIds:
+      type: array
+      description: Enabled guests at this table (disabled cluster members are added by the server).
+      items:
+        type: integer
+        format: int64
+AcceptPlan:
+  type: object
+  description: |
+    Replaces the plan's tables and assignments with the given layout (normally a proposal's tables).
+    Table numbers must be 1..k without gaps; a guest may appear at most once.
+    Clusters that were pinned stay pinned.
+  required: [basedOnVersion, tables]
+  additionalProperties: false
+  properties:
+    basedOnVersion:
+      type: integer
+      minimum: 1
+    tables:
+      type: array
+      items:
+        $ref: '#/TableLayout'
+AssignmentSet:
+  type: object
+  description: Seat the guest's WHOLE cluster at a table, and set its pin.
+  required: [tableNumber, pinned]
+  additionalProperties: false
+  properties:
+    tableNumber:
+      type: integer
+      minimum: 1
+    pinned:
+      type: boolean
+HealthStatus:
+  type: object
+  required: [status]
+  properties:
+    status:
+      type: string
+      enum: [ok]
+      example: ok
+HealthResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/HealthStatus'
+    meta:
+      $ref: '#/Meta'

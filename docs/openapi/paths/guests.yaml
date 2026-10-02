@@ -1,0 +1,82 @@
+get:
+  tags: [guests]
+  operationId: listGuests
+  summary: List all guests with their links (UC-02…UC-06, UC-16)
+  description: Whole list (≈100 guests), ordered by display name. Filtering (children, disabled, search) is client-side.
+  responses:
+    '200':
+      description: All guests.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/GuestListResponse
+          examples:
+            guests:
+              $ref: ../components/examples.yaml#/GuestList
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+post:
+  tags: [guests]
+  operationId: createGuest
+  summary: Add a guest (UC-02)
+  description: The new guest is enabled by default and unseated in all three plans.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/GuestCreate
+        example:
+          firstName: Maciek
+          isChild: false
+  responses:
+    '201':
+      description: Created.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/GuestResponse
+          examples:
+            created:
+              $ref: ../components/examples.yaml#/GuestMaciek
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '422':
+      $ref: ../components/responses.yaml#/UnprocessableEntity
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+patch:
+  tags: [guests]
+  operationId: toggleGuests
+  summary: Enable or disable one or many guests (UC-04, UC-05)
+  description: |
+    Bulk toggle (e.g. "disable all children" after filtering in the UI); also used for a single
+    guest's switch. Last write wins (no version check); bumps each changed guest's version.
+    Assignments are untouched — disabled guests just stop counting in the plans.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/GuestBulkToggle
+        example:
+          guestIds: [8, 9, 15]
+          enabled: false
+  responses:
+    '200':
+      description: The updated guests.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/GuestListResponse
+          examples:
+            toggled:
+              $ref: ../components/examples.yaml#/GuestList
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

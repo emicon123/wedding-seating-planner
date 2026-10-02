@@ -1,0 +1,20 @@
+get:
+  tags: [health]
+  operationId: getHealth
+  summary: Liveness check (DB reachable)
+  responses:
+    '200':
+      description: Healthy.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/HealthResponse
+          example:
+            data:
+              status: ok
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

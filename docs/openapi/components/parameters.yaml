@@ -1,0 +1,49 @@
+GuestId:
+  name: guestId
+  in: path
+  required: true
+  description: Guest id.
+  schema:
+    type: integer
+    format: int64
+    minimum: 1
+  example: 4
+Capacity:
+  name: capacity
+  in: path
+  required: true
+  description: Identifies the plan by its table capacity.
+  schema:
+    $ref: schemas.yaml#/Capacity
+  example: 10
+TableNumber:
+  name: tableNumber
+  in: path
+  required: true
+  description: Table number within the plan (1..k).
+  schema:
+    type: integer
+    minimum: 1
+  example: 3
+LinkKey:
+  name: linkKey
+  in: path
+  required: true
+  description: |
+    The unordered guest pair as `{idA}-{idB}`. Either order is accepted;
+    the server normalises to the smaller id first.
+  schema:
+    type: string
+    pattern: '^[1-9][0-9]*-[1-9][0-9]*$'
+  example: 4-6
+DryRun:
+  name: dryRun
+  in: query
+  required: false
+  description: |
+    `true` (default) only validates and returns the report. `false` commits:
+    replaces ALL guests and links and clears all three plans.
+  schema:
+    type: boolean
+    default: true
+  example: true

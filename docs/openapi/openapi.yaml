@@ -1,0 +1,59 @@
+openapi: 3.1.0
+info:
+  title: Stoliki API
+  version: 0.1.0
+  summary: Wedding table-seating planner (guests, links, three plans for 8/10/12-seat tables).
+  description: |
+    Source of truth for the Stoliki REST API. Edit the files under `docs/openapi/`
+    and run `make openapi` to regenerate the bundle `docs/openapi.yaml` (never edit the bundle).
+
+    * Served under `/wesele/api` (prefix kept end-to-end, see docs/architecture/02-system-context.md).
+    * **No authentication:** the app is reachable only inside the tailnet (ADR-001 §2).
+      Auth must be added before any public exposure.
+    * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
+    * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
+      (PUT /scenarios/{capacity}/assignments). Stale version → 409 `version_conflict`.
+    * Every scenario-returning endpoint returns the freshly computed evaluation;
+      nothing derived (clusters, scores, violations) is stored.
+servers:
+  - url: /wesele/api
+    description: Same origin as the SPA (tailnet-only)
+tags:
+  - name: guests
+    description: Guest list, enabled toggles (UC-02…UC-06)
+  - name: guest-links
+    description: Group 0/1/2 links between guests (UC-07)
+  - name: clusters
+    description: Derived clusters, affinities and data warnings (UC-08)
+  - name: imports
+    description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
+  - name: scenarios
+    description: The three plans (8/10/12), generate, accept, move, pin, tables (UC-09…UC-14)
+  - name: health
+    description: Liveness
+security: []
+paths:
+  /guests:
+    $ref: paths/guests.yaml
+  /guests/{guestId}:
+    $ref: paths/guests_{guestId}.yaml
+  /guest-links/{linkKey}:
+    $ref: paths/guest-links_{linkKey}.yaml
+  /clusters:
+    $ref: paths/clusters.yaml
+  /guest-imports:
+    $ref: paths/guest-imports.yaml
+  /scenarios:
+    $ref: paths/scenarios.yaml
+  /scenarios/calculate:
+    $ref: paths/scenarios_calculate.yaml
+  /scenarios/{capacity}/assignments:
+    $ref: paths/scenarios_{capacity}_assignments.yaml
+  /scenarios/{capacity}/assignments/{guestId}:
+    $ref: paths/scenarios_{capacity}_assignments_{guestId}.yaml
+  /scenarios/{capacity}/tables:
+    $ref: paths/scenarios_{capacity}_tables.yaml
+  /scenarios/{capacity}/tables/{tableNumber}:
+    $ref: paths/scenarios_{capacity}_tables_{tableNumber}.yaml
+  /health:
+    $ref: paths/health.yaml

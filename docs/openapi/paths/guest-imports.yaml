@@ -1,0 +1,62 @@
+post:
+  tags: [imports]
+  operationId: importGuests
+  summary: Import the guest list from a CSV export of the Google Sheet (UC-01, deferred)
+  x-status: deferred
+  description: |
+    **DEFERRED (post-MVP).** Kept in the contract and schema, implemented last. For the MVP the
+    guest list and links are entered manually (POST /guests, PUT /guest-links/{linkKey}).
+
+    CSV (UTF-8, comma-separated, header row). Columns: `imie` (required), `nazwisko`, `dziecko`
+    (`tak`/`x`/`1`/`true` = child), `grupa0`, `grupa1`, `grupa2` (names separated by `;` or `,`), `uwagi`.
+    A name reference matches a full display name, or a first name if exactly one guest has it.
+
+    `dryRun=true` (default): validate only, return the report.
+    `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all three plans,
+    in one transaction; with errors → 422 and nothing changes.
+  parameters:
+    - $ref: ../components/parameters.yaml#/DryRun
+  requestBody:
+    required: true
+    content:
+      text/csv:
+        schema:
+          type: string
+        example: |
+          imie,nazwisko,dziecko,grupa0,grupa1,grupa2,uwagi
+          Maciek,,,Karolina,Michał,,
+          Karolina,,,,,,wegetarianka
+          Michał,,,Ola,,,
+          Ola,,,,,,
+  responses:
+    '200':
+      description: Report (dry run, or successful commit with `committed=true`).
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ImportReportResponse
+          example:
+            data:
+              dryRun: true
+              committed: false
+              counts:
+                guests: 92
+                children: 7
+                links: 140
+                clusters: 41
+              problems:
+                - row: 14
+                  severity: warning
+                  code: unmatched_name
+                  message: '"Tadzio" in grupa0 matches no guest; link dropped.'
+                  value: Tadzio
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '413':
+      $ref: ../components/responses.yaml#/PayloadTooLarge
+    '422':
+      $ref: ../components/responses.yaml#/UnprocessableEntity
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

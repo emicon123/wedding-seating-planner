@@ -1,0 +1,1713 @@
+openapi: 3.1.0
+info:
+  title: Stoliki API
+  version: 0.1.0
+  summary: Wedding table-seating planner (guests, links, three plans for 8/10/12-seat tables).
+  description: |
+    Source of truth for the Stoliki REST API. Edit the files under `docs/openapi/`
+    and run `make openapi` to regenerate the bundle `docs/openapi.yaml` (never edit the bundle).
+
+    * Served under `/wesele/api` (prefix kept end-to-end, see docs/architecture/02-system-context.md).
+    * **No authentication:** the app is reachable only inside the tailnet (ADR-001 §2).
+      Auth must be added before any public exposure.
+    * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
+    * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
+      (PUT /scenarios/{capacity}/assignments). Stale version → 409 `version_conflict`.
+    * Every scenario-returning endpoint returns the freshly computed evaluation;
+      nothing derived (clusters, scores, violations) is stored.
+servers:
+  - url: /wesele/api
+    description: Same origin as the SPA (tailnet-only)
+security: []
+tags:
+  - name: guests
+    description: Guest list, enabled toggles (UC-02…UC-06)
+  - name: guest-links
+    description: Group 0/1/2 links between guests (UC-07)
+  - name: clusters
+    description: Derived clusters, affinities and data warnings (UC-08)
+  - name: imports
+    description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
+  - name: scenarios
+    description: The three plans (8/10/12), generate, accept, move, pin, tables (UC-09…UC-14)
+  - name: health
+    description: Liveness
+paths:
+  /guests:
+    get:
+      tags:
+        - guests
+      operationId: listGuests
+      summary: List all guests with their links (UC-02…UC-06, UC-16)
+      description: Whole list (≈100 guests), ordered by display name. Filtering (children, disabled, search) is client-side.
+      responses:
+        '200':
+          description: All guests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestListResponse'
+              examples:
+                guests:
+                  $ref: '#/components/examples/GuestList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+        - guests
+      operationId: createGuest
+      summary: Add a guest (UC-02)
+      description: The new guest is enabled by default and unseated in all three plans.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestCreate'
+            example:
+              firstName: Maciek
+              isChild: false
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestResponse'
+              examples:
+                created:
+                  $ref: '#/components/examples/GuestMaciek'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags:
+        - guests
+      operationId: toggleGuests
+      summary: Enable or disable one or many guests (UC-04, UC-05)
+      description: |
+        Bulk toggle (e.g. "disable all children" after filtering in the UI); also used for a single
+        guest's switch. Last write wins (no version check); bumps each changed guest's version.
+        Assignments are untouched — disabled guests just stop counting in the plans.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestBulkToggle'
+            example:
+              guestIds:
+                - 8
+                - 9
+                - 15
+              enabled: false
+      responses:
+        '200':
+          description: The updated guests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestListResponse'
+              examples:
+                toggled:
+                  $ref: '#/components/examples/GuestList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /guests/{guestId}:
+    parameters:
+      - $ref: '#/components/parameters/GuestId'
+    patch:
+      tags:
+        - guests
+      operationId: updateGuest
+      summary: Edit a guest (UC-03)
+      description: Partial update, version-checked. `enabled` may be changed here too, but the switch in the UI uses `PATCH /guests`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestUpdate'
+            example:
+              version: 3
+              notes: wegetarianin
+      responses:
+        '200':
+          description: Updated guest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestResponse'
+              examples:
+                updated:
+                  $ref: '#/components/examples/GuestMaciek'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - guests
+      operationId: deleteGuest
+      summary: Delete a guest (UC-06)
+      description: Removes the guest, their links and their assignments in all plans. For a decline, prefer disabling.
+      responses:
+        '204':
+          description: Deleted.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /guest-links/{linkKey}:
+    parameters:
+      - $ref: '#/components/parameters/LinkKey'
+    put:
+      tags:
+        - guest-links
+      operationId: upsertGuestLink
+      summary: Set the link level between two guests (UC-07)
+      description: Creates or replaces the single undirected link of the pair. Last write wins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestLinkUpsert'
+            example:
+              level: 1
+      responses:
+        '200':
+          description: The link.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestLinkResponse'
+              example:
+                data:
+                  key: 4-6
+                  guestIds:
+                    - 4
+                    - 6
+                  level: 1
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - guest-links
+      operationId: deleteGuestLink
+      summary: Remove the link between two guests (UC-07)
+      responses:
+        '204':
+          description: Removed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /clusters:
+    get:
+      tags:
+        - clusters
+      operationId: getClusterOverview
+      summary: Derived clusters, cluster affinities and data warnings (UC-08)
+      responses:
+        '200':
+          description: Clusters over all guests + warnings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterOverviewResponse'
+              example:
+                data:
+                  clusters:
+                    - key: 4
+                      guestIds:
+                        - 4
+                        - 5
+                      enabledGuestIds:
+                        - 4
+                        - 5
+                      seatedSize: 2
+                      affinities:
+                        - clusterKey: 6
+                          level: 1
+                    - key: 6
+                      guestIds:
+                        - 6
+                        - 7
+                      enabledGuestIds:
+                        - 6
+                        - 7
+                      seatedSize: 2
+                      affinities:
+                        - clusterKey: 4
+                          level: 1
+                  warnings:
+                    - code: conflicting_link_levels
+                      message: Clusters of Maciek and Michał are linked with both group 1 and group 2; group 1 is used.
+                      guestIds:
+                        - 5
+                        - 7
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /guest-imports:
+    post:
+      tags:
+        - imports
+      operationId: importGuests
+      summary: Import the guest list from a CSV export of the Google Sheet (UC-01, deferred)
+      x-status: deferred
+      description: |
+        **DEFERRED (post-MVP).** Kept in the contract and schema, implemented last. For the MVP the
+        guest list and links are entered manually (POST /guests, PUT /guest-links/{linkKey}).
+
+        CSV (UTF-8, comma-separated, header row). Columns: `imie` (required), `nazwisko`, `dziecko`
+        (`tak`/`x`/`1`/`true` = child), `grupa0`, `grupa1`, `grupa2` (names separated by `;` or `,`), `uwagi`.
+        A name reference matches a full display name, or a first name if exactly one guest has it.
+
+        `dryRun=true` (default): validate only, return the report.
+        `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all three plans,
+        in one transaction; with errors → 422 and nothing changes.
+      parameters:
+        - $ref: '#/components/parameters/DryRun'
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema:
+              type: string
+            example: |
+              imie,nazwisko,dziecko,grupa0,grupa1,grupa2,uwagi
+              Maciek,,,Karolina,Michał,,
+              Karolina,,,,,,wegetarianka
+              Michał,,,Ola,,,
+              Ola,,,,,,
+      responses:
+        '200':
+          description: Report (dry run, or successful commit with `committed=true`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportReportResponse'
+              example:
+                data:
+                  dryRun: true
+                  committed: false
+                  counts:
+                    guests: 92
+                    children: 7
+                    links: 140
+                    clusters: 41
+                  problems:
+                    - row: 14
+                      severity: warning
+                      code: unmatched_name
+                      message: '"Tadzio" in grupa0 matches no guest; link dropped.'
+                      value: Tadzio
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /scenarios:
+    get:
+      tags:
+        - scenarios
+      operationId: listScenarios
+      summary: The three plans (8, 10, 12) with their evaluations (UC-09, UC-14)
+      responses:
+        '200':
+          description: Always three scenarios, ordered 8, 10, 12.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioListResponse'
+              example:
+                data:
+                  - capacity: 8
+                    version: 1
+                    plan:
+                      summary:
+                        tableCount: 0
+                        seatedCount: 0
+                        unseatedCount: 92
+                        score: 0
+                        violationCount: 1
+                        needsRecalculation: true
+                      tables: []
+                      unseated:
+                        - clusterKey: 4
+                          guestIds:
+                            - 4
+                            - 5
+                          pinned: false
+                      guestScores: []
+                      violations:
+                        - code: unseated_guests
+                          message: 92 enabled guests have no table.
+                          tableNumber: null
+                          guestIds:
+                            - 4
+                            - 5
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+                page:
+                  total: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /scenarios/calculate:
+    post:
+      tags:
+        - scenarios
+      operationId: calculateProposals
+      summary: Generate proposals for all three plans (UC-10)
+      description: |
+        Pure computation — nothing is stored. Runs auto-seating for capacity 8, 10 and 12 from the
+        current guests, links and pins. Accept a proposal with `PUT /scenarios/{capacity}/assignments`.
+      responses:
+        '200':
+          description: Exactly three proposals, ordered 8, 10, 12.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalListResponse'
+              example:
+                data:
+                  - capacity: 8
+                    basedOnVersion: 7
+                    plan:
+                      summary:
+                        tableCount: 12
+                        seatedCount: 92
+                        unseatedCount: 0
+                        score: 301
+                        violationCount: 0
+                        needsRecalculation: false
+                      tables:
+                        - number: 1
+                          fill: 8
+                          score: 18
+                          clusters:
+                            - clusterKey: 4
+                              guestIds:
+                                - 4
+                                - 5
+                              pinned: true
+                      unseated: []
+                      guestScores:
+                        - guestId: 4
+                          tableNumber: 1
+                          satisfaction: 4
+                          preferredTotal: 20
+                          preferredAtTable: 4
+                          fallbackAtTable: 0
+                          strangersAtTable: 2
+                      violations: []
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+                page:
+                  total: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /scenarios/{capacity}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/Capacity'
+    put:
+      tags:
+        - scenarios
+      operationId: acceptProposal
+      summary: Accept a proposal — replace the plan's tables and assignments (UC-10)
+      description: |
+        Version-checked against `basedOnVersion`. Disabled members of each cluster are seated with
+        their cluster; clusters that were pinned stay pinned. Bumps the scenario version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptPlan'
+            example:
+              basedOnVersion: 7
+              tables:
+                - number: 1
+                  guestIds:
+                    - 4
+                    - 5
+                    - 6
+                    - 7
+                    - 10
+                    - 11
+                    - 12
+                    - 13
+                - number: 2
+                  guestIds:
+                    - 1
+                    - 2
+                    - 3
+                    - 14
+                    - 15
+                    - 16
+      responses:
+        '200':
+          description: The stored plan with its evaluation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioResponse'
+              examples:
+                accepted:
+                  $ref: '#/components/examples/Scenario10'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /scenarios/{capacity}/assignments/{guestId}:
+    parameters:
+      - $ref: '#/components/parameters/Capacity'
+      - $ref: '#/components/parameters/GuestId'
+    put:
+      tags:
+        - scenarios
+      operationId: setAssignment
+      summary: Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
+      description: |
+        Applies to every member of the guest's cluster (disabled members included). Idempotent,
+        last write wins; bumps the scenario version. Exceeding capacity is allowed and reported as a violation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignmentSet'
+            example:
+              tableNumber: 1
+              pinned: true
+      responses:
+        '200':
+          description: The updated plan with its evaluation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioResponse'
+              examples:
+                moved:
+                  $ref: '#/components/examples/Scenario10'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - scenarios
+      operationId: deleteAssignment
+      summary: Move the guest's whole cluster back to the unseated tray (UC-11)
+      description: Removes the assignments (and pin) of every member of the cluster. Idempotent.
+      responses:
+        '200':
+          description: The updated plan with its evaluation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioResponse'
+              examples:
+                unseated:
+                  $ref: '#/components/examples/Scenario10'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /scenarios/{capacity}/tables:
+    parameters:
+      - $ref: '#/components/parameters/Capacity'
+    post:
+      tags:
+        - scenarios
+      operationId: addTable
+      summary: Add an empty table at the end of a plan (UC-13)
+      responses:
+        '201':
+          description: The updated plan (new table number = previous count + 1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioResponse'
+              examples:
+                added:
+                  $ref: '#/components/examples/Scenario10'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /scenarios/{capacity}/tables/{tableNumber}:
+    parameters:
+      - $ref: '#/components/parameters/Capacity'
+      - $ref: '#/components/parameters/TableNumber'
+    delete:
+      tags:
+        - scenarios
+      operationId: deleteTable
+      summary: Remove a table from a plan (UC-13)
+      description: Its guests become unseated (pins cleared); later tables are renumbered down by one.
+      responses:
+        '200':
+          description: The updated plan with its evaluation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioResponse'
+              examples:
+                removed:
+                  $ref: '#/components/examples/Scenario10'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /health:
+    get:
+      tags:
+        - health
+      operationId: getHealth
+      summary: Liveness check (DB reachable)
+      responses:
+        '200':
+          description: Healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                data:
+                  status: ok
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  schemas:
+    LinkLevel:
+      type: integer
+      enum:
+        - 0
+        - 1
+        - 2
+      description: 0 = must sit together (hard), 1 = preferred (weight 1.0), 2 = acceptable if unavoidable (weight 0.5).
+      example: 1
+    GuestLinkRef:
+      type: object
+      description: One link as seen from a guest.
+      required:
+        - guestId
+        - level
+      properties:
+        guestId:
+          type: integer
+          format: int64
+          description: The other guest.
+          example: 6
+        level:
+          $ref: '#/components/schemas/LinkLevel'
+    Guest:
+      type: object
+      required:
+        - id
+        - firstName
+        - lastName
+        - displayName
+        - notes
+        - isChild
+        - enabled
+        - version
+        - links
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 4
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Maciek
+        lastName:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 100
+          example: null
+        displayName:
+          type: string
+          readOnly: true
+          description: firstName + optional " " + lastName; unique ignoring case.
+          example: Maciek
+        notes:
+          type: string
+          maxLength: 2000
+          example: wegetarianin
+        isChild:
+          type: boolean
+          example: false
+        enabled:
+          type: boolean
+          description: Disabled guests stay on the list but are ignored by all three plans.
+          example: true
+        version:
+          type: integer
+          minimum: 1
+          readOnly: true
+          example: 3
+        links:
+          type: array
+          readOnly: true
+          description: All links touching this guest (each link appears on both guests).
+          items:
+            $ref: '#/components/schemas/GuestLinkRef'
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2026-10-02T09:15:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2026-10-02T09:20:00Z'
+    Meta:
+      type: object
+      description: Response metadata.
+      required:
+        - requestId
+      properties:
+        requestId:
+          type: string
+          readOnly: true
+          description: Correlates the response with server logs.
+          example: 01JB8Z6Q0K3N
+    Page:
+      type: object
+      description: List metadata. Lists are small (≤ ~100 guests) and returned whole; no pagination parameters.
+      required:
+        - total
+      properties:
+        total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          example: 3
+    GuestListResponse:
+      type: object
+      required:
+        - data
+        - meta
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Guest'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        page:
+          $ref: '#/components/schemas/Page'
+    ErrorCode:
+      type: string
+      enum:
+        - bad_request
+        - validation_failed
+        - duplicate_name
+        - not_found
+        - version_conflict
+        - import_invalid
+        - payload_too_large
+        - internal_error
+    ErrorItem:
+      type: object
+      required:
+        - code
+        - field
+        - message
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        field:
+          type:
+            - string
+            - 'null'
+          description: Offending field (JSON property, path/query parameter or `row N` for imports); null if not field-specific.
+          example: firstName
+        message:
+          type: string
+          description: Human-readable (English) explanation; the UI maps `code` to Polish copy.
+          example: firstName must not be empty.
+    ErrorResponse:
+      type: object
+      required:
+        - errors
+        - meta
+      properties:
+        errors:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ErrorItem'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    GuestCreate:
+      type: object
+      required:
+        - firstName
+      additionalProperties: false
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        lastName:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+          default: ''
+        isChild:
+          type: boolean
+          default: false
+        enabled:
+          type: boolean
+          default: true
+    GuestResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Guest'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    GuestBulkToggle:
+      type: object
+      description: Enable or disable many guests at once (last write wins, no version check). Also used for a single toggle.
+      required:
+        - guestIds
+        - enabled
+      additionalProperties: false
+      properties:
+        guestIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+        enabled:
+          type: boolean
+    GuestUpdate:
+      type: object
+      description: Partial update; omitted fields are unchanged. `lastName` null clears it.
+      required:
+        - version
+      additionalProperties: false
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The version the edit is based on (optimistic lock).
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        lastName:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 100
+        notes:
+          type: string
+          maxLength: 2000
+        isChild:
+          type: boolean
+        enabled:
+          type: boolean
+    GuestLinkUpsert:
+      type: object
+      required:
+        - level
+      additionalProperties: false
+      properties:
+        level:
+          $ref: '#/components/schemas/LinkLevel'
+    GuestLink:
+      type: object
+      required:
+        - key
+        - guestIds
+        - level
+      properties:
+        key:
+          type: string
+          readOnly: true
+          description: Normalised `{smallerId}-{largerId}`.
+          example: 4-6
+        guestIds:
+          type: array
+          readOnly: true
+          minItems: 2
+          maxItems: 2
+          items:
+            type: integer
+            format: int64
+          example:
+            - 4
+            - 6
+        level:
+          $ref: '#/components/schemas/LinkLevel'
+    GuestLinkResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/GuestLink'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ClusterAffinity:
+      type: object
+      required:
+        - clusterKey
+        - level
+      properties:
+        clusterKey:
+          type: integer
+          format: int64
+          description: The other cluster.
+          example: 6
+        level:
+          type: integer
+          enum:
+            - 1
+            - 2
+          example: 1
+    Cluster:
+      type: object
+      description: Connected component of group-0 links over ALL guests (derived, never stored).
+      required:
+        - key
+        - guestIds
+        - enabledGuestIds
+        - seatedSize
+        - affinities
+      properties:
+        key:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Smallest member guest id; stable while the group-0 links do not change.
+          example: 4
+        guestIds:
+          type: array
+          readOnly: true
+          items:
+            type: integer
+            format: int64
+          example:
+            - 4
+            - 5
+        enabledGuestIds:
+          type: array
+          readOnly: true
+          items:
+            type: integer
+            format: int64
+          example:
+            - 4
+            - 5
+        seatedSize:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: Number of enabled members (seats the cluster takes). 0 = ignored by plans.
+          example: 2
+        affinities:
+          type: array
+          readOnly: true
+          description: Group-1/2 relation to other clusters (cluster ↔ cluster).
+          items:
+            $ref: '#/components/schemas/ClusterAffinity'
+    DataWarning:
+      type: object
+      required:
+        - code
+        - message
+        - guestIds
+      properties:
+        code:
+          type: string
+          enum:
+            - cluster_exceeds_8
+            - cluster_exceeds_12
+            - conflicting_link_levels
+          example: cluster_exceeds_8
+        message:
+          type: string
+          example: A group-0 cluster of 9 enabled guests does not fit the 8-seat plan.
+        guestIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          example:
+            - 1
+            - 2
+            - 3
+            - 9
+            - 10
+            - 11
+            - 12
+            - 13
+            - 14
+    ClusterOverview:
+      type: object
+      required:
+        - clusters
+        - warnings
+      properties:
+        clusters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Cluster'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataWarning'
+    ClusterOverviewResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/ClusterOverview'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ImportCounts:
+      type: object
+      required:
+        - guests
+        - children
+        - links
+        - clusters
+      properties:
+        guests:
+          type: integer
+          example: 92
+        children:
+          type: integer
+          example: 7
+        links:
+          type: integer
+          example: 140
+        clusters:
+          type: integer
+          example: 41
+    ImportProblem:
+      type: object
+      required:
+        - row
+        - severity
+        - code
+        - message
+      properties:
+        row:
+          type:
+            - integer
+            - 'null'
+          description: 1-based CSV row (header = 1); null for file-level problems.
+          example: 14
+        severity:
+          type: string
+          enum:
+            - error
+            - warning
+          description: Errors block the commit; warnings do not (the offending link is dropped).
+          example: warning
+        code:
+          type: string
+          enum:
+            - malformed_csv
+            - missing_column
+            - missing_first_name
+            - duplicate_name
+            - unmatched_name
+            - ambiguous_name
+            - self_link
+            - conflicting_levels
+          example: unmatched_name
+        message:
+          type: string
+          example: '"Tadzio" in grupa0 matches no guest; link dropped.'
+        value:
+          type:
+            - string
+            - 'null'
+          description: The offending cell value, if any.
+          example: Tadzio
+    ImportReport:
+      type: object
+      required:
+        - dryRun
+        - committed
+        - counts
+        - problems
+      properties:
+        dryRun:
+          type: boolean
+          example: true
+        committed:
+          type: boolean
+          description: True only when dryRun=false and there were no errors.
+          example: false
+        counts:
+          $ref: '#/components/schemas/ImportCounts'
+        problems:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportProblem'
+    ImportReportResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/ImportReport'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Capacity:
+      type: integer
+      enum:
+        - 8
+        - 10
+        - 12
+      description: Seats per table; identifies one of the three plans.
+      example: 10
+    PlanSummary:
+      type: object
+      required:
+        - tableCount
+        - seatedCount
+        - unseatedCount
+        - score
+        - violationCount
+        - needsRecalculation
+      properties:
+        tableCount:
+          type: integer
+          example: 10
+        seatedCount:
+          type: integer
+          example: 92
+        unseatedCount:
+          type: integer
+          example: 0
+        score:
+          type: number
+          example: 318.5
+        violationCount:
+          type: integer
+          example: 0
+        needsRecalculation:
+          type: boolean
+          description: |
+            True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
+            cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
+            cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
+            regenerates on its own. Always false for a proposal without violations.
+          example: false
+    ClusterPlacement:
+      type: object
+      description: A cluster as placed in a plan (only enabled members are listed).
+      required:
+        - clusterKey
+        - guestIds
+        - pinned
+      properties:
+        clusterKey:
+          type: integer
+          format: int64
+          example: 4
+        guestIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          example:
+            - 4
+            - 5
+        pinned:
+          type: boolean
+          example: false
+    PlanTable:
+      type: object
+      required:
+        - number
+        - fill
+        - score
+        - clusters
+      properties:
+        number:
+          type: integer
+          minimum: 1
+          example: 1
+        fill:
+          type: integer
+          minimum: 0
+          description: Enabled guests at the table.
+          example: 9
+        score:
+          type: number
+          description: Sum of the guests' satisfaction.
+          example: 21.5
+        clusters:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClusterPlacement'
+    GuestScore:
+      type: object
+      required:
+        - guestId
+        - tableNumber
+        - satisfaction
+        - preferredTotal
+        - preferredAtTable
+        - fallbackAtTable
+        - strangersAtTable
+      properties:
+        guestId:
+          type: integer
+          format: int64
+          example: 4
+        tableNumber:
+          type:
+            - integer
+            - 'null'
+          description: Null when unseated.
+          example: 1
+        satisfaction:
+          type: number
+          description: Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5).
+          example: 5.5
+        preferredTotal:
+          type: integer
+          description: Enabled effective group-1 companions in the whole guest list.
+          example: 20
+        preferredAtTable:
+          type: integer
+          example: 5
+        fallbackAtTable:
+          type: integer
+          example: 1
+        strangersAtTable:
+          type: integer
+          example: 0
+    Violation:
+      type: object
+      required:
+        - code
+        - message
+        - tableNumber
+        - guestIds
+      properties:
+        code:
+          type: string
+          enum:
+            - cluster_split
+            - over_capacity
+            - under_floor
+            - unseated_guests
+            - oversized_cluster
+          example: under_floor
+        message:
+          type: string
+          example: Table 3 has 4 guests (minimum 6).
+        tableNumber:
+          type:
+            - integer
+            - 'null'
+          example: 3
+        guestIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          example: []
+    SeatingPlan:
+      type: object
+      description: Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
+      required:
+        - summary
+        - tables
+        - unseated
+        - guestScores
+        - violations
+      properties:
+        summary:
+          $ref: '#/components/schemas/PlanSummary'
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanTable'
+        unseated:
+          type: array
+          description: Clusters with at least one enabled member and no table.
+          items:
+            $ref: '#/components/schemas/ClusterPlacement'
+        guestScores:
+          type: array
+          description: One entry per enabled guest.
+          items:
+            $ref: '#/components/schemas/GuestScore'
+        violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Violation'
+    Scenario:
+      type: object
+      required:
+        - capacity
+        - version
+        - plan
+      properties:
+        capacity:
+          $ref: '#/components/schemas/Capacity'
+        version:
+          type: integer
+          minimum: 1
+          readOnly: true
+          example: 7
+        plan:
+          $ref: '#/components/schemas/SeatingPlan'
+    ScenarioListResponse:
+      type: object
+      required:
+        - data
+        - meta
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Scenario'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        page:
+          $ref: '#/components/schemas/Page'
+    Proposal:
+      type: object
+      description: Transient auto-seating result for one plan (never stored).
+      required:
+        - capacity
+        - basedOnVersion
+        - plan
+      properties:
+        capacity:
+          $ref: '#/components/schemas/Capacity'
+        basedOnVersion:
+          type: integer
+          minimum: 1
+          description: Scenario version the proposal was computed from; send it back when accepting.
+          example: 7
+        plan:
+          $ref: '#/components/schemas/SeatingPlan'
+    ProposalListResponse:
+      type: object
+      required:
+        - data
+        - meta
+        - page
+      properties:
+        data:
+          type: array
+          description: Always exactly three proposals, ordered 8, 10, 12.
+          items:
+            $ref: '#/components/schemas/Proposal'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        page:
+          $ref: '#/components/schemas/Page'
+    TableLayout:
+      type: object
+      required:
+        - number
+        - guestIds
+      properties:
+        number:
+          type: integer
+          minimum: 1
+        guestIds:
+          type: array
+          description: Enabled guests at this table (disabled cluster members are added by the server).
+          items:
+            type: integer
+            format: int64
+    AcceptPlan:
+      type: object
+      description: |
+        Replaces the plan's tables and assignments with the given layout (normally a proposal's tables).
+        Table numbers must be 1..k without gaps; a guest may appear at most once.
+        Clusters that were pinned stay pinned.
+      required:
+        - basedOnVersion
+        - tables
+      additionalProperties: false
+      properties:
+        basedOnVersion:
+          type: integer
+          minimum: 1
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/TableLayout'
+    ScenarioResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Scenario'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AssignmentSet:
+      type: object
+      description: Seat the guest's WHOLE cluster at a table, and set its pin.
+      required:
+        - tableNumber
+        - pinned
+      additionalProperties: false
+      properties:
+        tableNumber:
+          type: integer
+          minimum: 1
+        pinned:
+          type: boolean
+    HealthStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          example: ok
+    HealthResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/HealthStatus'
+        meta:
+          $ref: '#/components/schemas/Meta'
+  examples:
+    GuestList:
+      summary: Two guests, one a disabled child
+      value:
+        data:
+          - id: 4
+            firstName: Maciek
+            lastName: null
+            displayName: Maciek
+            notes: ''
+            isChild: false
+            enabled: true
+            version: 3
+            links:
+              - guestId: 5
+                level: 0
+            createdAt: '2026-10-02T09:15:00Z'
+            updatedAt: '2026-10-02T09:20:00Z'
+          - id: 8
+            firstName: Zosia
+            lastName: Nowak
+            displayName: Zosia Nowak
+            notes: 4 lata
+            isChild: true
+            enabled: false
+            version: 2
+            links:
+              - guestId: 2
+                level: 0
+            createdAt: '2026-10-02T09:15:00Z'
+            updatedAt: '2026-10-02T10:01:00Z'
+        meta:
+          requestId: 01JB8Z6Q0K3N
+        page:
+          total: 2
+    GuestMaciek:
+      summary: Maciek (cluster with Karolina, group 1 with Michał)
+      value:
+        data:
+          id: 4
+          firstName: Maciek
+          lastName: null
+          displayName: Maciek
+          notes: ''
+          isChild: false
+          enabled: true
+          version: 3
+          links:
+            - guestId: 5
+              level: 0
+            - guestId: 6
+              level: 1
+          createdAt: '2026-10-02T09:15:00Z'
+          updatedAt: '2026-10-02T09:20:00Z'
+        meta:
+          requestId: 01JB8Z6Q0K3N
+    Scenario10:
+      summary: The 10-seat plan with one table shown
+      value:
+        data:
+          capacity: 10
+          version: 7
+          plan:
+            summary:
+              tableCount: 10
+              seatedCount: 92
+              unseatedCount: 2
+              score: 318.5
+              violationCount: 1
+              needsRecalculation: true
+            tables:
+              - number: 1
+                fill: 9
+                score: 21.5
+                clusters:
+                  - clusterKey: 4
+                    guestIds:
+                      - 4
+                      - 5
+                    pinned: true
+                  - clusterKey: 6
+                    guestIds:
+                      - 6
+                      - 7
+                    pinned: false
+            unseated:
+              - clusterKey: 31
+                guestIds:
+                  - 31
+                  - 32
+                pinned: false
+            guestScores:
+              - guestId: 4
+                tableNumber: 1
+                satisfaction: 5.5
+                preferredTotal: 20
+                preferredAtTable: 5
+                fallbackAtTable: 1
+                strangersAtTable: 0
+            violations:
+              - code: unseated_guests
+                message: 2 enabled guests have no table.
+                tableNumber: null
+                guestIds:
+                  - 31
+                  - 32
+        meta:
+          requestId: 01JB8Z6Q0K3N
+  responses:
+    BadRequest:
+      description: Malformed request (unparseable JSON, wrong content type, bad path parameter).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: bad_request
+                field: null
+                message: Request body is not valid JSON.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    InternalError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: internal_error
+                field: null
+                message: Unexpected error; see server logs (request 01JB8Z6Q0K3N).
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    UnprocessableEntity:
+      description: Well-formed but violates a business rule (validation failed, duplicate name, invalid import).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: duplicate_name
+                field: firstName
+                message: A guest named "Ania Kowalska" already exists.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    NotFound:
+      description: The referenced guest, link, plan or table does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: not_found
+                field: guestId
+                message: Guest 999 does not exist.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    Conflict:
+      description: The `version` sent is stale — someone changed the resource meanwhile. Refetch and retry.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: version_conflict
+                field: version
+                message: Guest was changed by someone else (current version 4).
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    PayloadTooLarge:
+      description: Body exceeds the limit (1 MB JSON, 2 MB CSV).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: payload_too_large
+                field: null
+                message: Request body exceeds 2 MB.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+  parameters:
+    GuestId:
+      name: guestId
+      in: path
+      required: true
+      description: Guest id.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+      example: 4
+    LinkKey:
+      name: linkKey
+      in: path
+      required: true
+      description: |
+        The unordered guest pair as `{idA}-{idB}`. Either order is accepted;
+        the server normalises to the smaller id first.
+      schema:
+        type: string
+        pattern: ^[1-9][0-9]*-[1-9][0-9]*$
+      example: 4-6
+    DryRun:
+      name: dryRun
+      in: query
+      required: false
+      description: |
+        `true` (default) only validates and returns the report. `false` commits:
+        replaces ALL guests and links and clears all three plans.
+      schema:
+        type: boolean
+        default: true
+      example: true
+    Capacity:
+      name: capacity
+      in: path
+      required: true
+      description: Identifies the plan by its table capacity.
+      schema:
+        $ref: '#/components/schemas/Capacity'
+      example: 10
+    TableNumber:
+      name: tableNumber
+      in: path
+      required: true
+      description: Table number within the plan (1..k).
+      schema:
+        type: integer
+        minimum: 1
+      example: 3

@@ -1,0 +1,38 @@
+get:
+  tags: [clusters]
+  operationId: getClusterOverview
+  summary: Derived clusters, cluster affinities and data warnings (UC-08)
+  responses:
+    '200':
+      description: Clusters over all guests + warnings.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ClusterOverviewResponse
+          example:
+            data:
+              clusters:
+                - key: 4
+                  guestIds: [4, 5]
+                  enabledGuestIds: [4, 5]
+                  seatedSize: 2
+                  affinities:
+                    - clusterKey: 6
+                      level: 1
+                - key: 6
+                  guestIds: [6, 7]
+                  enabledGuestIds: [6, 7]
+                  seatedSize: 2
+                  affinities:
+                    - clusterKey: 4
+                      level: 1
+              warnings:
+                - code: conflicting_link_levels
+                  message: Clusters of Maciek and Michał are linked with both group 1 and group 2; group 1 is used.
+                  guestIds: [5, 7]
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

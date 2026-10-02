@@ -1,0 +1,22 @@
+parameters:
+  - $ref: ../components/parameters.yaml#/Capacity
+post:
+  tags: [scenarios]
+  operationId: addTable
+  summary: Add an empty table at the end of a plan (UC-13)
+  responses:
+    '201':
+      description: The updated plan (new table number = previous count + 1).
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ScenarioResponse
+          examples:
+            added:
+              $ref: ../components/examples.yaml#/Scenario10
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

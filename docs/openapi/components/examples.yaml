@@ -1,0 +1,99 @@
+GuestMaciek:
+  summary: Maciek (cluster with Karolina, group 1 with Michał)
+  value:
+    data:
+      id: 4
+      firstName: Maciek
+      lastName: null
+      displayName: Maciek
+      notes: ''
+      isChild: false
+      enabled: true
+      version: 3
+      links:
+        - guestId: 5
+          level: 0
+        - guestId: 6
+          level: 1
+      createdAt: '2026-10-02T09:15:00Z'
+      updatedAt: '2026-10-02T09:20:00Z'
+    meta:
+      requestId: 01JB8Z6Q0K3N
+GuestList:
+  summary: Two guests, one a disabled child
+  value:
+    data:
+      - id: 4
+        firstName: Maciek
+        lastName: null
+        displayName: Maciek
+        notes: ''
+        isChild: false
+        enabled: true
+        version: 3
+        links:
+          - guestId: 5
+            level: 0
+        createdAt: '2026-10-02T09:15:00Z'
+        updatedAt: '2026-10-02T09:20:00Z'
+      - id: 8
+        firstName: Zosia
+        lastName: Nowak
+        displayName: Zosia Nowak
+        notes: 4 lata
+        isChild: true
+        enabled: false
+        version: 2
+        links:
+          - guestId: 2
+            level: 0
+        createdAt: '2026-10-02T09:15:00Z'
+        updatedAt: '2026-10-02T10:01:00Z'
+    meta:
+      requestId: 01JB8Z6Q0K3N
+    page:
+      total: 2
+Scenario10:
+  summary: The 10-seat plan with one table shown
+  value:
+    data:
+      capacity: 10
+      version: 7
+      plan:
+        summary:
+          tableCount: 10
+          seatedCount: 92
+          unseatedCount: 2
+          score: 318.5
+          violationCount: 1
+          needsRecalculation: true
+        tables:
+          - number: 1
+            fill: 9
+            score: 21.5
+            clusters:
+              - clusterKey: 4
+                guestIds: [4, 5]
+                pinned: true
+              - clusterKey: 6
+                guestIds: [6, 7]
+                pinned: false
+        unseated:
+          - clusterKey: 31
+            guestIds: [31, 32]
+            pinned: false
+        guestScores:
+          - guestId: 4
+            tableNumber: 1
+            satisfaction: 5.5
+            preferredTotal: 20
+            preferredAtTable: 5
+            fallbackAtTable: 1
+            strangersAtTable: 0
+        violations:
+          - code: unseated_guests
+            message: 2 enabled guests have no table.
+            tableNumber: null
+            guestIds: [31, 32]
+    meta:
+      requestId: 01JB8Z6Q0K3N

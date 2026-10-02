@@ -1,0 +1,78 @@
+BadRequest:
+  description: Malformed request (unparseable JSON, wrong content type, bad path parameter).
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: bad_request
+            field: null
+            message: Request body is not valid JSON.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+NotFound:
+  description: The referenced guest, link, plan or table does not exist.
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: not_found
+            field: guestId
+            message: Guest 999 does not exist.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+Conflict:
+  description: The `version` sent is stale — someone changed the resource meanwhile. Refetch and retry.
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: version_conflict
+            field: version
+            message: Guest was changed by someone else (current version 4).
+        meta:
+          requestId: 01JB8Z6Q0K3N
+PayloadTooLarge:
+  description: Body exceeds the limit (1 MB JSON, 2 MB CSV).
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: payload_too_large
+            field: null
+            message: Request body exceeds 2 MB.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+UnprocessableEntity:
+  description: Well-formed but violates a business rule (validation failed, duplicate name, invalid import).
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: duplicate_name
+            field: firstName
+            message: A guest named "Ania Kowalska" already exists.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+InternalError:
+  description: Unexpected server error.
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: internal_error
+            field: null
+            message: Unexpected error; see server logs (request 01JB8Z6Q0K3N).
+        meta:
+          requestId: 01JB8Z6Q0K3N

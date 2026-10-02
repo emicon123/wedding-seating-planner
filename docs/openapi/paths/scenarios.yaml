@@ -1,0 +1,42 @@
+get:
+  tags: [scenarios]
+  operationId: listScenarios
+  summary: The three plans (8, 10, 12) with their evaluations (UC-09, UC-14)
+  responses:
+    '200':
+      description: Always three scenarios, ordered 8, 10, 12.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ScenarioListResponse
+          example:
+            data:
+              - capacity: 8
+                version: 1
+                plan:
+                  summary:
+                    tableCount: 0
+                    seatedCount: 0
+                    unseatedCount: 92
+                    score: 0
+                    violationCount: 1
+                    needsRecalculation: true
+                  tables: []
+                  unseated:
+                    - clusterKey: 4
+                      guestIds: [4, 5]
+                      pinned: false
+                  guestScores: []
+                  violations:
+                    - code: unseated_guests
+                      message: 92 enabled guests have no table.
+                      tableNumber: null
+                      guestIds: [4, 5]
+            meta:
+              requestId: 01JB8Z6Q0K3N
+            page:
+              total: 3
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

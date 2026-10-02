@@ -1,0 +1,58 @@
+parameters:
+  - $ref: ../components/parameters.yaml#/Capacity
+  - $ref: ../components/parameters.yaml#/GuestId
+put:
+  tags: [scenarios]
+  operationId: setAssignment
+  summary: Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
+  description: |
+    Applies to every member of the guest's cluster (disabled members included). Idempotent,
+    last write wins; bumps the scenario version. Exceeding capacity is allowed and reported as a violation.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/AssignmentSet
+        example:
+          tableNumber: 1
+          pinned: true
+  responses:
+    '200':
+      description: The updated plan with its evaluation.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ScenarioResponse
+          examples:
+            moved:
+              $ref: ../components/examples.yaml#/Scenario10
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '422':
+      $ref: ../components/responses.yaml#/UnprocessableEntity
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+delete:
+  tags: [scenarios]
+  operationId: deleteAssignment
+  summary: Move the guest's whole cluster back to the unseated tray (UC-11)
+  description: Removes the assignments (and pin) of every member of the cluster. Idempotent.
+  responses:
+    '200':
+      description: The updated plan with its evaluation.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ScenarioResponse
+          examples:
+            unseated:
+              $ref: ../components/examples.yaml#/Scenario10
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

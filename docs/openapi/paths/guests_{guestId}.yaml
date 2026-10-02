@@ -1,0 +1,48 @@
+parameters:
+  - $ref: ../components/parameters.yaml#/GuestId
+patch:
+  tags: [guests]
+  operationId: updateGuest
+  summary: Edit a guest (UC-03)
+  description: Partial update, version-checked. `enabled` may be changed here too, but the switch in the UI uses `PATCH /guests`.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/GuestUpdate
+        example:
+          version: 3
+          notes: wegetarianin
+  responses:
+    '200':
+      description: Updated guest.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/GuestResponse
+          examples:
+            updated:
+              $ref: ../components/examples.yaml#/GuestMaciek
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '409':
+      $ref: ../components/responses.yaml#/Conflict
+    '422':
+      $ref: ../components/responses.yaml#/UnprocessableEntity
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+delete:
+  tags: [guests]
+  operationId: deleteGuest
+  summary: Delete a guest (UC-06)
+  description: Removes the guest, their links and their assignments in all plans. For a decline, prefer disabling.
+  responses:
+    '204':
+      description: Deleted.
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

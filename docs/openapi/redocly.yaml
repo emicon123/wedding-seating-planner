@@ -1,0 +1,9 @@
+# Redocly CLI config for the Stoliki contract (ADR-001 §5). Used by `make openapi-lint`.
+extends:
+  - recommended
+rules:
+  # Tailnet-only, no app auth by design (ADR-001 §2) — re-enable when auth is added.
+  security-defined: off
+  # Private app, no licence to publish.
+  info-license: off
+  info-license-strict: off

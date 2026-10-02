@@ -1,0 +1,50 @@
+parameters:
+  - $ref: ../components/parameters.yaml#/LinkKey
+put:
+  tags: [guest-links]
+  operationId: upsertGuestLink
+  summary: Set the link level between two guests (UC-07)
+  description: Creates or replaces the single undirected link of the pair. Last write wins.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/GuestLinkUpsert
+        example:
+          level: 1
+  responses:
+    '200':
+      description: The link.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/GuestLinkResponse
+          example:
+            data:
+              key: 4-6
+              guestIds: [4, 6]
+              level: 1
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '422':
+      $ref: ../components/responses.yaml#/UnprocessableEntity
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+delete:
+  tags: [guest-links]
+  operationId: deleteGuestLink
+  summary: Remove the link between two guests (UC-07)
+  responses:
+    '204':
+      description: Removed.
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '404':
+      $ref: ../components/responses.yaml#/NotFound
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
