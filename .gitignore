@@ -1,0 +1,33 @@
+# secrets / env
+.env
+.env.*
+!.env.example
+
+# Node / frontend
+node_modules/
+frontend-web/dist/
+*.tsbuildinfo
+coverage/
+
+# Go
+backend-go/bin/
+*.test
+*.out
+
+# SQLite data and local DBs
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/data/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
