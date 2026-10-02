@@ -403,25 +403,26 @@ describe('group checklist (picker)', () => {
   })
 
   it('a refused change is named, the picker stays open and shows what is left to save', async () => {
-    const state = serveGuests(SEPARATE_FAMILIES, SEPARATE_OVERVIEW)
+    const zosia = makeGuest({ id: 8, firstName: 'Zosia' })
+    const state = serveGuests([...SEPARATE_FAMILIES, zosia], SEPARATE_OVERVIEW)
     const ok = serveLinkMichal(state)
-    mockApi('put', '/guest-links/4-7', () =>
+    mockApi('put', '/guest-links/4-8', () =>
       HttpResponse.json(failure('not_found'), { status: 404 }),
     )
     const { user } = renderPage(<GuestsPage />, '/goscie')
     const dialog = await openEditor(user, 'Maciek')
     const picker = await openPicker(user, dialog, 1, 'Maciek')
     await user.click(within(picker).getByRole('checkbox', { name: 'Michał' }))
-    await user.click(within(picker).getByRole('checkbox', { name: 'Ola' }))
+    await user.click(within(picker).getByRole('checkbox', { name: 'Zosia' }))
 
     await user.click(within(picker).getByRole('button', { name: 'Zapisz' }))
 
     const alert = await within(picker).findByRole('alert')
-    expect(alert).toHaveTextContent(/Nie udało się zapisać: Ola/)
+    expect(alert).toHaveTextContent(/Nie udało się zapisać: Zosia/)
     expect(alert).toHaveTextContent(/Nie znaleziono/)
     expect(ok.calls).toEqual([{ level: 1 }])
     expect(screen.getByRole('dialog', { name: 'Grupa 1: Maciek' })).toBeInTheDocument()
-    // the refetch made Michał's link real: only Ola is left to add
+    // the refetch made Michał's link real: only Zosia is left to add
     await waitFor(() => expect(within(picker).getByText('Dodaj: 1')).toBeInTheDocument())
   })
 
@@ -548,5 +549,61 @@ describe('group 0 is the whole cluster', () => {
     const group0 = block(dialog, 0)
     expect(await within(group0).findByText('4 osoby')).toBeInTheDocument()
     expect(within(group0).getByText('Piąty')).toBeInTheDocument()
+  })
+})
+
+// Regression (user report): Bartek + group 1 Maja. Maja and Darek are a group-0 cluster, so
+// ticking Maja ticks Darek too, and one click on the family removes everybody.
+describe('group 1 works on whole clusters', () => {
+  it('ticking Michał ticks Ola (his group-0 mate) as fixed, unticking releases her', async () => {
+    serveGuests(SEPARATE_FAMILIES, SEPARATE_OVERVIEW)
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    const dialog = await openEditor(user, 'Maciek')
+    const picker = await openPicker(user, dialog, 1, 'Maciek')
+
+    await user.click(within(picker).getByRole('checkbox', { name: 'Michał' }))
+
+    const ola = within(picker).getByRole('checkbox', { name: 'Ola' })
+    expect(ola).toBeChecked()
+    expect(ola).toBeDisabled()
+    expect(within(ola.closest('li')!).getByText('przez grupę 0: Michał')).toBeInTheDocument()
+    expect(within(picker).getByText('Zaznaczono: 1')).toBeInTheDocument()
+
+    await user.click(within(picker).getByRole('checkbox', { name: 'Michał' }))
+
+    const freed = within(picker).getByRole('checkbox', { name: 'Ola' })
+    expect(freed).not.toBeChecked()
+    expect(freed).toBeEnabled()
+  })
+
+  it('"Usuń rodzinę" removes the whole family with one click', async () => {
+    const state = serveGuests(FAMILIES, MACIEK_FAMILY_OVERVIEW)
+    const api = mockApi('delete', '/guest-links/4-6', () => {
+      state.guests = state.guests.map((guest) => {
+        if (guest.id === 4) return { ...guest, links: guest.links.filter((l) => l.guestId !== 6) }
+        if (guest.id === 6) return { ...guest, links: guest.links.filter((l) => l.guestId !== 4) }
+        return guest
+      })
+      state.overview = SEPARATE_OVERVIEW
+      return new HttpResponse(null, { status: 204 })
+    })
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    const dialog = await openEditor(user, 'Maciek')
+
+    const group1 = block(dialog, 1)
+    expect(await within(group1).findByText('Ola')).toBeInTheDocument()
+    // Ola comes along through Michał's group 0, so she has no X of her own…
+    expect(
+      within(group1).queryByRole('button', { name: 'Usuń powiązanie: Ola' }),
+    ).not.toBeInTheDocument()
+
+    await user.click(
+      within(group1).getByRole('button', { name: 'Usuń rodzinę: Michał, Ola' }),
+    )
+
+    await waitFor(() => expect(api.calls).toHaveLength(1))
+    await waitFor(() =>
+      expect(within(block(dialog, 1)).getByText('brak')).toBeInTheDocument(),
+    )
   })
 })

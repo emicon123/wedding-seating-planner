@@ -1,7 +1,17 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { GuestsPage } from '@/features/guests/GuestsPage'
 import { bigList, serveGuests, serveToggle, SMALL_LIST } from '@/features/guests/fixtures'
-import { MACIEK_FAMILY_OVERVIEW, link, makeCluster, makeGuest, makeOverview } from '@/test/builders'
+import {
+  KAROLINA,
+  MACIEK,
+  MACIEK_FAMILY_OVERVIEW,
+  MICHAL,
+  OLA,
+  link,
+  makeCluster,
+  makeGuest,
+  makeOverview,
+} from '@/test/builders'
 import { HttpResponse, list, mockApi } from '@/test/server'
 import { renderPage } from '@/test/renderPage'
 
@@ -72,8 +82,7 @@ describe('GuestsPage: list and counters', () => {
     expect(within(justynka).getByText('os. tow.')).toBeInTheDocument()
   })
 
-  it('shows at most three partner names and "+N" for the rest', async () => {
-    const family = ['A', 'B', 'C', 'D', 'E'].map((firstName, i) =>
+  it('shows at most three partner names and "+N" for the rest', async () => {    const family = ['A', 'B', 'C', 'D', 'E'].map((firstName, i) =>
       makeGuest({
         id: i + 1,
         firstName,
@@ -89,6 +98,23 @@ describe('GuestsPage: list and counters', () => {
     expect(within(first).getAllByText(/^[B-E]$/)).toHaveLength(3)
   })
 
+  it('lists whole group-0 clusters together, ordered by their first member', async () => {
+    // Alphabetically Zosia would sort last; as Adam's cluster-mate she stands with him.
+    const adam = makeGuest({ id: 9, firstName: 'Adam', links: [link(8, 0)] })
+    const zosia = makeGuest({ id: 8, firstName: 'Zosia', links: [link(9, 0)] })
+    serveGuests(
+      [MACIEK, KAROLINA, MICHAL, OLA, zosia, adam],
+      makeOverview([
+        makeCluster({ key: 4, guestIds: [4, 5] }),
+        makeCluster({ key: 6, guestIds: [6, 7] }),
+        makeCluster({ key: 8, guestIds: [8, 9] }),
+      ]),
+    )
+    renderPage(<GuestsPage />, '/goscie')
+    await screen.findByRole('button', { name: 'Powiązania: Zosia' })
+
+    expect(rowNames()).toEqual(['Adam', 'Zosia', 'Karolina Nowak', 'Maciek', 'Michał', 'Ola'])
+  })
   it('"powiązani z" lists the person first, then group 0, 1 and 2, each marked', async () => {
     serveGuests([...SMALL_LIST], MACIEK_FAMILY_OVERVIEW)
     renderPage(<GuestsPage />, '/goscie?powiazani=4')
@@ -214,7 +240,8 @@ describe('GuestsPage: switch and bulk toggle', () => {
     await user.click(screen.getByRole('button', { name: 'Wyłącz (2)' }))
 
     await waitFor(() => expect(api.calls).toHaveLength(1))
-    expect(api.calls[0]).toEqual({ guestIds: [8, 9], enabled: false })
+    // visible order is cluster-first (Staś sorts before Zosia by name here)
+    expect(api.calls[0]).toEqual({ guestIds: [9, 8], enabled: false })
     expect(await screen.findByText('Wyłączono: 2 gości.')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Zaznaczeni goście' })).not.toBeInTheDocument()
   })

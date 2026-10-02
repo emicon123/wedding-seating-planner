@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { warningsForGuest } from '@/domain/linkColumns'
-import { relationsOf } from '@/domain/relations'
+import { relationsOf, type Family } from '@/domain/relations'
 import type { ClusterOverview, Guest, LinkLevel } from '@/domain/types'
 import { ClusterWarnings } from '@/features/guests/ClusterWarnings'
 import { LinkPicker } from '@/features/guests/LinkPicker'
@@ -66,6 +66,21 @@ export function LinkEditor({ guestId, guests, overview, onClose, onShowInList }:
     if (failed[0]) toast.error(errorMessage(failed[0].error))
   }
 
+  /** One click removes the whole family: every direct link of this guest to its members. */
+  async function removeFamily(family: Family) {
+    const directIds = family.members.filter((member) => member.direct).map((member) => member.guestId)
+    if (directIds.length === 0) return
+    const failed = await apply.mutateAsync({
+      guestId: currentId,
+      changes: directIds.map((otherId) => ({ otherId, level: null })),
+    })
+    if (failed.length > 0) {
+      const who = failed.map(({ otherId }) => nameOf(otherId)).join(', ')
+      const why = [...new Set(failed.map(({ error }) => errorMessage(error)))].join(' ')
+      toast.error(`Nie udało się usunąć: ${who}. ${why}`)
+    }
+  }
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-5xl">
@@ -114,6 +129,7 @@ export function LinkEditor({ guestId, guests, overview, onClose, onShowInList }:
                 setPicking(level)
               }}
               onRemove={(otherId) => void removeLink(otherId)}
+              onRemoveFamily={(family) => void removeFamily(family)}
             />
           ))}
         </div>

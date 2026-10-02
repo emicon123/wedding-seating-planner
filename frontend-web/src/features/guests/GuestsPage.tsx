@@ -17,6 +17,7 @@ import {
 import { buildGuestIndex } from '@/domain/guestIndex'
 import { guestCounts } from '@/domain/guestList'
 import { relatedTo, summariseRelations } from '@/domain/relations'
+import { sortByCluster } from '@/domain/companions'
 import { guestCountsLabel, pluralPl } from '@/domain/labels'
 import type { Guest } from '@/domain/types'
 import { BulkToggleBar } from '@/features/guests/BulkToggleBar'
@@ -61,10 +62,13 @@ export function GuestsPage() {
     () => related && new Map(related.map(({ guestId, level }) => [guestId, level])),
     [related],
   )
-  const visible = useMemo(
-    () => filterGuests(guests, index, deferredFilters, related),
-    [guests, index, deferredFilters, related],
-  )
+  const visible = useMemo(() => {
+    const matching = filterGuests(guests, index, deferredFilters, related)
+    // Search hits keep their ranking, "related to …" keeps relation order; the plain list
+    // reads family by family (whole group-0 clusters together, § companions.sortByCluster).
+    if (deferredFilters.query.trim() !== '' || deferredFilters.related !== null) return matching
+    return sortByCluster(matching, overview)
+  }, [guests, index, deferredFilters, related, overview])
   const counts = useMemo(() => guestCounts(guests), [guests])
   const warnedIds = useMemo(
     () => new Set(overview?.warnings.flatMap((warning) => warning.guestIds) ?? []),

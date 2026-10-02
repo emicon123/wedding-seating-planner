@@ -72,6 +72,8 @@ type RelationBlockProps = {
   /** The button that was pressed comes along so the editor can give focus back to it. */
   onEdit: (level: Block['level'], opener: HTMLElement) => void
   onRemove: (guestId: number) => void
+  /** One click removes the whole family: every direct link of this guest to its members. */
+  onRemoveFamily: (family: Block['families'][number]) => void
 }
 
 /**
@@ -86,6 +88,7 @@ export function RelationBlock({
   onOpen,
   onEdit,
   onRemove,
+  onRemoveFamily,
 }: RelationBlockProps) {
   const { level, families } = block
   const empty = block.personCount === 0
@@ -122,22 +125,41 @@ export function RelationBlock({
 
       {!empty && (
         <ul className="space-y-2">
-          {families.map((family) => (
-            <li key={family.key}>
-              <ul className={cn('space-y-2 rounded-md p-2', GROUP_FRAME[level])}>
-                {family.members.map((relation) => (
-                  <Member
-                    key={relation.guestId}
-                    relation={relation}
-                    guest={guestById.get(relation.guestId)}
-                    nameOf={nameOf}
-                    onOpen={onOpen}
-                    onRemove={onRemove}
-                  />
-                ))}
-              </ul>
-            </li>
-          ))}
+          {families.map((family) => {
+            const directCount = family.members.filter((member) => member.direct).length
+            const removable = family.members.length > 1 && directCount > 0
+            return (
+              <li key={family.key}>
+                <ul className={cn('space-y-2 rounded-md p-2', GROUP_FRAME[level])}>
+                  {family.members.map((relation) => (
+                    <Member
+                      key={relation.guestId}
+                      relation={relation}
+                      guest={guestById.get(relation.guestId)}
+                      nameOf={nameOf}
+                      onOpen={onOpen}
+                      onRemove={onRemove}
+                    />
+                  ))}
+                  {removable && (
+                    <li className="flex justify-end pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onRemoveFamily(family)}
+                        className="text-muted-foreground hover:text-brick"
+                        aria-label={`Usuń rodzinę: ${family.members.map((member) => nameOf(member.guestId)).join(', ')}`}
+                      >
+                        <XIcon aria-hidden="true" />
+                        Usuń rodzinę
+                      </Button>
+                    </li>
+                  )}
+                </ul>
+              </li>
+            )
+          })}
         </ul>
       )}
     </section>

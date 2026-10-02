@@ -40,20 +40,27 @@ type PickerItemProps = {
   nameOf: (guestId: number) => string
   /** Ticked by the user (a link of its own with the edited guest at this level). */
   ticked: boolean
-  /** Group 0 only: in the cluster through someone else's link; shown ticked and fixed. */
+  /** In the cluster through someone else's link (group 0) or through a ticked guest's
+   *  group-0 mates (groups 1/2); shown ticked and fixed. */
   reached: boolean
+  /** Groups 1/2 only: the ticked guest they come along through. */
+  reachedVia: number | undefined
   onToggle: (guestId: number, ticked: boolean) => void
 }
 
 /** The line under a name that says what Save will do with this person (or why they are fixed). */
 function noteFor(
-  { row, level, nameOf, ticked, reached }: PickerItemProps,
+  { row, level, nameOf, ticked, reached, reachedVia }: PickerItemProps,
   locked: boolean,
 ): string | null {
   const { currentLevel, via } = row
   if (reached) {
-    const who = via === undefined ? null : nameOf(via)
-    return who ? `${viaLabel('cluster', who)}. Zmień to przy: ${who}` : 'w paczce grupy 0'
+    if (level === 0) {
+      const who = via === undefined ? null : nameOf(via)
+      return who ? `${viaLabel('cluster', who)}. Zmień to przy: ${who}` : 'w paczce grupy 0'
+    }
+    const who = reachedVia === undefined ? null : nameOf(reachedVia)
+    return who ? viaLabel('cluster', who) : 'w paczce grupy 0'
   }
   if (locked) return 'już w paczce (grupa 0): osobne powiązanie nie ma sensu'
   if (ticked && currentLevel !== undefined && currentLevel !== level) {
@@ -254,6 +261,17 @@ export function LinkPicker({
     () => (level === 0 ? new Set(clusterAfter(guest, guests, selected).memberIds) : undefined),
     [level, guest, guests, selected],
   )
+  // Groups 1/2: ticking one guest brings their whole group-0 cluster along (the same
+  // expansion the panel and the server use), so those mates show ticked and fixed.
+  const joiningVia = useMemo(() => {
+    if (level === 0 || !overview) return new Map<number, number>()
+    return new Map(
+      joiningViaCluster(guest.id, selected, overview).map(({ guestId, viaId }) => [
+        guestId,
+        viaId,
+      ]),
+    )
+  }, [level, guest.id, selected, overview])
 
   const visible = useMemo(() => {
     const found = new Set(index.search(deferredQuery).map((match) => match.id))
@@ -357,22 +375,28 @@ export function LinkPicker({
             </p>
           )}
           <ul aria-label="Goście do wyboru">
-            {visible.map((row) => (
-              <PickerItem
-                key={row.guest.id}
-                row={row}
-                level={level}
-                nameOf={nameOf}
-                ticked={selected.has(row.guest.id)}
-                reached={
-                  level === 0 &&
-                  row.viaCluster &&
-                  !selected.has(row.guest.id) &&
-                  clusterIds?.has(row.guest.id) === true
-                }
-                onToggle={toggle}
-              />
-            ))}
+            {visible.map((row) => {
+              const ticked = selected.has(row.guest.id)
+              const reached0 =
+                level === 0 &&
+                row.viaCluster &&
+                !ticked &&
+                clusterIds?.has(row.guest.id) === true
+              const via12 = level === 0 ? undefined : joiningVia.get(row.guest.id)
+              const reached = reached0 || (level !== 0 && via12 !== undefined && !ticked)
+              return (
+                <PickerItem
+                  key={row.guest.id}
+                  row={row}
+                  level={level}
+                  nameOf={nameOf}
+                  ticked={ticked}
+                  reached={reached}
+                  reachedVia={via12}
+                  onToggle={toggle}
+                />
+              )
+            })}
           </ul>
           {canCreate && !onlySelected && (
             <button

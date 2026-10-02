@@ -11,6 +11,33 @@ export function clusterOf(guestId: number, overview: ClusterOverview): Cluster |
   return overview.clusters.find((cluster) => cluster.guestIds.includes(guestId))
 }
 
+const polish = new Intl.Collator('pl')
+
+/**
+ * Default guest-list order: whole group-0 clusters together. A cluster sorts by its
+ * alphabetically first member (Polish collation), members inside by name; guests the
+ * overview does not know behave as clusters of one. Search hits and the "related to …"
+ * view keep their own ranking — the caller applies this only to the plain list.
+ */
+export function sortByCluster(guests: Guest[], overview: ClusterOverview | undefined): Guest[] {
+  if (!overview) return guests
+  const names = new Map(guests.map((guest) => [guest.id, guest.displayName]))
+  const firstOf = new Map<number, string>()
+  for (const cluster of overview.clusters) {
+    const first =
+      cluster.guestIds
+        .map((id) => names.get(id) ?? '')
+        .sort((a, b) => polish.compare(a, b))[0] ?? ''
+    for (const id of cluster.guestIds) firstOf.set(id, first)
+  }
+  return [...guests].sort(
+    (a, b) =>
+      polish.compare(firstOf.get(a.id) ?? a.displayName, firstOf.get(b.id) ?? b.displayName) ||
+      polish.compare(a.displayName, b.displayName) ||
+      a.id - b.id,
+  )
+}
+
 function directLinks(guest: Guest | undefined, level: LinkLevel): number[] {
   return (guest?.links ?? []).filter((link) => link.level === level).map((link) => link.guestId)
 }
