@@ -1,0 +1,39 @@
+# Stoliki: one container (Go binary serves API + SPA under /wesele), SQLite on a named volume.
+# Run from anywhere:  docker compose -f infra/compose.yml up -d --build
+# Config comes from infra/.env (copy infra/.env.example); every variable has a default.
+name: stoliki
+
+services:
+  stoliki:
+    image: stoliki:local
+    build:
+      context: ..                 # repo root: needs both frontend-web/ and backend-go/
+      dockerfile: infra/Dockerfile
+    restart: unless-stopped
+    environment:
+      BASE_PATH: ${BASE_PATH:-/wesele}
+      PORT: "8080"                # container-internal; the host port is STOLIKI_HOST_PORT
+      DB_PATH: /data/stoliki.db
+      WEB_ROOT: /app/web
+      GOMEMLIMIT: ${GOMEMLIMIT:-150MiB}
+    ports:
+      # Loopback only: the only client is the local Tailscale daemon (tailscale serve).
+      - "127.0.0.1:${STOLIKI_HOST_PORT:-8094}:8080"
+    volumes:
+      - stoliki-data:/data
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: ${STOLIKI_MEM_LIMIT:-192m}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  stoliki-data:
