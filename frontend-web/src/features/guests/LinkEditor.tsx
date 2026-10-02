@@ -1,10 +1,8 @@
-import { XIcon } from 'lucide-react'
-import { useMemo } from 'react'
+import { ArrowLeftIcon, ListFilterIcon } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { clusterOf } from '@/domain/companions'
 import { errorMessage } from '@/api/errorMessage'
-import { useCreateGuest, useDeleteLink, useUpsertLink } from '@/api/guests'
-import { GroupMark } from '@/components/GroupMark'
+import { useApplyLinkChanges } from '@/api/guests'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,202 +11,131 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { buildGuestIndex, type GuestIndex } from '@/domain/guestIndex'
-import { linkKey } from '@/domain/guestList'
-import { parseGuestName } from '@/domain/guestName'
-import { pluralPl, viaLabel } from '@/domain/labels'
-import { linkColumns, warningsForGuest, type ColumnEntry } from '@/domain/linkColumns'
+import { warningsForGuest } from '@/domain/linkColumns'
+import { relationsOf } from '@/domain/relations'
 import type { ClusterOverview, Guest, LinkLevel } from '@/domain/types'
 import { ClusterWarnings } from '@/features/guests/ClusterWarnings'
-import { GuestSearchCombobox } from '@/features/guests/GuestSearchCombobox'
+import { LinkPicker } from '@/features/guests/LinkPicker'
+import { RelationBlock } from '@/features/guests/RelationBlock'
 
 const LEVELS: LinkLevel[] = [0, 1, 2]
 
-const LEVEL_HINT: Record<LinkLevel, string> = {
-  0: 'Muszą siedzieć razem, przy jednym stole.',
-  1: 'Chcą siedzieć razem, jeśli się da.',
-  2: 'Mogą siedzieć razem, tylko gdy nie ma innej opcji.',
-}
-
-type LinkColumnProps = {
-  level: LinkLevel
-  guest: Guest
-  guests: Guest[]
-  index: GuestIndex
-  entries: ColumnEntry[]
-  clusterSize: number | undefined
-  nameOf: (guestId: number) => string
-  onPick: (level: LinkLevel, other: Guest) => Promise<void>
-  onCreate: (level: LinkLevel, name: string) => Promise<void>
-  onRemove: (otherId: number) => void
-}
-
-function LinkColumn({
-  level,
-  guest,
-  guests,
-  index,
-  entries,
-  clusterSize,
-  nameOf,
-  onPick,
-  onCreate,
-  onRemove,
-}: LinkColumnProps) {
-  const excludeIds = useMemo(
-    () => new Set([guest.id, ...entries.filter((entry) => entry.direct).map((e) => e.guestId)]),
-    [guest.id, entries],
-  )
-  const currentLevel = (guestId: number) =>
-    guest.links.find((link) => link.guestId === guestId)?.level
-
-  return (
-    <section
-      aria-label={`Grupa ${level}`}
-      className="space-y-2 rounded-lg border bg-background/60 p-3"
-    >
-      <div className="space-y-1">
-        <GroupMark level={level} />
-        <p className="text-xs text-muted-foreground">{LEVEL_HINT[level]}</p>
-        {level === 0 && clusterSize !== undefined && clusterSize > 1 && (
-          <p className="text-xs font-medium">
-            Paczka: {pluralPl(clusterSize, 'osoba', 'osoby', 'osób')} przy jednym stole
-          </p>
-        )}
-      </div>
-
-      {entries.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nikogo.</p>
-      ) : (
-        <ul className="space-y-1">
-          {entries.map((entry) => (
-            <li key={entry.guestId} className="flex items-center justify-between gap-2 text-sm">
-              {entry.direct ? (
-                <>
-                  <span className="font-medium">{nameOf(entry.guestId)}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => onRemove(entry.guestId)}
-                    className="text-muted-foreground hover:text-brick"
-                  >
-                    <XIcon aria-hidden="true" />
-                    <span className="sr-only">Usuń powiązanie: {nameOf(entry.guestId)}</span>
-                  </Button>
-                </>
-              ) : (
-                <span className="text-muted-foreground">
-                  + <span className="font-medium text-foreground">{nameOf(entry.guestId)}</span>
-                  {entry.via && <> ({viaLabel(entry.via.reason, nameOf(entry.via.guestId))})</>}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <GuestSearchCombobox
-        label={`Dodaj do grupy ${level}`}
-        guests={guests}
-        index={index}
-        excludeIds={excludeIds}
-        currentLevel={currentLevel}
-        onPick={(other) => onPick(level, other)}
-        onCreate={(name) => onCreate(level, name)}
-      />
-    </section>
-  )
-}
-
 type LinkEditorProps = {
-  guest: Guest
+  /** The person the panel opened on; names inside it open the next person. */
+  guestId: number
   guests: Guest[]
   /** Undefined while loading or when it failed: own links still show, the derived part waits. */
   overview: ClusterOverview | undefined
   onClose: () => void
+  /** Narrow the guest list to this person and their relations. */
+  onShowInList: (guestId: number) => void
 }
 
 /**
- * Group 0 / 1 / 2 of one guest (003-frontend-design §5). Links are symmetric, so a link set here
- * shows on the other guest too. The derived part ("+ Ola (przez grupę 0: Michał)") is who comes
- * along automatically through the group-0 cluster; it is read-only.
+ * The relationships panel of one guest (003-frontend-design §5): who is connected to them, by
+ * group, with the reason for each person; every name opens that person (a trail with "Wróć" lets
+ * the user walk the graph); "Edytuj" opens the checklist of one group. Group 0 is the whole
+ * cluster (everyone who must sit with them, through chains too), not just the stored links, and
+ * links are symmetric, so a link set from one guest shows on the other.
  */
-export function LinkEditor({ guest, guests, overview, onClose }: LinkEditorProps) {
-  const upsert = useUpsertLink()
-  const remove = useDeleteLink()
-  const create = useCreateGuest()
+export function LinkEditor({ guestId, guests, overview, onClose, onShowInList }: LinkEditorProps) {
+  const apply = useApplyLinkChanges()
+  const [trail, setTrail] = useState<number[]>(() => [guestId])
+  const [picking, setPicking] = useState<LinkLevel | null>(null)
+  // Radix only hands focus back to a Dialog.Trigger; ours is a plain button in the panel.
+  const opener = useRef<HTMLElement | null>(null)
 
-  const index = useMemo(() => buildGuestIndex(guests), [guests])
-  const names = useMemo(
-    () => new Map(guests.map((candidate) => [candidate.id, candidate.displayName])),
-    [guests],
+  const byId = useMemo(() => new Map(guests.map((guest) => [guest.id, guest])), [guests])
+  const nameOf = (id: number) => byId.get(id)?.displayName ?? `Gość ${id}`
+  const currentId = trail.at(-1) ?? guestId
+  const guest = byId.get(currentId)
+  const relations = useMemo(
+    () => relationsOf(currentId, guests, overview),
+    [currentId, guests, overview],
   )
-  const nameOf = (guestId: number) => names.get(guestId) ?? `Gość ${guestId}`
-  const columns = linkColumns(guest.id, guests, overview)
-  const cluster = overview ? clusterOf(guest.id, overview) : undefined
+  if (!guest) return null
+
   const warnings = overview ? warningsForGuest(guest.id, overview) : []
-
-  async function pick(level: LinkLevel, other: Guest) {
-    await upsert.mutateAsync({ linkKey: linkKey(guest.id, other.id), level })
-  }
-
-  /** Two calls, one gesture: create the missing guest, then link them. */
-  async function createAndLink(level: LinkLevel, name: string) {
-    const parsed = parseGuestName(name)
-    if (!parsed) return
-    const created = await create.mutateAsync({ ...parsed, isChild: false })
-    try {
-      await upsert.mutateAsync({ linkKey: linkKey(guest.id, created.id), level })
-    } catch (failure) {
-      toast.error(
-        `Dodano gościa ${created.displayName}, ale nie udało się go powiązać. ${errorMessage(failure)}`,
-      )
-    }
-  }
+  const previousId = trail.length > 1 ? trail[trail.length - 2] : undefined
 
   async function removeLink(otherId: number) {
-    try {
-      await remove.mutateAsync(linkKey(guest.id, otherId))
-    } catch (failure) {
-      toast.error(errorMessage(failure))
-    }
+    const failed = await apply.mutateAsync({
+      guestId: currentId,
+      changes: [{ otherId, level: null }],
+    })
+    if (failed[0]) toast.error(errorMessage(failed[0].error))
   }
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-4xl">
+      <DialogContent className="sm:max-w-5xl">
         <DialogHeader>
+          {previousId !== undefined && (
+            <nav aria-label="Ścieżka" className="-ml-2 flex flex-wrap items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setTrail((current) => current.slice(0, -1))}
+              >
+                <ArrowLeftIcon aria-hidden="true" />
+                Wróć: {nameOf(previousId)}
+              </Button>
+              <span className="text-xs text-muted-foreground">{trail.map(nameOf).join(' › ')}</span>
+            </nav>
+          )}
           <DialogTitle>Powiązania: {guest.displayName}</DialogTitle>
           <DialogDescription>
-            Powiązania są dwustronne: widać je też u drugiej osoby. Osoby z grupy 0 dołączają
-            automatycznie ze swoją paczką.
+            Powiązania są dwustronne: widać je też u drugiej osoby. Grupa 0 to cała paczka, także
+            osoby połączone przez kogoś innego. Grupy 1 i 2 obejmują całe paczki po obu stronach.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold">Łącznie powiązanych: {relations.total}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => onShowInList(guest.id)}>
+            <ListFilterIcon aria-hidden="true" />
+            Pokaż na liście
+          </Button>
+        </div>
 
         <ClusterWarnings warnings={warnings} nameOf={nameOf} />
 
         <div className="grid gap-3 md:grid-cols-3">
           {LEVELS.map((level) => (
-            <LinkColumn
+            <RelationBlock
               key={level}
-              level={level}
-              guest={guest}
-              guests={guests}
-              index={index}
-              entries={columns[level]}
-              clusterSize={cluster?.guestIds.length}
+              block={relations.blocks[level]}
+              guestById={byId}
               nameOf={nameOf}
-              onPick={pick}
-              onCreate={createAndLink}
+              onOpen={(id) => setTrail((current) => [...current, id])}
+              onEdit={(level, button) => {
+                opener.current = button
+                setPicking(level)
+              }}
               onRemove={(otherId) => void removeLink(otherId)}
             />
           ))}
         </div>
         {!overview && (
           <p className="text-sm text-muted-foreground">
-            Wczytuję paczki, żeby pokazać, kto dołącza automatycznie…
+            Wczytuję paczki, żeby pokazać wszystkich powiązanych…
           </p>
+        )}
+
+        {picking !== null && (
+          <LinkPicker
+            key={`${currentId}-${picking}`}
+            guest={guest}
+            guests={guests}
+            overview={overview}
+            level={picking}
+            onClose={() => setPicking(null)}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault()
+              opener.current?.focus()
+            }}
+          />
         )}
       </DialogContent>
     </Dialog>

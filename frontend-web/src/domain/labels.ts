@@ -3,6 +3,7 @@
 import { MIN_TABLE_FILL, type DropPreview } from '@/domain/dropPreview'
 import type { GuestCounts } from '@/domain/guestList'
 import type { ViaReason } from '@/domain/linkColumns'
+import type { LinkDiff } from '@/domain/linkSelection'
 import type { FillStatus } from '@/domain/tableStatus'
 import type { DataWarning, ErrorCode, ErrorItem, LinkLevel, Violation } from '@/domain/types'
 
@@ -19,6 +20,20 @@ export function groupLabel(level: LinkLevel): string {
   return `Grupa ${level}`
 }
 
+/** One line per group, used wherever the user decides or reads what a group means. */
+export const GROUP_HINT: Record<LinkLevel, string> = {
+  0: 'Muszą siedzieć razem, przy jednym stole.',
+  1: 'Chcą siedzieć razem, jeśli się da.',
+  2: 'Mogą siedzieć razem, tylko gdy nie ma innej opcji.',
+}
+
+/** The short names of the three blocks in the relationships panel. */
+export const GROUP_TAGLINE: Record<LinkLevel, string> = {
+  0: 'siedzą razem',
+  1: 'chcą siedzieć razem',
+  2: 'ewentualnie',
+}
+
 export function violationLabel(violation: Violation): string {
   const table = violation.tableNumber === null ? 'Stół' : `Stół ${violation.tableNumber}`
   const labels: Record<Violation['code'], string> = {
@@ -31,7 +46,7 @@ export function violationLabel(violation: Violation): string {
   return labels[violation.code]
 }
 
-export function warningLabel(warning: DataWarning): string {
+export function warningLabel(warning: Pick<DataWarning, 'code'>): string {
   const labels: Record<DataWarning['code'], string> = {
     cluster_exceeds_8: 'Ta paczka (grupa 0) jest za duża na stół 8-osobowy',
     cluster_exceeds_12:
@@ -70,6 +85,37 @@ export function guestCountsLabel({ total, enabled, children }: GuestCounts): str
  */
 export function viaLabel(reason: ViaReason, viaName: string): string {
   return reason === 'cluster' ? `przez grupę 0: ${viaName}` : `przez powiązanie: ${viaName}`
+}
+
+/**
+ * The Save summary of a link checklist: "Dodaj: 3, przenieś z innej grupy: 1, usuń: 2" (parts
+ * with nothing to do are left out). Moves are named because the pair keeps ONE link.
+ */
+export function linkDiffLabel(diff: LinkDiff): string {
+  const text = [
+    diff.add.length > 0 ? `dodaj: ${diff.add.length}` : null,
+    diff.move.length > 0 ? `przenieś z innej grupy: ${diff.move.length}` : null,
+    diff.remove.length > 0 ? `usuń: ${diff.remove.length}` : null,
+  ]
+    .filter((part) => part !== null)
+    .join(', ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** "brak" / "2 osoby" / "9 osób w 5 rodzinach" (the family part is left out when everyone is alone). */
+export function relationCountLabel(personCount: number, familyCount: number): string {
+  if (personCount === 0) return 'brak'
+  const people = pluralPl(personCount, 'osoba', 'osoby', 'osób')
+  if (familyCount === personCount) return people
+  return `${people} w ${pluralPl(familyCount, 'rodzinie', 'rodzinach', 'rodzinach')}`
+}
+
+/** Why a person is listed: entered directly, or through whom they come along. */
+export function relationReasonLabel(
+  entry: { direct: boolean; via?: { guestId: number; reason: ViaReason } },
+  nameOf: (guestId: number) => string,
+): string {
+  return entry.via ? viaLabel(entry.via.reason, nameOf(entry.via.guestId)) : 'wpisany bezpośrednio'
 }
 
 // --- plans ------------------------------------------------------------------------------------

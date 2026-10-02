@@ -2,13 +2,12 @@ import { act, waitFor } from '@testing-library/react'
 import type { QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/api/errors'
 import {
+  useApplyLinkChanges,
   useCreateGuest,
   useDeleteGuest,
-  useDeleteLink,
   useGuests,
   useToggleGuests,
   useUpdateGuest,
-  useUpsertLink,
 } from '@/api/guests'
 import { keys } from '@/api/keys'
 import { KAROLINA, MACIEK, makeGuest } from '@/test/builders'
@@ -95,27 +94,54 @@ describe('guest mutations invalidate guests, clusters and scenarios', () => {
     expect(invalidated()).toEqual(EXPECTED_INVALIDATION)
   })
 
-  it('useUpsertLink sends PUT /guest-links/{key} with the level', async () => {
-    const api = mockApi('put', '/guest-links/4-6', () =>
+  it('useApplyLinkChanges sends PUT for a level and DELETE for null, then invalidates once', async () => {
+    const put = mockApi('put', '/guest-links/4-6', () =>
       HttpResponse.json(single({ key: '4-6', guestIds: [4, 6], level: 1 })),
     )
-    const { result, queryClient } = renderHookWithClient(() => useUpsertLink())
+    const del = mockApi('delete', '/guest-links/4-5', () => new HttpResponse(null, { status: 204 }))
+    const { result, queryClient } = renderHookWithClient(() => useApplyLinkChanges())
     const invalidated = spyOnInvalidation(queryClient)
 
-    await act(() => result.current.mutateAsync({ linkKey: '4-6', level: 1 }))
+    const failed = await act(() =>
+      result.current.mutateAsync({
+        guestId: 4,
+        changes: [
+          { otherId: 5, level: null },
+          { otherId: 6, level: 1 },
+        ],
+      }),
+    )
 
-    expect(api.calls).toEqual([{ level: 1 }])
+    expect(failed).toEqual([])
+    expect(del.calls).toHaveLength(1)
+    expect(put.calls).toEqual([{ level: 1 }])
     expect(invalidated()).toEqual(EXPECTED_INVALIDATION)
   })
 
-  it('useDeleteLink sends DELETE /guest-links/{key}', async () => {
-    const api = mockApi('delete', '/guest-links/4-6', () => new HttpResponse(null, { status: 204 }))
-    const { result, queryClient } = renderHookWithClient(() => useDeleteLink())
+  it('useApplyLinkChanges keeps going after a refused change and reports which one failed', async () => {
+    mockApi('put', '/guest-links/4-6', () =>
+      HttpResponse.json(failure('not_found'), { status: 404 }),
+    )
+    const second = mockApi('put', '/guest-links/4-7', () =>
+      HttpResponse.json(single({ key: '4-7', guestIds: [4, 7], level: 2 })),
+    )
+    const { result, queryClient } = renderHookWithClient(() => useApplyLinkChanges())
     const invalidated = spyOnInvalidation(queryClient)
 
-    await act(() => result.current.mutateAsync('4-6'))
+    const failed = await act(() =>
+      result.current.mutateAsync({
+        guestId: 4,
+        changes: [
+          { otherId: 6, level: 2 },
+          { otherId: 7, level: 2 },
+        ],
+      }),
+    )
 
-    expect(api.calls).toHaveLength(1)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]?.otherId).toBe(6)
+    expect(failed[0]?.error).toBeInstanceOf(ApiError)
+    expect(second.calls).toEqual([{ level: 2 }])
     expect(invalidated()).toEqual(EXPECTED_INVALIDATION)
   })
 

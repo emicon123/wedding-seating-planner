@@ -16,6 +16,7 @@ import {
 } from '@/domain/guestFilters'
 import { buildGuestIndex } from '@/domain/guestIndex'
 import { guestCounts } from '@/domain/guestList'
+import { relatedTo, summariseRelations } from '@/domain/relations'
 import { guestCountsLabel, pluralPl } from '@/domain/labels'
 import type { Guest } from '@/domain/types'
 import { BulkToggleBar } from '@/features/guests/BulkToggleBar'
@@ -48,9 +49,21 @@ export function GuestsPage() {
   const filters = useMemo(() => parseFilters(params), [params])
   const deferredFilters = useDeferredValue(filters)
   const index = useMemo(() => buildGuestIndex(guests), [guests])
+  const summaries = useMemo(() => summariseRelations(guests, overview), [guests, overview])
+  const related = useMemo(
+    () =>
+      deferredFilters.related === null
+        ? undefined
+        : relatedTo(deferredFilters.related, guests, overview),
+    [deferredFilters.related, guests, overview],
+  )
+  const relationLevels = useMemo(
+    () => related && new Map(related.map(({ guestId, level }) => [guestId, level])),
+    [related],
+  )
   const visible = useMemo(
-    () => filterGuests(guests, index, deferredFilters),
-    [guests, index, deferredFilters],
+    () => filterGuests(guests, index, deferredFilters, related),
+    [guests, index, deferredFilters, related],
   )
   const counts = useMemo(() => guestCounts(guests), [guests])
   const warnedIds = useMemo(
@@ -126,6 +139,12 @@ export function GuestsPage() {
   const onDelete = useMemo(() => open('delete'), [open])
   const closeDialog = useCallback(() => setDialog(null), [])
 
+  /** From the relationships panel: narrow the list to this person and everyone linked to them. */
+  const showRelated = (guestId: number) => {
+    changeFilters({ ...filters, related: guestId })
+    closeDialog()
+  }
+
   const dialogGuest = dialog ? guests.find((guest) => guest.id === dialog.guestId) : undefined
   const nameOf = (guestId: number) =>
     guests.find((guest) => guest.id === guestId)?.displayName ?? `Gość ${guestId}`
@@ -183,6 +202,25 @@ export function GuestsPage() {
         </p>
       )}
 
+      {filters.related !== null && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink/30 bg-card px-4 py-3">
+          <p className="font-medium">
+            Powiązani z: {nameOf(filters.related)}
+            <span className="ml-2 text-sm font-normal text-muted-foreground">
+              najpierw ta osoba, potem grupa 0, 1 i 2
+            </span>
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => changeFilters({ ...filters, related: null })}
+          >
+            Pokaż wszystkich
+          </Button>
+        </div>
+      )}
+
       {guests.length > 0 && visible.length === 0 && (
         <div className="space-y-2 rounded-xl border border-dashed p-6 text-center">
           <p className="text-muted-foreground">Żaden gość nie pasuje do wybranych filtrów.</p>
@@ -205,6 +243,8 @@ export function GuestsPage() {
             guests={visible}
             selectedIds={selected}
             warnedIds={warnedIds}
+            summaries={summaries}
+            relationLevels={relationLevels}
             onSelect={onSelect}
             onSelectAll={onSelectAll}
             onToggle={onToggleOne}
@@ -222,7 +262,14 @@ export function GuestsPage() {
       />
 
       {dialog?.kind === 'links' && dialogGuest && (
-        <LinkEditor guest={dialogGuest} guests={guests} overview={overview} onClose={closeDialog} />
+        <LinkEditor
+          key={dialogGuest.id}
+          guestId={dialogGuest.id}
+          guests={guests}
+          overview={overview}
+          onClose={closeDialog}
+          onShowInList={showRelated}
+        />
       )}
       {dialog?.kind === 'edit' && dialogGuest && (
         <GuestEditDialog guest={dialogGuest} onClose={closeDialog} />

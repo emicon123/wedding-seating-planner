@@ -1,5 +1,6 @@
 import { Checkbox } from '@/components/ui/checkbox'
-import type { Guest } from '@/domain/types'
+import type { RelationSummary } from '@/domain/relations'
+import type { Guest, LinkLevel } from '@/domain/types'
 import { GuestRow, type GuestRowProps } from '@/features/guests/GuestRow'
 
 type RowHandlers = Pick<
@@ -11,6 +12,9 @@ type GuestTableProps = RowHandlers & {
   guests: Guest[]
   selectedIds: ReadonlySet<number>
   warnedIds: ReadonlySet<number>
+  summaries: ReadonlyMap<number, RelationSummary>
+  /** Set while the list is narrowed to one person's relations. */
+  relationLevels: ReadonlyMap<number, LinkLevel | null> | undefined
   onSelectAll: (selected: boolean) => void
 }
 
@@ -18,6 +22,8 @@ export function GuestTable({
   guests,
   selectedIds,
   warnedIds,
+  summaries,
+  relationLevels,
   onSelectAll,
   ...handlers
 }: GuestTableProps) {
@@ -43,6 +49,8 @@ export function GuestTable({
             guest={guest}
             selected={selectedIds.has(guest.id)}
             warned={warnedIds.has(guest.id)}
+            relations={summaries.get(guest.id)}
+            relationLevel={relationLevels?.get(guest.id)}
             {...handlers}
           />
         ))}

@@ -24,14 +24,27 @@ const ICON_COLOUR: Record<LinkLevel, string> = {
   2: 'text-group-2',
 }
 
+/** The icon of a group, for headings that carry their own text. */
+export function GroupIcon({ level, className }: { level: LinkLevel; className?: string }) {
+  const { icon: Icon } = LOOK[level]
+  return (
+    <Icon
+      aria-hidden="true"
+      className={cn('size-4', level === 0 ? 'text-group-0' : ICON_COLOUR[level], className)}
+    />
+  )
+}
+
 type GroupMarkProps = {
   level: LinkLevel
   /** Compact form for list rows: icon, "Grupa N" (only the digit on a phone) and a count. */
   count?: number
+  /** Replaces "Grupa N": a name in a chip ("Karolina Nowak"), or "teraz: Grupa 1". */
+  text?: string
   className?: string
 }
 
-export function GroupMark({ level, count, className }: GroupMarkProps) {
+export function GroupMark({ level, count, text, className }: GroupMarkProps) {
   const { icon: Icon, className: look } = LOOK[level]
   return (
     <span
@@ -43,7 +56,7 @@ export function GroupMark({ level, count, className }: GroupMarkProps) {
     >
       <Icon aria-hidden="true" className={cn('size-3.5', ICON_COLOUR[level])} />
       {count === undefined ? (
-        `Grupa ${level}`
+        (text ?? `Grupa ${level}`)
       ) : (
         <>
           <span aria-hidden="true">

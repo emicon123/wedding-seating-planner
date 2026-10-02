@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { GuestsPage } from '@/features/guests/GuestsPage'
 import { bigList, serveGuests, serveToggle, SMALL_LIST } from '@/features/guests/fixtures'
+import { MACIEK_FAMILY_OVERVIEW, link, makeCluster, makeGuest, makeOverview } from '@/test/builders'
 import { HttpResponse, list, mockApi } from '@/test/server'
 import { renderPage } from '@/test/renderPage'
 
@@ -31,14 +32,73 @@ describe('GuestsPage: list and counters', () => {
     expect(within(rowOf('Maciek')).queryByText('Dziecko')).not.toBeInTheDocument()
   })
 
-  it('shows the group marks of a guest with the full group name for screen readers', async () => {
-    serveGuests(SMALL_LIST)
+  it('shows the group-0 partners by name and the group 1 count, with the full group name for screen readers', async () => {
+    serveGuests(SMALL_LIST, MACIEK_FAMILY_OVERVIEW)
     renderPage(<GuestsPage />, '/goscie')
     await screen.findByText('Zosia')
 
-    const links = screen.getByRole('button', { name: 'Powiązania: Maciek' })
-    expect(within(links).getByText('Grupa 0: 1')).toBeInTheDocument()
-    expect(within(links).getByText('Grupa 1: 1')).toBeInTheDocument()
+    const links = await screen.findByRole('button', { name: 'Powiązania: Maciek' })
+    expect(within(links).getByText('Karolina Nowak')).toBeInTheDocument()
+    // Michał directly, Ola through his group 0
+    expect(await within(links).findByText('Grupa 1: 2')).toBeInTheDocument()
+    expect(links).toHaveAttribute('title', expect.stringContaining('Grupa 1: Michał, Ola'))
+  })
+
+  it('a guest without links invites to add some', async () => {
+    serveGuests(SMALL_LIST, MACIEK_FAMILY_OVERVIEW)
+    renderPage(<GuestsPage />, '/goscie')
+
+    const zosia = await screen.findByRole('button', { name: 'Powiązania: Zosia' })
+
+    expect(within(zosia).getByText('Dodaj powiązania')).toBeInTheDocument()
+  })
+
+  // Regression: Emilka lists Justynka, Maks and "os. tow." in group 0; every one of them must show
+  // the other three (group 0 is a cluster), not only the one holding the stored links.
+  it('every member of a group-0 cluster shows the other members, not just their own links', async () => {
+    const guests = [
+      makeGuest({ id: 1, firstName: 'Emilka', links: [link(2, 0), link(3, 0), link(4, 0)] }),
+      makeGuest({ id: 2, firstName: 'Justynka', links: [link(1, 0)] }),
+      makeGuest({ id: 3, firstName: 'Maks', links: [link(1, 0)] }),
+      makeGuest({ id: 4, firstName: 'os. tow.', links: [link(1, 0)] }),
+    ]
+    serveGuests(guests, makeOverview([makeCluster({ key: 1, guestIds: [1, 2, 3, 4] })]))
+    renderPage(<GuestsPage />, '/goscie')
+
+    const justynka = await screen.findByRole('button', { name: 'Powiązania: Justynka' })
+
+    expect(await within(justynka).findByText('Emilka')).toBeInTheDocument()
+    expect(within(justynka).getByText('Maks')).toBeInTheDocument()
+    expect(within(justynka).getByText('os. tow.')).toBeInTheDocument()
+  })
+
+  it('shows at most three partner names and "+N" for the rest', async () => {
+    const family = ['A', 'B', 'C', 'D', 'E'].map((firstName, i) =>
+      makeGuest({
+        id: i + 1,
+        firstName,
+        links: i === 0 ? [link(2, 0), link(3, 0), link(4, 0), link(5, 0)] : [link(1, 0)],
+      }),
+    )
+    serveGuests(family, makeOverview([makeCluster({ key: 1, guestIds: [1, 2, 3, 4, 5] })]))
+    renderPage(<GuestsPage />, '/goscie')
+
+    const first = await screen.findByRole('button', { name: 'Powiązania: A' })
+
+    expect(await within(first).findByText('+1')).toBeInTheDocument()
+    expect(within(first).getAllByText(/^[B-E]$/)).toHaveLength(3)
+  })
+
+  it('"powiązani z" lists the person first, then group 0, 1 and 2, each marked', async () => {
+    serveGuests([...SMALL_LIST], MACIEK_FAMILY_OVERVIEW)
+    renderPage(<GuestsPage />, '/goscie?powiazani=4')
+
+    const banner = await screen.findByText(/Powiązani z: Maciek/)
+    expect(banner).toBeInTheDocument()
+    await screen.findByText('wybrana osoba')
+    expect(rowNames()).toEqual(['Maciek', 'Karolina Nowak', 'Michał', 'Ola'])
+    expect(within(rowOf('Maciek')).getByText('wybrana osoba')).toBeInTheDocument()
+    expect(within(rowOf('Ola')).getByText('Grupa 1')).toBeInTheDocument()
   })
 
   it('guides an empty list to the quick-add bar', async () => {

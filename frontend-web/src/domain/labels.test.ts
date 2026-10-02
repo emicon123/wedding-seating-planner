@@ -4,7 +4,10 @@ import {
   fillStatusLabel,
   groupLabel,
   guestCountsLabel,
+  linkDiffLabel,
   preferredHereLabel,
+  relationCountLabel,
+  relationReasonLabel,
   tableCountLabel,
   viaLabel,
   violationCountLabel,
@@ -160,5 +163,44 @@ describe('plan labels', () => {
     )
     expect(preferredHereLabel(3)).toBe('3 osoby z grupy 1')
     expect(preferredHereLabel(0)).toBe('Nikogo z grupy 1')
+  })
+})
+
+describe('linkDiffLabel', () => {
+  it('names every kind of change, with the move called out', () => {
+    expect(linkDiffLabel({ add: [1, 2, 3], move: [{ guestId: 4, from: 1 }], remove: [5, 6] })).toBe(
+      'Dodaj: 3, przenieś z innej grupy: 1, usuń: 2',
+    )
+  })
+
+  it('leaves out what is not changing, and keeps the first word capitalised', () => {
+    expect(linkDiffLabel({ add: [], move: [{ guestId: 4, from: 1 }], remove: [5] })).toBe(
+      'Przenieś z innej grupy: 1, usuń: 1',
+    )
+    expect(linkDiffLabel({ add: [1], move: [], remove: [] })).toBe('Dodaj: 1')
+  })
+})
+
+describe('relation labels', () => {
+  it.each([
+    [0, 0, 'brak'],
+    [1, 1, '1 osoba'],
+    [3, 3, '3 osoby'],
+    [2, 1, '2 osoby w 1 rodzinie'],
+    [9, 5, '9 osób w 5 rodzinach'],
+    [4, 2, '4 osoby w 2 rodzinach'],
+  ])('%i people in %i families -> %s', (people, families, expected) => {
+    expect(relationCountLabel(people, families)).toBe(expected)
+  })
+
+  it('names the reason a person is listed', () => {
+    const nameOf = () => 'Michał'
+    expect(relationReasonLabel({ direct: true }, nameOf)).toBe('wpisany bezpośrednio')
+    expect(
+      relationReasonLabel({ direct: false, via: { guestId: 6, reason: 'cluster' } }, nameOf),
+    ).toBe('przez grupę 0: Michał')
+    expect(
+      relationReasonLabel({ direct: false, via: { guestId: 6, reason: 'link' } }, nameOf),
+    ).toBe('przez powiązanie: Michał')
   })
 })

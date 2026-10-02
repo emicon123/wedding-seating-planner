@@ -48,23 +48,92 @@ describe('QuickAddBar', () => {
     )
   })
 
-  it('Ctrl+D marks the next guest as a child, then the mark resets', async () => {
+  it('has a visible "Dziecko" checkbox, unchecked at first, and no Ctrl+D shortcut', async () => {
+    serveCreate(serveGuests([]))
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    const field = await screen.findByRole('textbox', { name: 'Dodaj gościa' })
+
+    const child = screen.getByRole('checkbox', { name: 'Dziecko' })
+    expect(child).not.toBeChecked()
+    expect(screen.queryByText(/Ctrl/)).not.toBeInTheDocument()
+
+    await user.type(field, 'Staś')
+    await user.keyboard('{Control>}d{/Control}')
+    expect(child).not.toBeChecked()
+  })
+
+  it('stays checked after each add, so a run of children is just names and Enter, and sends isChild', async () => {
     const api = serveCreate(serveGuests([]))
     const { user } = renderPage(<GuestsPage />, '/goscie')
     const field = await screen.findByRole('textbox', { name: 'Dodaj gościa' })
 
-    await user.type(field, 'Staś')
-    await user.keyboard('{Control>}d{/Control}')
-    expect(screen.getByRole('button', { name: /Dziecko/ })).toHaveAttribute('aria-pressed', 'true')
-    await user.keyboard('{Enter}')
+    await user.click(screen.getByRole('checkbox', { name: 'Dziecko' }))
+    await user.type(field, 'Staś{Enter}')
     await waitFor(() => expect(api.calls).toHaveLength(1))
+    await user.type(field, 'Zosia{Enter}')
+    await waitFor(() => expect(api.calls).toHaveLength(2))
+
+    expect(api.calls).toEqual([
+      { firstName: 'Staś', lastName: null, isChild: true },
+      { firstName: 'Zosia', lastName: null, isChild: true },
+    ])
+    expect(screen.getByRole('checkbox', { name: 'Dziecko' })).toBeChecked()
+    expect(
+      await screen.findByText('Dodano dziecko: Zosia. W tej sesji dodanych: 2.'),
+    ).toBeInTheDocument()
+  })
+
+  it('unchecking returns to adults, and the confirmation says which kind was added', async () => {
+    const api = serveCreate(serveGuests([]))
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    const field = await screen.findByRole('textbox', { name: 'Dodaj gościa' })
+
+    await user.click(screen.getByRole('checkbox', { name: 'Dziecko' }))
+    await user.type(field, 'Staś{Enter}')
+    await screen.findByText(/Dodano dziecko: Staś/)
+    await user.click(screen.getByRole('checkbox', { name: 'Dziecko' }))
     await user.type(field, 'Ania{Enter}')
 
     await waitFor(() => expect(api.calls).toHaveLength(2))
-    expect(api.calls).toEqual([
-      { firstName: 'Staś', lastName: null, isChild: true },
-      { firstName: 'Ania', lastName: null, isChild: false },
-    ])
+    expect(api.calls[1]).toEqual({ firstName: 'Ania', lastName: null, isChild: false })
+    expect(await screen.findByText('Dodano: Ania. W tej sesji dodanych: 2.')).toBeInTheDocument()
+  })
+
+  it('shows an obvious state while on: "Dodajesz dzieci"', async () => {
+    serveCreate(serveGuests([]))
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    await screen.findByRole('textbox', { name: 'Dodaj gościa' })
+    expect(screen.queryByText('Dodajesz dzieci')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Dziecko' }))
+
+    expect(screen.getByText('Dodajesz dzieci')).toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Dziecko' }))
+    expect(screen.queryByText('Dodajesz dzieci')).not.toBeInTheDocument()
+  })
+
+  it('keeps focus in the text input after a mouse or touch toggle', async () => {
+    serveCreate(serveGuests([]))
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    const field = await screen.findByRole('textbox', { name: 'Dodaj gościa' })
+
+    await user.click(screen.getByRole('checkbox', { name: 'Dziecko' }))
+
+    await waitFor(() => expect(field).toHaveFocus())
+  })
+
+  it('is reachable by keyboard: Tab from the input, Space toggles, focus stays on the checkbox', async () => {
+    serveCreate(serveGuests([]))
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    const field = await screen.findByRole('textbox', { name: 'Dodaj gościa' })
+    await user.click(field)
+
+    await user.tab()
+    expect(screen.getByRole('checkbox', { name: 'Dziecko' })).toHaveFocus()
+    await user.keyboard(' ')
+
+    expect(screen.getByRole('checkbox', { name: 'Dziecko' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Dziecko' })).toHaveFocus()
   })
 
   it('a duplicate name keeps the text and says why, inline', async () => {

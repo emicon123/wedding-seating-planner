@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { client, unwrap, unwrapEmpty } from '@/api/client'
 import { ApiError } from '@/api/errors'
 import { invalidateGuestData, keys } from '@/api/keys'
-import { applyEnabled, insertGuest } from '@/domain/guestList'
-import type { Guest, GuestBulkToggle, GuestCreate, GuestUpdate, LinkLevel } from '@/domain/types'
+import { applyEnabled, insertGuest, linkKey as linkKeyOf } from '@/domain/guestList'
+import type { LinkChange } from '@/domain/linkSelection'
+import type { Guest, GuestBulkToggle, GuestCreate, GuestUpdate } from '@/domain/types'
 
 export function useGuests() {
   return useQuery({
@@ -82,25 +83,43 @@ export function useDeleteGuest() {
   })
 }
 
-/** `linkKey` is the pair as `{idA}-{idB}`; either order is accepted by the server. */
-export function useUpsertLink() {
-  const onSuccess = useGuestDataInvalidation()
-  return useMutation({
-    mutationFn: async ({ linkKey, level }: { linkKey: string; level: LinkLevel }) =>
-      (
-        await unwrap(
-          client.PUT('/guest-links/{linkKey}', { params: { path: { linkKey } }, body: { level } }),
-        )
-      ).data,
-    onSuccess,
-  })
+/** A link change that the server refused (or that never arrived). */
+export type LinkChangeFailure = { otherId: number; error: unknown }
+
+async function applyLinkChange(guestId: number, { otherId, level }: LinkChange): Promise<void> {
+  const linkKey = linkKeyOf(guestId, otherId)
+  const params = { params: { path: { linkKey } } }
+  if (level === null) await unwrapEmpty(client.DELETE('/guest-links/{linkKey}', params))
+  else await unwrap(client.PUT('/guest-links/{linkKey}', { ...params, body: { level } }))
 }
 
-export function useDeleteLink() {
-  const onSuccess = useGuestDataInvalidation()
+/**
+ * Saves the link editor's checklist: one request per changed pair (PUT sets or moves the pair's
+ * single link, DELETE removes it), sequentially, so a failure in the middle leaves the rest of the
+ * work intact. It never rejects for a refused change: the failures come back as the result, and
+ * guests, clusters and scenarios are reloaded once at the end (success or not), so the editor
+ * always shows the truth.
+ */
+export function useApplyLinkChanges() {
+  const onSettled = useGuestDataInvalidation()
   return useMutation({
-    mutationFn: (linkKey: string): Promise<void> =>
-      unwrapEmpty(client.DELETE('/guest-links/{linkKey}', { params: { path: { linkKey } } })),
-    onSuccess,
+    mutationFn: async ({
+      guestId,
+      changes,
+    }: {
+      guestId: number
+      changes: LinkChange[]
+    }): Promise<LinkChangeFailure[]> => {
+      const failed: LinkChangeFailure[] = []
+      for (const change of changes) {
+        try {
+          await applyLinkChange(guestId, change)
+        } catch (error) {
+          failed.push({ otherId: change.otherId, error })
+        }
+      }
+      return failed
+    },
+    onSettled,
   })
 }

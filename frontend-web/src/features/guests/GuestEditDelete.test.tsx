@@ -34,6 +34,29 @@ describe('GuestEditDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('the "Dziecko" checkbox sends isChild and the row shows the badge afterwards', async () => {
+    const state = serveGuests(SMALL_LIST)
+    const api = mockApi('patch', '/guests/4', () => {
+      state.guests = state.guests.map((g) => (g.id === 4 ? { ...g, version: 2, isChild: true } : g))
+      return HttpResponse.json(single(state.guests.find((g) => g.id === 4)))
+    })
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    await screen.findByText('Zosia')
+    const row = () => screen.getByRole('switch', { name: 'Uwzględniony: Maciek' }).closest('li')!
+    expect(within(row()).queryByText('Dziecko')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Edytuj: Maciek' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Edytuj gościa' })
+    const child = within(dialog).getByRole('checkbox', { name: 'Dziecko' })
+    expect(child).not.toBeChecked()
+    await user.click(child)
+    await user.click(within(dialog).getByRole('button', { name: 'Zapisz' }))
+
+    await waitFor(() => expect(api.calls).toHaveLength(1))
+    expect(api.calls[0]).toMatchObject({ version: 1, isChild: true })
+    await waitFor(() => expect(within(row()).getByText('Dziecko')).toBeInTheDocument())
+  })
+
   it('validates the first name before sending anything', async () => {
     serveGuests(SMALL_LIST)
     const api = mockApi('patch', '/guests/10', () => HttpResponse.json(single(SMALL_LIST[6])))

@@ -46,6 +46,36 @@ describe('filterGuests', () => {
   })
 })
 
+describe('filterGuests: related to a person', () => {
+  const related = [
+    { guestId: 6, level: null },
+    { guestId: 7, level: 0 },
+    { guestId: 4, level: 1 },
+    { guestId: 5, level: 1 },
+  ] as const
+
+  it('shows only that person and their relations, in relation order', () => {
+    const filters = { ...NO_FILTERS, related: 6 }
+    expect(filterGuests(GUESTS, index, filters, [...related]).map((g) => g.firstName)).toEqual([
+      'Michał',
+      'Ola',
+      'Maciek',
+      'Karolina',
+    ])
+  })
+
+  it('still applies the other filters', () => {
+    const filters = { ...NO_FILTERS, related: 6, query: 'ka' }
+    expect(filterGuests(GUESTS, index, filters, [...related]).map((g) => g.firstName)).toEqual([
+      'Karolina',
+    ])
+  })
+
+  it('ignores the relations when the filter is off', () => {
+    expect(filterGuests(GUESTS, index, NO_FILTERS, [...related])).toHaveLength(GUESTS.length)
+  })
+})
+
 describe('filters <-> URL', () => {
   it('parses the query string', () => {
     const params = new URLSearchParams('q=ola&status=off&dzieci=1&grupa=1')
@@ -54,7 +84,14 @@ describe('filters <-> URL', () => {
       status: 'off',
       childrenOnly: true,
       group: 1,
+      related: null,
     })
+  })
+
+  it('reads the person the list is narrowed to', () => {
+    expect(parseFilters(new URLSearchParams('powiazani=4')).related).toBe(4)
+    expect(parseFilters(new URLSearchParams('powiazani=abc')).related).toBeNull()
+    expect(filtersToParams({ ...NO_FILTERS, related: 4 }).toString()).toBe('powiazani=4')
   })
 
   it('falls back to defaults for garbage values', () => {
@@ -69,7 +106,13 @@ describe('filters <-> URL', () => {
   })
 
   it('round-trips', () => {
-    const filters = { query: 'ka', status: 'on', childrenOnly: false, group: 0 } as const
+    const filters = {
+      query: 'ka',
+      status: 'on',
+      childrenOnly: false,
+      group: 0,
+      related: 4,
+    } as const
     expect(parseFilters(filtersToParams(filters))).toEqual(filters)
   })
 })
@@ -79,5 +122,6 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters(NO_FILTERS)).toBe(false)
     expect(hasActiveFilters({ ...NO_FILTERS, query: 'a' })).toBe(true)
     expect(hasActiveFilters({ ...NO_FILTERS, group: 0 })).toBe(true)
+    expect(hasActiveFilters({ ...NO_FILTERS, related: 4 })).toBe(true)
   })
 })
