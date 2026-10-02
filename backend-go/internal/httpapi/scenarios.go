@@ -87,3 +87,13 @@ func (s *Server) DeleteTable(ctx context.Context, req oapi.DeleteTableRequestObj
 	}
 	return oapi.DeleteTable200JSONResponse{Data: toScenario(ev), Meta: metaOf(ctx)}, nil
 }
+
+// ResetPlan implements resetPlan ("delete the plan"): the scenario becomes an empty plan, its
+// version moves on, no body and no version check.
+func (s *Server) ResetPlan(ctx context.Context, req oapi.ResetPlanRequestObject) (oapi.ResetPlanResponseObject, error) {
+	ev, err := s.plans.Reset(ctx, int(req.Capacity))
+	if err != nil {
+		return nil, err
+	}
+	return oapi.ResetPlan200JSONResponse{Data: toScenario(ev), Meta: metaOf(ctx)}, nil
+}

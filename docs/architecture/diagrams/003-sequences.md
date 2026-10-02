@@ -5,7 +5,8 @@ Task 003, Phase 5. The participants are the components and packages from [003-fr
 1. [Generate all three plans → preview → accept](#1-generate-all-three-plans--preview--accept)
 2. [Move a cluster (drag & drop, optimistic)](#2-move-a-cluster-drag--drop-optimistic)
 3. [Re-enable a guest → plan needs recalculation → regenerate](#3-re-enable-a-guest--plan-needs-recalculation--regenerate)
-4. [Quick-add a guest and link them, with cluster expansion](#4-quick-add-a-guest-and-link-them-with-cluster-expansion)
+4. [Quick-add a guest and link them through the group checklist](#4-quick-add-a-guest-and-link-them-through-the-group-checklist)
+5. [Delete a plan](#5-delete-a-plan-task-005-uc-17)
 
 ## 1. Generate all three plans → preview → accept
 
@@ -140,48 +141,92 @@ sequenceDiagram
 
 *Legend:* `needsRecalculation` is **derived** (any violation) and never stored, so nothing can go stale. Zosia **must** sit with her cluster (user rule), which is why the overfill is reported instead of moving her to the tray.
 
-## 4. Quick-add a guest and link them, with cluster expansion
+## 4. Quick-add a guest and link them through the group checklist
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor E as Editor
     participant QA as QuickAddBar
-    participant LE as LinkEditor + GuestSearchCombobox
-    participant D as domain (guestIndex, companions)
+    participant LE as LinkEditor (relationships panel)
+    participant LP as LinkPicker (checklist of one group)
+    participant D as domain (linkSelection, relations)
     participant Q as api hooks
     participant H as httpapi.Server
     participant GS as guests.Service
 
-    E->>QA: type "Karolina Nowak" + Enter
-    QA->>Q: useCreateGuest().mutate({firstName:"Karolina", lastName:"Nowak"})
+    E->>QA: type "Karolina Nowak" + Enter (Dziecko checkbox off)
+    QA->>Q: useCreateGuest().mutate({firstName:"Karolina", lastName:"Nowak", isChild:false})
     Q->>H: POST /guests
     H->>GS: Create(ctx, NewGuest)
     alt name is free
-        GS-->>H: Guest (id 5)
-        H-->>Q: 201 GuestResponse
+        H-->>Q: 201 GuestResponse (id 5)
         Q->>Q: invalidate guests, clusters, scenarios
-        QA-->>E: input cleared, still focused (next guest)
+        QA-->>E: "Dodano: Karolina Nowak", input cleared and still focused
     else duplicate name
         H-->>Q: 422 duplicate_name
         QA-->>E: inline error, text kept
     end
-    E->>LE: on Maciek, Grupa 0: type "karo"
-    LE->>D: guestIndex.search("karo")
-    D-->>LE: Karolina Nowak
-    E->>LE: pick Karolina
-    LE->>Q: useUpsertLink().mutate("4-5", level 0)
-    Q->>H: PUT /guest-links/4-5
-    H->>GS: SetLink(ctx, 4, 5, Must)
-    H-->>Q: 200 GuestLinkResponse
-    Q->>Q: invalidate guests, clusters, scenarios
-    E->>LE: on Maciek, Grupa 1: pick "Michał"
-    LE->>Q: PUT /guest-links/4-6 level 1
+    E->>LE: open "Powiązania: Maciek"
+    LE->>D: relationsOf(4, guests, clusters overview)
+    D-->>LE: blocks 0/1/2 grouped by family, reason per person
+    E->>LP: Grupa 0 "Edytuj", search "karo", tick Karolina
+    LP->>D: diffSelection + clusterAfter (preview, size warning)
+    E->>LP: Grupa 0 "Zapisz"
+    LP->>D: linkChangesOf(0, diff)
+    D-->>LP: removals first, then moves and adds
+    LP->>Q: useApplyLinkChanges().mutate({guestId:4, changes})
+    loop each change, in order
+        Q->>H: PUT /guest-links/4-5 (level 0) or DELETE for a removal
+        H->>GS: SetLink(ctx, 4, 5, Must) or DeleteLink
+        H-->>Q: 200 GuestLinkResponse / 204
+    end
+    Q->>Q: onSettled: invalidate guests, clusters, scenarios
+    LP-->>E: toast "Zapisano powiązania: Grupa 0." (or a list of failed pairs)
+    E->>LP: Grupa 1: tick "Michał", Zapisz (PUT /guest-links/4-6 level 1)
     Q->>H: GET /clusters (refetch)
-    H-->>Q: clusters: {4,5} ↔ {6,7} affinity 1
-    LE->>D: effectiveCompanions(4, guests, overview)
-    D-->>LE: Michał (direct), Ola (via Michał's group 0)
-    LE-->>E: Grupa 1: "Michał" + "Ola (przez grupę 0 Michała)"
+    H-->>Q: clusters: {4,5} affinity 1 with {6,7}
+    LE->>D: relationsOf(4, ...)
+    D-->>LE: Grupa 1: Michał "wpisany bezpośrednio", Ola "przez grupę 0: Michał"
 ```
 
-*Legend:* there is no batch endpoint. Each Enter is one `POST /guests`, which is fast enough for ~100 guests typed by hand (A-20). The expansion is computed from the server's cluster affinities; the client only derives the "via" label (display logic, not scoring).
+*Legend:* there is no batch endpoint. Each Enter is one `POST /guests`, which is fast enough for ~100 guests typed by hand (A-20). A checklist Save is one mutation that sends one request per changed pair (removals first, so a moved pair never collides). "Dodaj «X» jako nowego gościa" in the picker is only the `POST /guests` + tick; the link goes with Zapisz. Group 0 and the "przez …" reasons come from the server's clusters and affinities; the client only derives labels (display logic, not scoring).
+
+## 5. Delete a plan (task 005, UC-17)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor E as Editor
+    participant UI as PlanCard or PlanDetailPage
+    participant DLG as DeletePlanDialog
+    participant Q as useResetPlan (TanStack)
+    participant H as httpapi.Server
+    participant S as scenarios.Service
+    participant P as store.Scenarios
+    participant C as seating
+
+    E->>UI: "Usuń plan" (plan 10)
+    UI->>DLG: open with plan 10 counts (tables, seated)
+    DLG-->>E: "Usunąć plan na 10 miejsc? ... Tego nie da się cofnąć."
+    alt Anuluj
+        E->>DLG: Anuluj / Esc
+        DLG-->>UI: closed, nothing sent
+    else confirm
+        E->>DLG: "Usuń plan"
+        DLG->>Q: mutate({capacity: 10})
+        Q->>H: DELETE /scenarios/10/tables
+        H->>S: Reset(ctx, 10)
+        S->>P: ClearPlan(ctx, 10)
+        Note over P: one transaction - DeleteScenarioTables (assignments and pins cascade), version+1
+        P-->>S: PlanState (no tables, version+1)
+        S->>C: Evaluate(graph, empty plan)
+        C-->>S: unseated_guests, needsRecalculation true
+        H-->>Q: 200 ScenarioResponse
+        Q->>Q: replace scenario 10, drop proposal 10 from keys.proposals
+        UI-->>E: "Brak stołów w tym planie." + "Przelicz / Generuj"
+    end
+    Note over E,UI: "Usuń wszystkie plany" = same dialog with a must-tick checkbox, then three DELETE calls (8, 10, 12) via Promise.allSettled
+```
+
+*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so older proposals become stale. Unknown capacity → 404 `not_found`. No undo (Command/Memento rejected); the confirmation dialog stands in for it. "Delete all" is three independent commands, not a batch endpoint (independent aggregates, idempotent calls, same reasoning as "accept all").

@@ -2,7 +2,7 @@
 
 Stoliki plans the table seating of **one** wedding. This document is the shared vocabulary for every agent and for the code. Go/TS identifiers, OpenAPI schema names and DB tables use the English terms; the UI uses the Polish ones.
 
-> Status: Phases 1–4 (tasks 001–002), updated 2026-10-02 with the user's answers. Items marked **[A-n]** are open assumptions (see [Assumptions](#assumptions)); confirmed answers are folded in as fact.
+> Status: Phases 1–4 (tasks 001–002), updated 2026-10-02 with the user's answers and with UC-17 (delete a plan, task 005). Items marked **[A-n]** are open assumptions (see [Assumptions](#assumptions)); confirmed answers are folded in as fact.
 
 ## 1. Requirements summary
 
@@ -12,11 +12,11 @@ Stoliki plans the table seating of **one** wedding. This document is the shared 
 
 | Actor | Description |
 |---|---|
-| Editor | Anyone who can reach the app on the tailnet (the couple, trusted helpers). There are no accounts and no roles: everyone has equal rights. Desktop is the primary editing surface. |
+| Editor | Anyone who can reach the app on the tailnet or the home LAN (the couple, trusted helpers). There are no accounts and no roles: everyone has equal rights. Desktop is the primary editing surface. |
 | Viewer at the venue | The same people on a phone, checking the plan (read-mostly). |
 | Google Sheet (external) | Source of the guest list, exported manually as CSV. |
 
-**Constraints.** Go + React SPA + one Docker container on a Raspberry Pi (ARM64). Reachable **only inside the tailnet** under `/wesele`. Cost-free. Guest names are personal data (protected by tailnet-only access). Quick app (YAGNI). The couple sits at their own table and is **not** on the guest list.
+**Constraints.** Go + React SPA + one Docker container on a Raspberry Pi (ARM64). Reachable **only from the tailnet and the home LAN** under `/wesele`. Cost-free. Guest names are personal data (protected by tailnet / home-LAN-only access, never public). Quick app (YAGNI). The couple sits at their own table and is **not** on the guest list.
 
 ## 2. Ubiquitous language
 
@@ -26,14 +26,15 @@ Stoliki plans the table seating of **one** wedding. This document is the shared 
 | **Display name** | Nazwa | `firstName` + optional ` lastName`. It must be **unique, ignoring case and surrounding whitespace** (stored as `nameKey`). Names are how links are typed and imported, so two "Ania" must become "Ania Kowalska" / "Ania Nowak" (or "Ania K."). |
 | **isChild** | Dziecko | A marker used for filtering and bulk toggling (e.g. "disable all children"). It has no effect on seating rules. |
 | **Enabled** | Uwzględniony (przełącznik) | A quick on/off switch per guest. A **disabled** guest stays on the list, keeps all links and is **ignored by all three plans**: not seated, not counted in table fill, not scored. Typical uses: a decline, a child who cannot come, a "what-if without the children" variant. Toggling is instant and reversible. It replaces a separate attending/declined status: one switch covers both and there is nothing else to track. |
-| **Link** | Powiązanie | An **undirected** relation between two guests with a **LinkLevel**. There is at most one link per pair. It can be entered from either guest and shows on both. |
+| **Link** | Powiązanie | An **undirected** relation between two guests with a **LinkLevel**. There is at most one link per pair. It can be entered from either guest and shows on both. The API stores **one symmetric row per pair with no author**, so the UI cannot tell who entered a link ("wpisany przez Emilkę"); it can only say whether the link is the shown guest's own ("wpisany bezpośrednio") or reached through someone ("przez grupę 0: X" / "przez powiązanie: X"). Showing the author would need a new contract field (possible future change, not planned). |
 | **LinkLevel** | Grupa 0 / 1 / 2 | `0` = *must sit together* (hard). `1` = *preferred* (soft, weight 1.0). `2` = *acceptable if unavoidable* (soft, weight 0.5). Order of happiness: group 1 > group 2 > no link ("stranger"). |
-| **Group-0/1/2 list** | Grupa 0/1/2 gościa | The *view* of one guest's links of a given level (one guest's row in the Sheet). Not stored separately. |
+| **Group-0/1/2 list** | Grupa 0/1/2 gościa | The *view* of one guest's relations of a given level. Not stored separately. **Group 0 of a guest is their whole cluster** (every other member, also those reached through someone else's links, e.g. Justynka's group 0 = Emilka + Maks + os. tow. when Emilka linked all three), never only the guest's own stored group-0 links. Group 1/2 = every member of each cluster with that affinity. |
 | **Cluster** | Paczka | A connected component of the **group-0 graph over all guests, disabled ones included** (user-confirmed). It is the **seating unit**: all its enabled members sit at one table. Disabling the "hub" guest (e.g. Rafał, who listed his wife and mother-in-law) therefore does **not** split the family. A cluster whose members are all disabled disappears from the plans. A guest without group-0 links is a cluster of one. Derived, never stored. |
 | **Seated size** | Liczba miejsc paczki | The number of **enabled** members of a cluster: the seats it takes. |
-| **Cluster affinity** | Sympatia między paczkami | The group-1/2 relation **between whole clusters** (user rule): if any member of cluster A has a level-1 (or level-2) link to any member of cluster B, then **all of A** has that level with **all of B**. The relation is symmetric and not transitive. Links of disabled members still count, because the families know each other regardless. **Defensive rule for bad data only:** if links between two clusters carry different levels, the strongest wins (1 over 2) and a `conflicting_link_levels` **data warning** is shown. This is what makes partners "come along automatically" and lets the UI show "Ola — via Michał's group 0". Derived, never stored. |
+| **Cluster affinity** | Sympatia między paczkami | The group-1/2 relation **between whole clusters** (user rule): if any member of cluster A has a level-1 (or level-2) link to any member of cluster B, then **all of A** has that level with **all of B**. The relation is symmetric and not transitive. Links of disabled members still count, because the families know each other regardless. **Defensive rule for bad data only:** if links between two clusters carry different levels, the strongest wins (1 over 2) and a `conflicting_link_levels` **data warning** is shown. This is what makes partners "come along automatically" and lets the UI show "Ola — przez grupę 0: Michał". Derived, never stored. |
 | **Oversized cluster** | Za duża paczka | A cluster whose seated size exceeds a scenario's capacity. That cluster cannot be seated in that scenario (violation). A data warning is also raised when the seated size exceeds 8 (does not fit the 8-seat plan), so a stray link that merges two families is noticed. |
 | **Scenario** | Plan (8 / 10 / 12) | One seating plan in which **every table has the same capacity**. Exactly three exist permanently, identified by capacity: **8, 10, 12**. They share the guest list and links; each has its own tables, assignments and pins. They are always shown and generated together. |
+| **Delete a plan** | Usuń plan / Usuń wszystkie plany | Resets one scenario to an **empty plan**: all its tables, assignments and pins are removed (disabled guests' assignments too) and its `version` is bumped. The scenario itself is never deleted (there are always three). Irreversible (no undo). An empty plan with enabled guests has an `unseated_guests` violation, so it shows **Needs recalculation**. "Usuń wszystkie plany" = the same for 8, 10 and 12. Not to be confused with discarding a **Proposal** ("Odrzuć"), which never touches a stored plan. |
 | **Capacity** | Liczba miejsc | Seats per table in a scenario (8, 10 or 12). Hard upper bound. |
 | **Floor** | Minimalne obłożenie | **6 guests**, a hard lower bound for every table in all three scenarios, waived only when the whole scenario needs a single table. Any fill between 6 and capacity is equally good: evenness is not rewarded. |
 | **Table** | Stół | A table in a scenario, numbered 1…k with no gaps (removing a table renumbers the later ones). No seat positions inside a table. |
@@ -67,17 +68,17 @@ Rule: **store only explicit user input** (guests, links, tables, assignments, pi
 
 ## 4. Use cases
 
-All paths are relative to `/wesele/api`. The contract is [`docs/openapi.yaml`](../openapi.yaml) (source in `docs/openapi/`). No use case needs a login (tailnet-only access).
+All paths are relative to `/wesele/api`. The contract is [`docs/openapi.yaml`](../openapi.yaml) (source in `docs/openapi/`). No use case needs a login (tailnet / home-LAN-only access).
 
 | # | Use case | Endpoint(s) |
 |---|---|---|
 | UC-01 | **[DEFERRED, post-MVP]** **Import guest list** from CSV: dry run → review report → commit (replaces everything) | `POST /guest-imports?dryRun=true` (default) → `POST /guest-imports?dryRun=false` |
-| UC-02 | **Quick-add guests** (MVP data entry, first-class): type "Imię Nazwisko", press Enter, and the next empty row is focused immediately; one shortcut toggles the child mark. Many guests can be added in a row without the mouse | `POST /guests` (one call per guest) |
+| UC-02 | **Quick-add guests** (MVP data entry, first-class): type "Imię Nazwisko", press Enter, and the input stays focused for the next one. A sticky "Dziecko" checkbox marks every following add as a child until unticked. Many guests can be added in a row without the mouse | `POST /guests` (one call per guest) |
 | UC-03 | **Edit guest** | `PATCH /guests/{guestId}` (version-checked) |
 | UC-04 | **Toggle one guest** enabled/disabled | `PATCH /guests` with `{guestIds: [id], enabled}` (no version check) |
 | UC-05 | **Bulk toggle**: filter in the UI (e.g. children), then enable/disable all selected | `PATCH /guests` with `{guestIds, enabled}` |
 | UC-06 | **Delete guest** (typo, duplicate): removes their links and assignments | `DELETE /guests/{guestId}` |
-| UC-07 | **Set or remove a link** by **add-by-search**: on a guest, type a name into group 0/1/2 and pick it. The UI immediately shows who comes along through group 0 ("+ Karolina, via Michał's group 0"). A guest that does not exist yet can be created inline | `PUT` / `DELETE /guest-links/{linkKey}` |
+| UC-07 | **Review and edit a guest's relationships**: the relationships panel ("Powiązania: X") shows groups 0/1/2 with the reason for each person ("wpisany bezpośrednio" / "przez grupę 0: X" / "przez powiązanie: X"); names open that person. Editing one group is a **checklist** of all guests (search, "Tylko zaznaczeni"); "Zapisz" applies the difference (removals first, then moves/adds). A missing guest can be created from the search ("Dodaj «X» jako nowego gościa": created and ticked, linked on Zapisz). "Pokaż na liście" filters the guest list to this person and their relations | `PUT` / `DELETE /guest-links/{linkKey}` (one call per changed pair); create: `POST /guests` |
 | UC-08 | **Review clusters and data warnings** | `GET /clusters` |
 | — | Liveness | `GET /health` |
 | UC-09 | **View / compare the three plans**: table count, fill, satisfaction, violations | `GET /scenarios` |
@@ -88,6 +89,7 @@ All paths are relative to `/wesele/api`. The contract is [`docs/openapi.yaml`](.
 | UC-14 | **Inspect satisfaction** of a guest or table | part of the scenario payload |
 | UC-15 | **Print** a plan (browser print of a print view) | client only |
 | UC-16 | **Find a guest** ("where does Ania sit?") | client-side over the cached data |
+| UC-17 | **Delete a plan** ("Usuń plan") or all three ("Usuń wszystkie plany") after a confirmation: the plan becomes empty (no tables, everyone unseated, pins gone) | `DELETE /scenarios/{capacity}/tables` (one call per plan; "all" = three calls) |
 
 ```mermaid
 flowchart LR
@@ -98,7 +100,7 @@ flowchart LR
         UC02[UC-02..03 Quick-add / edit guest]
         UC04[UC-04..05 Toggle enabled: one / bulk]
         UC06[UC-06 Delete guest]
-        UC07[UC-07 Set link level]
+        UC07[UC-07 Relationships + link checklists]
         UC08[UC-08 Clusters and warnings]
     end
     subgraph SC[Plans 8 / 10 / 12]
@@ -110,6 +112,7 @@ flowchart LR
         UC14[UC-14 Satisfaction]
         UC15[UC-15 Print]
         UC16[UC-16 Find guest]
+        UC17[UC-17 Delete plan / all plans]
     end
     E --> GL
     E --> SC

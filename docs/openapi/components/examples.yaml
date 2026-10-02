@@ -97,3 +97,33 @@ Scenario10:
             guestIds: [31, 32]
     meta:
       requestId: 01JB8Z6Q0K3N
+ScenarioEmpty:
+  summary: The 10-seat plan right after "Usuń plan" (no tables, everyone unseated)
+  value:
+    data:
+      capacity: 10
+      version: 8
+      plan:
+        summary:
+          tableCount: 0
+          seatedCount: 0
+          unseatedCount: 92
+          score: 0
+          violationCount: 1
+          needsRecalculation: true
+        tables: []
+        unseated:
+          - clusterKey: 4
+            guestIds: [4, 5]
+            pinned: false
+          - clusterKey: 31
+            guestIds: [31, 32]
+            pinned: false
+        guestScores: []
+        violations:
+          - code: unseated_guests
+            message: 92 enabled guests have no table.
+            tableNumber: null
+            guestIds: [4, 5, 31, 32]
+    meta:
+      requestId: 01JB8Z6Q0K3N

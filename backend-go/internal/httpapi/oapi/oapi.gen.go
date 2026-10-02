@@ -730,6 +730,9 @@ type ServerInterface interface {
 	// SetAssignment Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
 	// (PUT /scenarios/{capacity}/assignments/{guestId})
 	SetAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId)
+	// ResetPlan Delete a plan — remove all its tables, assignments and pins (UC-17)
+	// (DELETE /scenarios/{capacity}/tables)
+	ResetPlan(w http.ResponseWriter, r *http.Request, capacity Capacity)
 	// AddTable Add an empty table at the end of a plan (UC-13)
 	// (POST /scenarios/{capacity}/tables)
 	AddTable(w http.ResponseWriter, r *http.Request, capacity Capacity)
@@ -829,6 +832,12 @@ func (_ Unimplemented) DeleteAssignment(w http.ResponseWriter, r *http.Request, 
 // SetAssignment Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
 // (PUT /scenarios/{capacity}/assignments/{guestId})
 func (_ Unimplemented) SetAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ResetPlan Delete a plan — remove all its tables, assignments and pins (UC-17)
+// (DELETE /scenarios/{capacity}/tables)
+func (_ Unimplemented) ResetPlan(w http.ResponseWriter, r *http.Request, capacity Capacity) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1184,6 +1193,32 @@ func (siw *ServerInterfaceWrapper) SetAssignment(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// ResetPlan operation middleware
+func (siw *ServerInterfaceWrapper) ResetPlan(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "capacity" -------------
+	var capacity Capacity
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResetPlan(w, r, capacity)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // AddTable operation middleware
 func (siw *ServerInterfaceWrapper) AddTable(w http.ResponseWriter, r *http.Request) {
 
@@ -1399,6 +1434,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Put(options.BaseURL+"/scenarios/{capacity}/assignments/{guestId}", wrapper.SetAssignment)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/scenarios/{capacity}/tables", wrapper.ResetPlan)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/scenarios/{capacity}/tables", wrapper.AddTable)
@@ -2401,6 +2439,70 @@ func (response SetAssignment500JSONResponse) VisitSetAssignmentResponse(w http.R
 	return err
 }
 
+type ResetPlanRequestObject struct {
+	Capacity Capacity `json:"capacity"`
+}
+
+type ResetPlanResponseObject interface {
+	VisitResetPlanResponse(w http.ResponseWriter) error
+}
+
+type ResetPlan200JSONResponse ScenarioResponse
+
+func (response ResetPlan200JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetPlan400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ResetPlan400JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetPlan404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResetPlan404JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetPlan500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ResetPlan500JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type AddTableRequestObject struct {
 	Capacity Capacity `json:"capacity"`
 }
@@ -2577,6 +2679,9 @@ type StrictServerInterface interface {
 	// SetAssignment Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
 	// (PUT /scenarios/{capacity}/assignments/{guestId})
 	SetAssignment(ctx context.Context, request SetAssignmentRequestObject) (SetAssignmentResponseObject, error)
+	// ResetPlan Delete a plan — remove all its tables, assignments and pins (UC-17)
+	// (DELETE /scenarios/{capacity}/tables)
+	ResetPlan(ctx context.Context, request ResetPlanRequestObject) (ResetPlanResponseObject, error)
 	// AddTable Add an empty table at the end of a plan (UC-13)
 	// (POST /scenarios/{capacity}/tables)
 	AddTable(ctx context.Context, request AddTableRequestObject) (AddTableResponseObject, error)
@@ -3039,6 +3144,32 @@ func (sh *strictHandler) SetAssignment(w http.ResponseWriter, r *http.Request, c
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetAssignmentResponseObject); ok {
 		if err := validResponse.VisitSetAssignmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResetPlan operation middleware
+func (sh *strictHandler) ResetPlan(w http.ResponseWriter, r *http.Request, capacity Capacity) {
+	var request ResetPlanRequestObject
+
+	request.Capacity = capacity
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResetPlan(ctx, request.(ResetPlanRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResetPlan")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResetPlanResponseObject); ok {
+		if err := validResponse.VisitResetPlanResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

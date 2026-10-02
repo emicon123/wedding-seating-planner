@@ -13,6 +13,8 @@ info:
     * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
     * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
       (PUT /scenarios/{capacity}/assignments). Stale version → 409 `version_conflict`.
+      Manual plan edits (move, pin, add/remove table, delete plan) are not version-checked
+      but bump the scenario version.
     * Every scenario-returning endpoint returns the freshly computed evaluation;
       nothing derived (clusters, scores, violations) is stored.
 servers:
@@ -29,7 +31,7 @@ tags:
   - name: imports
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
-    description: The three plans (8/10/12), generate, accept, move, pin, tables (UC-09…UC-14)
+    description: The three plans (8/10/12), generate, accept, move, pin, tables, delete plan (UC-09…UC-14, UC-17)
   - name: health
     description: Liveness
 paths:
@@ -583,6 +585,36 @@ paths:
               examples:
                 added:
                   $ref: '#/components/examples/Scenario10'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - scenarios
+      operationId: resetPlan
+      summary: Delete a plan — remove all its tables, assignments and pins (UC-17)
+      description: |
+        "Usuń plan". The scenario itself stays (there are always three plans); it becomes an
+        empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
+        too). Bumps the scenario version, so a proposal generated before is stale (accepting it
+        returns 409). Not version-checked, like the other manual plan edits: the result does not
+        depend on what the client saw, and repeating it is harmless (idempotent apart from the
+        version bump). No request body. "Usuń wszystkie plany" is three calls, one per capacity.
+      responses:
+        '200':
+          description: |
+            The now-empty plan with its evaluation. With enabled guests it reports an
+            `unseated_guests` violation, so `summary.needsRecalculation` is true.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioResponse'
+              examples:
+                reset:
+                  $ref: '#/components/examples/ScenarioEmpty'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -1578,6 +1610,44 @@ components:
                 message: 2 enabled guests have no table.
                 tableNumber: null
                 guestIds:
+                  - 31
+                  - 32
+        meta:
+          requestId: 01JB8Z6Q0K3N
+    ScenarioEmpty:
+      summary: The 10-seat plan right after "Usuń plan" (no tables, everyone unseated)
+      value:
+        data:
+          capacity: 10
+          version: 8
+          plan:
+            summary:
+              tableCount: 0
+              seatedCount: 0
+              unseatedCount: 92
+              score: 0
+              violationCount: 1
+              needsRecalculation: true
+            tables: []
+            unseated:
+              - clusterKey: 4
+                guestIds:
+                  - 4
+                  - 5
+                pinned: false
+              - clusterKey: 31
+                guestIds:
+                  - 31
+                  - 32
+                pinned: false
+            guestScores: []
+            violations:
+              - code: unseated_guests
+                message: 92 enabled guests have no table.
+                tableNumber: null
+                guestIds:
+                  - 4
+                  - 5
                   - 31
                   - 32
         meta:

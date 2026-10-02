@@ -36,6 +36,8 @@ This ADR keeps the *reasoning*. The resulting system is described as current fac
 
 The user decided on 2026-10-02 that no public access is needed. **If the app is ever exposed publicly (Funnel or any other route), auth must be re-added before the exposure**: the minimum is the shared passphrase → HMAC-signed `HttpOnly; Secure; SameSite=Strict; Path=/wesele` cookie, a login rate limit, and public `POST /sessions` + `GET /health` with everything else returning 401. It would be one middleware in front of the existing API; nothing else in the design depends on that choice. Tailscale identity headers (`Tailscale-User-Login`) are the cheapest upgrade if per-person attribution is ever wanted on the tailnet.
 
+**Amendment (2026-10-02, user decision):** the app is also reachable from the **home LAN** (`http://<pi-lan-ip>:8094/wesele/`, plain HTTP, no login); the host port is no longer loopback-only. Access control is therefore "tailnet or home LAN". Still never Funnel and never a router port-forward; any public route still requires auth first.
+
 ### 3. `/wesele` prefix and routing
 
 - **Prefix kept end-to-end inside Stoliki.** The Go server runs with `BASE_PATH=/wesele` and serves the SPA under `/wesele/` and the API under `/wesele/api/`. Vite `base: '/wesele/'`, React Router `basename: '/wesele'`. Whatever routes traffic to Stoliki must deliver the full path. If Tailscale's `--set-path` strips the mount path, the mapping target re-adds it (`http://127.0.0.1:<port>/wesele`). DevOps verifies this empirically.

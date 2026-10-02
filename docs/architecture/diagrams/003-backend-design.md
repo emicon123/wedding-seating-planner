@@ -156,6 +156,7 @@ type Store interface {                       // implemented by *store.Scenarios
     UnseatCluster(ctx, capacity int, members []int64) (PlanState, error)
     AddTable(ctx, capacity int) (PlanState, error)
     RemoveTable(ctx, capacity, number int) (PlanState, error)
+    ClearPlan(ctx, capacity int) (PlanState, error)                   // delete plan: all tables (cascade: assignments, pins); version+1
 }
 type GuestSource interface { List(ctx) ([]guests.Guest, []guests.Link, error) } // *store.Guests satisfies it
 
@@ -172,6 +173,7 @@ func (s *Service) Seat(ctx, capacity int, guestID int64, table int, pinned bool)
 func (s *Service) Unseat(ctx, capacity int, guestID int64) (Evaluated, error)
 func (s *Service) AddTable(ctx, capacity int) (Evaluated, error)
 func (s *Service) RemoveTable(ctx, capacity, number int) (Evaluated, error)
+func (s *Service) Reset(ctx, capacity int) (Evaluated, error)        // UC-17 "Usuń plan": s.edit(ClearPlan); no version check
 ```
 
 ### 2.4 `internal/store`, `internal/httpapi`, `internal/apperr`, `cmd/server`
@@ -286,6 +288,7 @@ classDiagram
             +Unseat(ctx, capacity, guestID) Evaluated
             +AddTable(ctx, capacity) Evaluated
             +RemoveTable(ctx, capacity, number) Evaluated
+            +Reset(ctx, capacity) Evaluated
         }
         class ScenariosStore {
             <<interface>>
@@ -293,6 +296,7 @@ classDiagram
             +ReplacePlan
             +SeatCluster / UnseatCluster
             +AddTable / RemoveTable
+            +ClearPlan
         }
         class GuestSource {
             <<interface>>
@@ -350,7 +354,7 @@ classDiagram
 | `httpapi.Server` | **Adapter** (to the generated strict-server interface) | Transport only: decode, call one service method, map. |
 | `Mappers` / `errorResponse` | **DTO + Mapper**, **DRY** | One mapper per type and one error mapper for every handler. |
 | `PlanState{Version; Plan seating.Plan}` | **Composition**, **DRY** | Reuses the core's `Plan` instead of a parallel struct (fixed in the audit). |
-| `version` checks in `Update` / `ReplacePlan` | **Optimistic Offline Lock** | Two flows can clobber: a guest edit form and accepting a proposal. |
+| `version` checks in `Update` / `ReplacePlan` | **Optimistic Offline Lock** | Two flows can clobber: a guest edit form and accepting a proposal. Manual plan edits (`Seat`, `Unseat`, `AddTable`, `RemoveTable`, `Reset`) are not version-checked: their result does not depend on a snapshot the client saw. They still bump the version, which makes older proposals stale. |
 | `cmd/server.run` | **Composition root** | Explicit constructor wiring, no DI container, testable through `run(args, getenv)`. |
 | Union-find inside `BuildGraph` | Algorithm, not a pattern | Connected components of group-0 links. |
 
@@ -371,6 +375,7 @@ classDiagram
 | Decorator | adopted only as chi middleware | Request ID, recoverer, logging, body limit: the idiomatic `func(http.Handler) http.Handler`. |
 | Generic repository | rejected | Two aggregates with different operations. |
 | Clock / ID-generator interfaces | rejected | Timestamps come from SQL defaults; ids from SQLite. |
+| Batch "delete all plans" endpoint (Unit of Work over 3 scenarios) | rejected | Three independent `DELETE /scenarios/{capacity}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the three plans to change atomically (they are independent aggregates, like "accept all"). |
 
 ## 5. Clean-architecture / SOLID / YAGNI audit (Skill 16)
 

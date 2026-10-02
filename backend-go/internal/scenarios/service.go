@@ -20,6 +20,7 @@ type Store interface {
 	UnseatCluster(ctx context.Context, capacity int, members []int64) (PlanState, error)
 	AddTable(ctx context.Context, capacity int) (PlanState, error)
 	RemoveTable(ctx context.Context, capacity, number int) (PlanState, error)
+	ClearPlan(ctx context.Context, capacity int) (PlanState, error)
 }
 
 // GuestSource is all the Service needs from the guest list; *store.Guests satisfies it.
@@ -176,6 +177,12 @@ func (s *Service) AddTable(ctx context.Context, capacity int) (Evaluated, error)
 // down by one.
 func (s *Service) RemoveTable(ctx context.Context, capacity, number int) (Evaluated, error) {
 	return s.edit(ctx, func() (PlanState, error) { return s.plans.RemoveTable(ctx, capacity, number) })
+}
+
+// Reset deletes the plan: all its tables, assignments and pins go and the version is bumped
+// (so an older proposal is stale), leaving an empty plan. Not version-checked.
+func (s *Service) Reset(ctx context.Context, capacity int) (Evaluated, error) {
+	return s.edit(ctx, func() (PlanState, error) { return s.plans.ClearPlan(ctx, capacity) })
 }
 
 // edit runs a store mutation that needs no cluster resolution and evaluates its result.

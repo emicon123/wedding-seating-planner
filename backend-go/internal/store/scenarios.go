@@ -135,6 +135,19 @@ func (s *Scenarios) RemoveTable(ctx context.Context, capacity, number int) (scen
 	})
 }
 
+// ClearPlan deletes the plan: every table of the scenario goes, and its assignments (pins
+// included, disabled guests' too) go with them by ON DELETE CASCADE. The scenario row stays and
+// its version is bumped. There is no version check, so repeating it succeeds (and bumps again);
+// an unknown capacity gives apperr.ErrNotFound.
+func (s *Scenarios) ClearPlan(ctx context.Context, capacity int) (scenarios.PlanState, error) {
+	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
+		if err := q.DeleteScenarioTables(ctx, sc.ID); err != nil {
+			return err
+		}
+		return bump(ctx, q, sc)
+	})
+}
+
 // tx runs fn on the scenario of that capacity in one transaction and returns the plan as stored
 // after fn (apperr.ErrNotFound when the capacity does not exist).
 func (s *Scenarios) tx(ctx context.Context, capacity int, fn func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error) (scenarios.PlanState, error) {

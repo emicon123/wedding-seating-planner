@@ -65,13 +65,23 @@ stateDiagram-v2
     Accepting --> Conflict: a scenario returned 409 version_conflict
     Conflict --> Generating: regenerate
     Conflict --> Showing: give up (others stay accepted)
-    Showing --> Showing: move / pin / add or remove table / toggle / link edit (refetch)
+    Showing --> Showing: move / pin / add or remove table / delete plan / toggle / link edit (refetch)
 
     state Showing {
         [*] --> UpToDate
         UpToDate --> NeedsRecalculation: a violation appears (re-enabled guest overfills table, new guest unseated, under floor, split)
         NeedsRecalculation --> UpToDate: violations fixed by hand (move, add table)
         NeedsRecalculation --> UpToDate: proposal accepted
+        UpToDate --> Empty: delete plan (confirmed)
+        NeedsRecalculation --> Empty: delete plan (confirmed)
+        Empty --> UpToDate: proposal accepted
+        Empty --> NeedsRecalculation: proposal accepted with violations / table added by hand
+        note right of Empty
+            No tables, assignments or pins
+            (DELETE .../tables). With enabled guests
+            it has unseated_guests: empty state
+            plus Przelicz / Generuj.
+        end note
     }
 
     note right of Previewing
@@ -88,7 +98,7 @@ stateDiagram-v2
     end note
 ```
 
-*Legend:* the three Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` is tracked per plan and derived by the server (`summary.needsRecalculation` = any violation). In `NeedsRecalculation` the plan card and the floor plan show a "Przelicz / Generuj" call to action. There is never an automatic regeneration. Each proposal carries `basedOnVersion`, and each accept is an independent PUT, so "accept all" is three calls and a conflict affects only that scenario. Generate always produces all three plans (user requirement). `Previewing` replaces an undo stack for the one destructive operation.
+*Legend:* the three Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` is tracked per plan and derived by the server (`summary.needsRecalculation` = any violation). In `NeedsRecalculation` the plan card and the floor plan show a "Przelicz / Generuj" call to action. There is never an automatic regeneration. Each proposal carries `basedOnVersion`, and each accept is an independent PUT, so "accept all" is three calls and a conflict affects only that scenario. Generate always produces all three plans (user requirement). `Previewing` replaces an undo stack for accepting. **Delete plan** (UC-17) has no undo either; a confirmation dialog stands in for it. `Empty` is a display state, not a stored one: the server still derives `needsRecalculation` (true when any enabled guest exists), the UI additionally recognises `tableCount = 0` to show the empty state and disable "Usuń plan". Discarding a preview ("Odrzuć", `Previewing → Showing`) is a different thing: it never touches a stored plan.
 
 ## 3. Cluster drag & drop (UI)
 
@@ -151,7 +161,7 @@ stateDiagram-v2
     }
     state Guests {
         [*] --> List
-        List --> Filtered: filter (children / disabled / search)
+        List --> Filtered: filter (children / disabled / search / Pokaż na liście = powiązani z X)
         Filtered --> List: clear filter
         Filtered --> Filtered: bulk enable or disable selection
     }
@@ -160,6 +170,6 @@ stateDiagram-v2
 *Legend:* there is no login state (tailnet-only access).
 - `Compare` shows the three plans side by side: table count, fill bars, satisfaction and violation count, plus the **Generate** button.
 - `PlanDetail` is the floor plan of one plan, with the unseated tray, guest search and a details panel showing where a guest's preferred companions sit, with "via group 0 of X" provenance.
-- `Guests` is the editable list. It has per-row enable switches, a child marker, the link editor and data warnings.
+- `Guests` is the editable list. It has per-row enable switches, a child marker, the relationships panel with per-group link checklists, and data warnings ([003-frontend-design.md](003-frontend-design.md) §5).
 
 On a phone, `Compare`, `PlanDetail` (read-mostly, search) and `PrintView` must be usable.

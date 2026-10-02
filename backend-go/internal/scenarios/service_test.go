@@ -550,3 +550,106 @@ func TestReEnabledGuestOverfillsTableAndNeedsRecalculation(t *testing.T) {
 		t.Errorf("violations = %+v", ev.Eval.Violations)
 	}
 }
+
+func TestResetEmptiesThePlanAndNeedsRecalculation(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, 8)
+	e.link(t, 1, 2, seating.Must)
+	e.link(t, 1, 3, seating.Must) // cluster {1,2,3}; 3 is a disabled child seated with it
+	e.toggle(t, false, 3)
+
+	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5), table(2, 6, 7, 8)}); err != nil {
+		t.Fatal(err)
+	}
+	seated, err := e.plans.Seat(ctx, 10, 1, 1, true) // pin the cluster {1,2,3}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, pinned, ok := tableOf(seated.State.Plan, 3); !ok || !pinned {
+		t.Fatalf("precondition: disabled guest 3 pinned %v seated %v", pinned, ok)
+	}
+	other := plan(t, e, 8) // an untouched plan, to prove the reset is per scenario
+
+	got, err := e.plans.Reset(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.State.Plan.Tables) != 0 || got.State.Plan.Capacity != 10 || got.State.Version != seated.State.Version+1 {
+		t.Fatalf("state = %+v, want an empty plan at version %d", got.State, seated.State.Version+1)
+	}
+	if got.Eval.Summary.TableCount != 0 || got.Eval.Summary.Unseated != 7 || !got.Eval.Summary.NeedsRecalculation {
+		t.Errorf("summary = %+v", got.Eval.Summary)
+	}
+	if len(got.Eval.Violations) != 1 || got.Eval.Violations[0].Code != seating.ViolUnseated {
+		t.Fatalf("violations = %+v, want exactly unseated_guests", got.Eval.Violations)
+	}
+	if want := []seating.GuestID{1, 2, 4, 5, 6, 7, 8}; !slices.Equal(got.Eval.Violations[0].Guests, want) {
+		t.Errorf("unseated guests = %v, want every enabled guest %v", got.Eval.Violations[0].Guests, want)
+	}
+	if after := plan(t, e, 8); after.State.Version != other.State.Version {
+		t.Errorf("plan 8 version %d -> %d", other.State.Version, after.State.Version)
+	}
+
+	t.Run("pins are gone: the next proposal is free of them", func(t *testing.T) {
+		proposals, err := e.plans.Calculate(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pr := range proposals {
+			if pr.Plan.Capacity != 10 {
+				continue
+			}
+			if len(pr.Plan.Tables) == 0 {
+				t.Fatal("proposal has no tables")
+			}
+			for _, tb := range pr.Plan.Tables {
+				for _, seat := range tb.Seats {
+					if seat.Pinned {
+						t.Errorf("guest %d is pinned in the proposal", seat.Guest)
+					}
+				}
+			}
+		}
+	})
+}
+
+func TestResetWithNoEnabledGuestsHasNoViolation(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, 3)
+	if _, err := e.plans.Accept(ctx, 12, 1, []seating.Table{table(1, 1, 2, 3)}); err != nil {
+		t.Fatal(err)
+	}
+	e.toggle(t, false, 1, 2, 3)
+
+	got, err := e.plans.Reset(ctx, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.State.Plan.Tables) != 0 || len(got.Eval.Violations) != 0 || got.Eval.Summary.NeedsRecalculation {
+		t.Errorf("state %+v summary %+v violations %+v, want an empty plan without violations", got.State, got.Eval.Summary, got.Eval.Violations)
+	}
+	if _, err := e.plans.Reset(ctx, 9); !errors.Is(err, apperr.ErrNotFound) {
+		t.Errorf("Reset(9) err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestResetMakesOlderProposalsStale(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, 12)
+	proposals, err := e.plans.Calculate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p scenarios.Proposal
+	for _, pr := range proposals {
+		if pr.Plan.Capacity == 10 {
+			p = pr
+		}
+	}
+	if _, err := e.plans.Reset(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.plans.Accept(ctx, 10, p.BasedOnVersion, p.Plan.Tables); !errors.Is(err, apperr.ErrVersionConflict) {
+		t.Fatalf("Accept after Reset err = %v, want ErrVersionConflict", err)
+	}
+}

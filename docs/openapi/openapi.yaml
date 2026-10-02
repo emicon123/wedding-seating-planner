@@ -13,6 +13,8 @@ info:
     * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
     * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
       (PUT /scenarios/{capacity}/assignments). Stale version → 409 `version_conflict`.
+      Manual plan edits (move, pin, add/remove table, delete plan) are not version-checked
+      but bump the scenario version.
     * Every scenario-returning endpoint returns the freshly computed evaluation;
       nothing derived (clusters, scores, violations) is stored.
 servers:
@@ -28,7 +30,7 @@ tags:
   - name: imports
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
-    description: The three plans (8/10/12), generate, accept, move, pin, tables (UC-09…UC-14)
+    description: The three plans (8/10/12), generate, accept, move, pin, tables, delete plan (UC-09…UC-14, UC-17)
   - name: health
     description: Liveness
 security: []

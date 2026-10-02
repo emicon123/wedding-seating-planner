@@ -401,6 +401,74 @@ func TestAddAndDeleteTable(t *testing.T) {
 	expect(t, do(h, http.MethodPost, api+"/scenarios/9/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 }
 
+func TestResetPlan(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 30)
+	putLink(t, h, "1-2", 0)
+	props := calculate(t, h)
+	for _, p := range props.Data {
+		scenarioResponse(t, accept(t, h, int(p.Capacity), acceptBody(t, p)), http.StatusOK)
+	}
+	pin := scenarioResponse(t, do(h, http.MethodPut, seatPath(10, 1), `{"tableNumber":1,"pinned":true}`), http.StatusOK)
+	if _, pinned, ok := tableOfGuest(pin, 1); !ok || !pinned {
+		t.Fatalf("precondition: guest 1 pinned %v seated %v", pinned, ok)
+	}
+	before := listScenarios(t, h)
+	old10 := scenarioOf(t, before, 10)
+
+	rec := do(h, http.MethodDelete, api+"/scenarios/10/tables", "")
+	got := scenarioResponse(t, rec, http.StatusOK)
+	if !strings.Contains(rec.Body.String(), `"tables":[]`) {
+		t.Errorf("plan.tables must be an empty array, body: %s", rec.Body)
+	}
+	if got.Capacity != 10 || len(got.Plan.Tables) != 0 || got.Plan.Summary.TableCount != 0 ||
+		got.Plan.Summary.SeatedCount != 0 || got.Plan.Summary.UnseatedCount != 30 || !got.Plan.Summary.NeedsRecalculation {
+		t.Errorf("reset plan = capacity %d summary %+v", got.Capacity, got.Plan.Summary)
+	}
+	if !slices.Contains(violationCodes(got), oapi.UnseatedGuests) {
+		t.Errorf("violations = %v, want unseated_guests", violationCodes(got))
+	}
+	if *got.Version != *old10.Version+1 {
+		t.Errorf("version = %d, want %d", *got.Version, *old10.Version+1)
+	}
+
+	t.Run("GET /scenarios still lists three plans; the others are unchanged", func(t *testing.T) {
+		after := listScenarios(t, h)
+		if len(after.Data) != 3 {
+			t.Fatalf("scenarios = %d, want 3", len(after.Data))
+		}
+		if s := scenarioOf(t, after, 10); len(s.Plan.Tables) != 0 || *s.Version != *got.Version {
+			t.Errorf("plan 10 = v%d, %d tables", *s.Version, len(s.Plan.Tables))
+		}
+		for _, c := range []int{8, 12} {
+			b, a := scenarioOf(t, before, c), scenarioOf(t, after, c)
+			if *a.Version != *b.Version || a.Plan.Summary != b.Plan.Summary || len(a.Plan.Tables) != len(b.Plan.Tables) || len(a.Plan.Tables) == 0 {
+				t.Errorf("plan %d changed: v%d -> v%d, %d -> %d tables", c, *b.Version, *a.Version, len(b.Plan.Tables), len(a.Plan.Tables))
+			}
+		}
+	})
+
+	t.Run("repeating it is 200 again (only the version moves)", func(t *testing.T) {
+		again := scenarioResponse(t, do(h, http.MethodDelete, api+"/scenarios/10/tables", ""), http.StatusOK)
+		if len(again.Plan.Tables) != 0 || *again.Version != *got.Version+1 {
+			t.Errorf("repeat = v%d, %d tables", *again.Version, len(again.Plan.Tables))
+		}
+	})
+
+	t.Run("a proposal generated before the reset is stale", func(t *testing.T) {
+		expect(t, accept(t, h, 10, acceptBody(t, props.Data[1])), http.StatusConflict, oapi.ErrorCodeVersionConflict)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		expect(t, do(h, http.MethodDelete, api+"/scenarios/9/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
+		rec := do(h, http.MethodDelete, api+"/scenarios/abc/tables", "")
+		expect(t, rec, http.StatusBadRequest, oapi.ErrorCodeBadRequest)
+		if f, err := decodeError(t, rec).Errors[0].Field.Get(); err != nil || f != "capacity" {
+			t.Errorf("error field = %q (%v), want capacity", f, err)
+		}
+	})
+}
+
 // Flow 3, end to end: a re-enabled child rides along to its cluster's full table; GET /scenarios
 // then shows the overfill with needsRecalculation, and nothing was regenerated.
 func TestReEnabledGuestNeedsRecalculation(t *testing.T) {

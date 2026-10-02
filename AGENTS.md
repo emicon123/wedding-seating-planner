@@ -24,14 +24,14 @@ Core idea (preliminary, details in `.claude/tasks/001-domain-and-stack-adr.task.
 - **Packaging:** Docker (compose v2)
 - **Exposure:** Tailscale, served under the **`/wesele`** path (see *Tailscale & the `/wesele` path* below)
 
-Decided in ADR-001 (details in `docs/architecture/02-system-context.md`): SQLite (`modernc.org/sqlite`, goose migrations), **tailnet-only access with no app login** (user decision 2026-10-02), `/wesele` prefix kept end-to-end, single container (Go serves SPA + API), seating algorithm in Go (`internal/seating`). Contract: `docs/openapi.yaml`; schema: `backend-go/db/migrations/`.
+Decided in ADR-001 (details in `docs/architecture/02-system-context.md`): SQLite (`modernc.org/sqlite`, goose migrations), **no app login; reachable only from the tailnet and the home LAN** (user decisions 2026-10-02), `/wesele` prefix kept end-to-end, single container (Go serves SPA + API), seating algorithm in Go (`internal/seating`). Contract: `docs/openapi.yaml`; schema: `backend-go/db/migrations/`.
 
 ## Hard constraints (these shape every decision)
 
 - **Cost-free only** — every tool, library, service, and host must be free / open-source. No paid APIs or SaaS.
 - **Runs on the Raspberry Pi (ARM64)** home server via Docker — every image needs a `linux/arm64` variant.
 - **Served under `/wesele`**, not at the domain root: the SPA (router basename, asset base URL) and the API (`/wesele/api/...`) must both work behind that prefix.
-- **Tailnet-only — never Funnel.** Guest names are personal data; the app has no login because only tailnet devices can reach it (Stoliki uses its own non-funnelled HTTPS port, since `:443` is funnelled for other apps). **If public exposure is ever wanted, auth must be added first** (ADR-001 §2) — revisit with the Architect.
+- **Tailnet + home LAN only — never Funnel.** Guest names are personal data; the app has no login because only tailnet devices and the home LAN can reach it (user decision 2026-10-02: `http://<pi-lan-ip>:8094/wesele/` on the LAN; Stoliki uses its own non-funnelled HTTPS port on the tailnet, since `:443` is funnelled for other apps). Never forward the port on the router. **If public exposure is ever wanted, auth must be added first** (ADR-001 §2) — revisit with the Architect.
 
 ## Orchestrator Workflow (Main Claude Code Session)
 
@@ -102,7 +102,7 @@ The Pi's Tailscale config is **shared device-level state**, already serving othe
 
 - **Never run `tailscale serve reset` / `tailscale funnel reset`** or anything that replaces the whole config — it would take the other apps offline. Add only the `/wesele` mapping, and check `tailscale serve status` before and after.
 - Do not edit the investing-app repo (`../investing-app`) without asking — if `/wesele` should be routed through its edge Nginx, that is a cross-repo change to raise with the user.
-- Stoliki is **tailnet-only** (user decision 2026-10-02): `tailscale serve` on a dedicated non-funnelled port, never `tailscale funnel`. Changing that requires adding auth first and asking the user.
+- Stoliki is **tailnet + home LAN only** (user decisions 2026-10-02): `tailscale serve` on a dedicated non-funnelled port, never `tailscale funnel`. Changing that requires adding auth first and asking the user.
 
 DevOps owns the wiring; details in `.claude/agents/devops.md`.
 
@@ -124,11 +124,11 @@ docs/            architecture/ (living docs + diagrams/), adr/, openapi/ (source
 Makefile         openapi-bundle / openapi-lint (+ cross-cutting targets)
 ```
 
-Runtime: **one container** — the Go binary serves the API and the built SPA under `/wesele`; **SQLite** file on a named volume; no app login — access = tailnet membership (tailnet-only serve mapping on its own port).
+Runtime: **one container** — the Go binary serves the API and the built SPA under `/wesele`; **SQLite** file on a named volume; no app login — access = tailnet membership (non-funnelled serve mapping on its own port) or being on the home LAN.
 
 ## Rebuilding and restarting the app
 
-One container (`stoliki`, image `stoliki:local`), compose project `stoliki`, data in the named volume `stoliki-data` (real name `stoliki_stoliki-data`, mounted at `/data`). Host port **`127.0.0.1:8094` → 8080** (loopback only; nothing else on the Pi may use 8094). Run everything from the repo root; use `docker compose` v2, and only ever touch the `stoliki` project (the Pi is shared with other apps: no `docker system prune`).
+One container (`stoliki`, image `stoliki:local`), compose project `stoliki`, data in the named volume `stoliki-data` (real name `stoliki_stoliki-data`, mounted at `/data`). Host port **`8094` → 8080**, bound to `0.0.0.0` by default so the home LAN reaches it (`STOLIKI_BIND=127.0.0.1` in `infra/.env` restricts it to loopback; nothing else on the Pi may use 8094). Run everything from the repo root; use `docker compose` v2, and only ever touch the `stoliki` project (the Pi is shared with other apps: no `docker system prune`).
 
 ```bash
 # optional config (all values have defaults): cp infra/.env.example infra/.env

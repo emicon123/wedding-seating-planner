@@ -119,6 +119,7 @@ type PlanState struct {      // one stored plan, as loaded for evaluation
 | `AcceptPlan` | `[]TableLayout` → `[]seating.Table` → service keeps prior pins + `seating.ExpandDisabled` → `ScenarioStore.ReplacePlan(capacity, basedOnVersion, plan)` |
 | `AssignmentSet` + guestId | service resolves the cluster's guest ids (all members) → `ScenarioStore.SeatCluster(capacity, guestIDs, tableNumber, pinned)` |
 | DELETE assignment | `ScenarioStore.UnseatCluster(capacity, guestIDs)` |
+| DELETE `/scenarios/{capacity}/tables` (delete plan, no body) | `ScenarioStore.ClearPlan(capacity)` |
 
 ### Domain errors → error envelope
 
@@ -170,12 +171,15 @@ type ScenarioStore interface {
     AddTable(ctx context.Context, capacity int) (scenarios.PlanState, error)                         // number = max+1; version+1
     RemoveTable(ctx context.Context, capacity int, number int) (scenarios.PlanState, error)
                                                                             // delete (cascade unseats) → renumber number>n down by 1; version+1
+    ClearPlan(ctx context.Context, capacity int) (scenarios.PlanState, error)
+                                                                            // delete plan: delete ALL its tables (existing query DeleteScenarioTables;
+                                                                            // assignments + pins go by cascade) → version+1; no version check; ErrNotFound for an unknown capacity
 }
 ```
 
 Notes for implementers:
 - Renumbering tables (`UPDATE dining_table SET number = number - 1 WHERE scenario_id = ? AND number > ?`) would collide with `UNIQUE (scenario_id, number)` mid-update in SQLite. Do it in two steps inside the transaction: `SET number = number + 1000 WHERE number > n`, then `SET number = number - 1001 WHERE number > 1000`. A negation trick would break `CHECK (number >= 1)`.
-- `ReplaceAll` and `ReplacePlan` are the only bulk deletes; everything else is a row-level upsert or delete.
+- `ReplaceAll`, `ReplacePlan` and `ClearPlan` are the only bulk deletes; everything else is a row-level upsert or delete. `ClearPlan` needs no new SQL and no migration: it reuses `DeleteScenarioTables` (the first half of `ReplacePlan`) and the `dining_table → assignment` cascade.
 - Reads for a scenario response: the service loads `GuestStore.List` (guests + links) and `ScenarioStore.Get/List`, then calls `seating.Evaluate`. At ~100 guests that is a few small queries; there is no caching (YAGNI).
 
 ## Pattern evaluation (Phases 3–4)
@@ -189,6 +193,6 @@ Notes for implementers:
 | DTO + Mapper | **adopted** | Plain functions per boundary |
 | Optimistic Offline Lock | **adopted** | `version` on guest and scenario |
 | Identity Map / caching | rejected | ~100 rows; reload per request |
-| Bulk endpoints in general | rejected except toggle | Only "disable all children" needs bulk (`PATCH /guests`) |
+| Bulk endpoints in general | rejected except toggle | Only "disable all children" needs bulk (`PATCH /guests`). "Usuń wszystkie plany" is three per-plan calls, like "accept all" |
 | Separate `/guest-links` list endpoint | rejected | Links are embedded in `Guest.links`, so the guest screen needs one call |
 | Separate `GET /scenarios/{capacity}` | rejected | `GET /scenarios` returns all three (small payload); mutations return the single updated scenario |

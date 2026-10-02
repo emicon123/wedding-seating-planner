@@ -298,6 +298,77 @@ func TestScenariosRemoveTableRenumbers(t *testing.T) {
 	})
 }
 
+func TestScenariosClearPlan(t *testing.T) {
+	ctx := context.Background()
+	s, db := newScenarios(t, 4)
+	p := layout(10, []int64{1, 2}, []int64{3})
+	p.Tables[0].Seats[1].Pinned = true
+	if _, err := s.ReplacePlan(ctx, 10, 1, p); err != nil { // version 2
+		t.Fatal(err)
+	}
+	if _, err := s.ReplacePlan(ctx, 8, 1, layout(8, []int64{4})); err != nil { // version 2
+		t.Fatal(err)
+	}
+	plan8Before, _ := s.Get(ctx, 8)
+
+	count := func(query string, args ...any) (n int) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	const perScenario = "(SELECT id FROM scenario WHERE capacity = ?)"
+
+	got, err := s.ClearPlan(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 3 || got.Plan.Capacity != 10 || len(got.Plan.Tables) != 0 {
+		t.Fatalf("ClearPlan(10) = %+v, want an empty plan at version 3", got)
+	}
+	if fresh, _ := s.Get(ctx, 10); fresh.Version != 3 || len(fresh.Plan.Tables) != 0 {
+		t.Errorf("Get(10) = %+v", fresh)
+	}
+	// cascade: dining_table -> assignment (pins live on the assignment row)
+	if n := count("SELECT COUNT(*) FROM dining_table WHERE scenario_id = "+perScenario, 10); n != 0 {
+		t.Errorf("%d dining_table rows left for scenario 10", n)
+	}
+	if n := count("SELECT COUNT(*) FROM assignment WHERE scenario_id = "+perScenario, 10); n != 0 {
+		t.Errorf("%d assignment rows left for scenario 10", n)
+	}
+
+	t.Run("other scenarios are untouched", func(t *testing.T) {
+		plan8After, _ := s.Get(ctx, 8)
+		if plan8After.Version != plan8Before.Version || !slices.Equal(numbers(plan8After.Plan), numbers(plan8Before.Plan)) {
+			t.Errorf("plan 8 changed: %+v -> %+v", plan8Before, plan8After)
+		}
+		if at, _ := tableOf(plan8After.Plan); at[4] != 1 || len(at) != 1 {
+			t.Errorf("plan 8 seats = %v", at)
+		}
+		if got, _ := s.Get(ctx, 12); got.Version != 1 {
+			t.Errorf("plan 12 version = %d, want 1", got.Version)
+		}
+		if n := count("SELECT COUNT(*) FROM assignment WHERE scenario_id = "+perScenario, 8); n != 1 {
+			t.Errorf("plan 8 has %d assignment rows, want 1", n)
+		}
+	})
+
+	t.Run("an empty plan clears again; only the version moves", func(t *testing.T) {
+		again, err := s.ClearPlan(ctx, 10)
+		if err != nil || again.Version != 4 || len(again.Plan.Tables) != 0 {
+			t.Errorf("repeat = %+v, %v", again, err)
+		}
+	})
+}
+
+func TestScenariosClearPlanUnknownCapacity(t *testing.T) {
+	s, _ := newScenarios(t, 0)
+	if _, err := s.ClearPlan(context.Background(), 9); !errors.Is(err, apperr.ErrNotFound) {
+		t.Errorf("ClearPlan(9) err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestScenariosTableMustBelongToTheAssignmentsScenario(t *testing.T) {
 	// DB-enforced (composite FK): a raw insert pointing scenario 8's assignment at a table of
 	// scenario 10 must fail, whatever the store does.

@@ -6,8 +6,8 @@ How Stoliki is built and deployed **today**. Diagrams: [C4](diagrams/001-c4-cont
 
 - **One container** (`stoliki`) on the Raspberry Pi (ARM64). A static Go binary serves both the REST API and the built React SPA. There is no Nginx container and no database container.
 - **SQLite** database file on a named Docker volume `stoliki-data` (mounted at `/data`; file `/data/stoliki.db`).
-- Reachable **only inside the tailnet** through a dedicated `tailscale serve` mapping on a **non-funnelled HTTPS port** of `<pi-host>.<tailnet>.ts.net`, under `/wesele/`.
-- **No application login.** Tailnet membership is the access control, and everyone who reaches the app can edit everything.
+- Reachable **only from the tailnet** (a dedicated `tailscale serve` mapping on a **non-funnelled HTTPS port** of `<pi-host>.<tailnet>.ts.net`, under `/wesele/`) **and the home LAN** (`http://<pi-lan-ip>:8094/wesele/`, user decision 2026-10-02).
+- **No application login.** Tailnet membership or being on the home LAN is the access control, and everyone who reaches the app can edit everything.
 
 ## Repository layout
 
@@ -59,15 +59,15 @@ sequenceDiagram
     S-->>U: 200 {data: [3 scenarios with evaluation], meta, page}
 ```
 
-*Legend:* shows the two invariants of this doc. The prefix is preserved end-to-end, and every read returns a freshly derived evaluation (nothing derived is stored). Requests from outside the tailnet never reach the Pi.
+*Legend:* shows the two invariants of this doc. The prefix is preserved end-to-end, and every read returns a freshly derived evaluation (nothing derived is stored). Requests from outside the tailnet and the home LAN never reach the Pi.
 
 ## Access control
 
-- **Tailnet-only.** The Stoliki mapping must never be funnelled. `:443` on this Pi is funnelled for other apps, and Funnel is per listener port, so Stoliki uses its own HTTPS port. `tailscale funnel status` must not list it.
+- **Tailnet + home LAN only** (user decision 2026-10-02). Besides the tailnet mapping, the app is reachable on the home LAN at `http://<pi-lan-ip>:8094/wesele/` (plain HTTP, no login). Never forward that port on the router. The Stoliki mapping must never be funnelled. `:443` on this Pi is funnelled for other apps, and Funnel is per listener port, so Stoliki uses its own HTTPS port. `tailscale funnel status` must not list it.
 - **No app auth**, no roles, no secrets. This is a deliberate simplification (user decision, 2026-10-02).
 - **If public exposure is ever wanted, add auth first**: the shared passphrase → signed-cookie middleware described in ADR-001 §2. Nothing else in the design changes.
 - Personal-data hygiene still applies: **never log guest names, notes, CSV content or request bodies**; logs carry ids and counts only. Response header `X-Robots-Tag: noindex`. Request body limit 1 MB (CSV import 2 MB).
-- The Go server listens on `PORT` bound to `127.0.0.1` on the host (compose `ports: "127.0.0.1:<host>:8080"`), so only the local Tailscale daemon can reach it.
+- The host port is published on `${STOLIKI_BIND:-0.0.0.0}:8094` (compose), so the local Tailscale daemon and the home LAN reach it; `STOLIKI_BIND=127.0.0.1` restricts it back to loopback (tailnet-only).
 
 ## Persistence
 
@@ -122,5 +122,5 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Adapter | **adopted** (import edge) | CSV now; a Sheets API source could replace it |
 | Optimistic Offline Lock | **adopted** | `version` on Guest and Scenario |
 | DTO + Mapper | **adopted** | Boundary between sqlc rows, domain types and OpenAPI DTOs |
-| Authentication middleware | rejected for now | Tailnet-only. Re-add before any public exposure |
+| Authentication middleware | rejected for now | Tailnet + home LAN only. Re-add before any public exposure |
 | Separate Nginx container | rejected | Go serves SPA + API |
