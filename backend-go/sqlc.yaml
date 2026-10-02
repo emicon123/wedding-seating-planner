@@ -1,0 +1,11 @@
+# sqlc config (run via `go generate ./...`, see internal/store/generate.go).
+# Schema source is the goose migrations directory itself — never a copy.
+version: "2"
+sql:
+  - engine: sqlite
+    schema: db/migrations
+    queries: db/queries
+    gen:
+      go:
+        package: sqlcgen
+        out: internal/store/sqlcgen

@@ -1,0 +1,14 @@
+# oapi-codegen config. Output: oapi.gen.go (generated — never hand-edit).
+# Run via `go generate ./...` (see generate.go). Contract: docs/openapi.yaml.
+package: oapi
+output: oapi.gen.go
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  embedded-spec: false
+output-options:
+  skip-prune: true
+  # `T | null` properties become nullable.Nullable[T]: PATCH needs absent (unchanged) vs null (clear).
+  # An unset Nullable marshals as the zero value, so always set it explicitly in responses.
+  nullable-type: true
