@@ -256,7 +256,16 @@ export interface paths {
         put?: never;
         /** Add an empty table at the end of a plan (UC-13) */
         post: operations["addTable"];
-        delete?: never;
+        /**
+         * Delete a plan — remove all its tables, assignments and pins (UC-17)
+         * @description "Usuń plan". The scenario itself stays (there are always three plans); it becomes an
+         *     empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
+         *     too). Bumps the scenario version, so a proposal generated before is stale (accepting it
+         *     returns 409). Not version-checked, like the other manual plan edits: the result does not
+         *     depend on what the client saw, and repeating it is harmless (idempotent apart from the
+         *     version bump). No request body. "Usuń wszystkie plany" is three calls, one per capacity.
+         */
+        delete: operations["resetPlan"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1627,6 +1636,38 @@ export interface operations {
         responses: {
             /** @description The updated plan (new table number = previous count + 1). */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Identifies the plan by its table capacity.
+                 * @example 10
+                 */
+                capacity: components["parameters"]["Capacity"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description The now-empty plan with its evaluation. With enabled guests it reports an
+             *     `unseated_guests` violation, so `summary.needsRecalculation` is true.
+             */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

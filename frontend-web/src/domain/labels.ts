@@ -5,7 +5,14 @@ import type { GuestCounts } from '@/domain/guestList'
 import type { ViaReason } from '@/domain/linkColumns'
 import type { LinkDiff } from '@/domain/linkSelection'
 import type { FillStatus } from '@/domain/tableStatus'
-import type { DataWarning, ErrorCode, ErrorItem, LinkLevel, Violation } from '@/domain/types'
+import type {
+  DataWarning,
+  ErrorCode,
+  ErrorItem,
+  LinkLevel,
+  PlanSummary,
+  Violation,
+} from '@/domain/types'
 
 /** Polish noun plural: 1 osoba, 2-4 osoby, 5-21 osób, 22-24 osoby ... */
 export function pluralPl(count: number, one: string, few: string, many: string): string {
@@ -123,6 +130,13 @@ export function relationReasonLabel(
 export const tableCountLabel = (count: number) => pluralPl(count, 'stół', 'stoły', 'stołów')
 
 export const peopleLabel = (count: number) => pluralPl(count, 'osoba', 'osoby', 'osób')
+
+/** "3 stoły i 24 osoby przy stołach": what "Usuń plan" is about to clear. */
+export const planContentsLabel = ({
+  tableCount,
+  seatedCount,
+}: Pick<PlanSummary, 'tableCount' | 'seatedCount'>) =>
+  `${tableCountLabel(tableCount)} i ${peopleLabel(seatedCount)} przy stołach`
 
 /** "Bez naruszeń" / "2 naruszenia": the plan card's verdict line. */
 export function violationCountLabel(count: number): string {

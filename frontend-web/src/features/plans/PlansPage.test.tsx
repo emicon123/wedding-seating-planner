@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { keys } from '@/api/keys'
+import { CAPACITIES, type Capacity } from '@/domain/capacity'
 import type { Proposal } from '@/domain/types'
 import { evenPlan, serveScenarios, threeProposals, threeScenarios } from '@/features/plans/fixtures'
 import { PlansPage } from '@/features/plans/PlansPage'
@@ -241,5 +242,206 @@ describe('PlansPage: generate, preview, accept', () => {
     expect(within(stale).getByRole('alert')).toHaveTextContent('zmienił się po wygenerowaniu')
     expect(within(stale).queryByRole('button', { name: /Akceptuj/ })).toBeNull()
     expect(within(stale).getByRole('button', { name: 'Generuj ponownie' })).toBeInTheDocument()
+  })
+})
+
+// --- "Usuń plan" / "Usuń wszystkie plany" ------------------------------------------------------
+
+/** What the server answers after a reset: no tables, every guest unseated, version + 1. */
+function emptied(capacity: Capacity, guestCount = 24) {
+  const unseated = Array.from({ length: guestCount }, (_, i) => placement(i + 1, [i + 1]))
+  return makeScenario(capacity, makePlan([], unseated), 9)
+}
+
+const resetCall = (capacity: Capacity, respond?: () => Response | Promise<Response>) =>
+  mockApi(
+    'delete',
+    `/scenarios/${capacity}/tables`,
+    respond ?? (() => HttpResponse.json(single(emptied(capacity)))),
+  )
+
+describe('PlansPage: delete plans', () => {
+  it('"Usuń plan" on a card asks first, says how many tables and guests are cleared, and Anuluj sends nothing', async () => {
+    serveScenarios(threeScenarios())
+    const api = resetCall(10)
+    const { user } = renderPage(<PlansPage />)
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
+
+    const dialog = await screen.findByRole('alertdialog', { name: 'Usunąć plan na 10 miejsc?' })
+    expect(within(dialog).getByText(/3 stoły i 24 osoby przy stołach/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Pinezki znikną/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Tego nie da się cofnąć/)).toBeInTheDocument()
+    expect(api.calls).toHaveLength(0)
+
+    await user.click(within(dialog).getByRole('button', { name: 'Anuluj' }))
+
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(api.calls).toHaveLength(0)
+    expect(within(ten).queryByText('Brak stołów w tym planie.')).toBeNull()
+  })
+
+  it('confirming deletes only that plan and the card shows the empty state', async () => {
+    serveScenarios(threeScenarios())
+    const api = resetCall(10)
+    const { user } = renderPage(<PlansPage />)
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Usuń plan 10-osobowy' }))
+
+    expect(await within(ten).findByText('Brak stołów w tym planie.')).toBeInTheDocument()
+    expect(within(ten).getByRole('button', { name: 'Przelicz / Generuj' })).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(await screen.findByText('Usunięto plan na 10 miejsc.')).toBeInTheDocument()
+    expect(api.calls).toEqual([null])
+    // the other plans are untouched
+    expect(within(card('Plan na 8 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
+    expect(within(card('Plan na 12 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
+  })
+
+  it('keeps the dialog open until the server answers', async () => {
+    serveScenarios(threeScenarios())
+    const hold = gate()
+    resetCall(10, async () => {
+      await hold.opened
+      return HttpResponse.json(single(emptied(10)))
+    })
+    const { user } = renderPage(<PlansPage />)
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
+    const dialog = await screen.findByRole('alertdialog')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Usuń plan 10-osobowy' }))
+    await user.keyboard('{Escape}')
+
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /Usuwam/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    expect(within(ten).queryByText('Brak stołów w tym planie.')).toBeNull() // nothing optimistic
+
+    hold.open()
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(within(ten).getByText('Brak stołów w tym planie.')).toBeInTheDocument()
+  })
+
+  it('a refused delete stays in the dialog with an inline message and a toast', async () => {
+    serveScenarios(threeScenarios())
+    resetCall(10, () => HttpResponse.json(failure('internal_error'), { status: 500 }))
+    const { user } = renderPage(<PlansPage />)
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
+    const dialog = await screen.findByRole('alertdialog')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Usuń plan 10-osobowy' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/po stronie serwera/)
+    expect(screen.getAllByText(/Coś poszło nie tak po stronie serwera/)).toHaveLength(2) // inline + toast
+    expect(within(dialog).getByRole('button', { name: 'Usuń plan 10-osobowy' })).toBeEnabled()
+    expect(within(ten).queryByText('Brak stołów w tym planie.')).toBeNull()
+  })
+
+  it('"Usuń plan" is disabled, with the reason, on a plan with no tables', async () => {
+    serveScenarios(threeScenarios({ 10: makePlan([], []) }))
+    renderPage(<PlansPage />)
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    const button = within(ten).getByRole('button', { name: /Usuń plan/ })
+
+    expect(button).toBeDisabled()
+    expect(button).toHaveAccessibleDescription('Ten plan nie ma stołów, nie ma co usuwać.')
+    expect(
+      within(card('Plan na 8 miejsc')).getByRole('button', { name: /Usuń plan/ }),
+    ).toBeEnabled()
+  })
+
+  it('"Usuń wszystkie plany" needs the acknowledgement checkbox, then sends three DELETEs (8, 10, 12)', async () => {
+    serveScenarios(threeScenarios())
+    const calls = CAPACITIES.map((capacity) => resetCall(capacity))
+    const { user } = renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    await user.click(screen.getByRole('button', { name: 'Usuń wszystkie plany' }))
+    const dialog = await screen.findByRole('alertdialog', { name: 'Usunąć wszystkie trzy plany?' })
+    expect(
+      within(dialog).getByText(/Plan 8-osobowy: 3 stoły i 24 osoby przy stołach/),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(/Plan 12-osobowy: 2 stoły i 24 osoby przy stołach/),
+    ).toBeInTheDocument()
+    const confirm = within(dialog).getByRole('button', { name: 'Usuń wszystkie plany' })
+    expect(confirm).toBeDisabled()
+
+    await user.click(
+      within(dialog).getByRole('checkbox', { name: 'Rozumiem, że tego nie da się cofnąć' }),
+    )
+    expect(confirm).toBeEnabled()
+    expect(calls.map((c) => c.calls.length)).toEqual([0, 0, 0])
+    await user.click(confirm)
+
+    expect(await screen.findByText('Usunięto wszystkie plany.')).toBeInTheDocument()
+    expect(calls.map((c) => c.calls.length)).toEqual([1, 1, 1])
+    expect(screen.getAllByText('Brak stołów w tym planie.')).toHaveLength(3)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('when one of the three fails, the toast names that plan and the others stay deleted', async () => {
+    // a server that remembers: plans 8 and 12 are empty once deleted, so the refetch agrees
+    let stored = threeScenarios()
+    const empty = (capacity: Capacity) => () => {
+      stored = stored.map((s) => (s.capacity === capacity ? emptied(capacity) : s))
+      return HttpResponse.json(single(emptied(capacity)))
+    }
+    mockApi('get', '/scenarios', () => HttpResponse.json(list(stored)))
+    resetCall(8, empty(8))
+    resetCall(10, () => HttpResponse.json(failure('internal_error'), { status: 500 }))
+    resetCall(12, empty(12))
+    const { user } = renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    await user.click(screen.getByRole('button', { name: 'Usuń wszystkie plany' }))
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('checkbox'))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Usuń wszystkie plany' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      /Nie udało się usunąć planu: 10/,
+    )
+    expect(await screen.findAllByText(/Nie udało się usunąć planu: 10/)).toHaveLength(2) // inline + toast
+    await user.click(within(dialog).getByRole('button', { name: 'Anuluj' }))
+    expect(
+      within(card('Plan na 8 miejsc')).getByText('Brak stołów w tym planie.'),
+    ).toBeInTheDocument()
+    expect(
+      within(card('Plan na 12 miejsc')).getByText('Brak stołów w tym planie.'),
+    ).toBeInTheDocument()
+    expect(within(card('Plan na 10 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
+  })
+
+  it('"Usuń wszystkie plany" is disabled when all three plans are empty', async () => {
+    const none = makePlan([], [])
+    serveScenarios(threeScenarios({ 8: none, 10: none, 12: none }))
+    renderPage(<PlansPage />)
+
+    expect(await screen.findByRole('button', { name: 'Usuń wszystkie plany' })).toBeDisabled()
+  })
+
+  it('a deleted plan leaves the preview, the other proposals stay', async () => {
+    serveScenarios(threeScenarios())
+    resetCall(10)
+    const { user, queryClient } = renderPage(<PlansPage />)
+    queryClient.setQueryData(keys.proposals, threeProposals())
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
+    await user.click(await screen.findByRole('button', { name: 'Usuń plan 10-osobowy' }))
+
+    await screen.findByText('Usunięto plan na 10 miejsc.')
+    expect(screen.queryByRole('article', { name: 'Propozycja na 10 miejsc' })).toBeNull()
+    expect(screen.getByRole('article', { name: 'Propozycja na 8 miejsc' })).toBeInTheDocument()
   })
 })

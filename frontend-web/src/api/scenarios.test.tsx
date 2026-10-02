@@ -11,10 +11,13 @@ import {
   useDiscardProposals,
   useDropProposal,
   useProposals,
+  useResetPlan,
   useScenarios,
   useSetAssignment,
 } from '@/api/scenarios'
 import type { Proposal, Scenario } from '@/domain/types'
+import { withoutProposal } from '@/domain/planView'
+import { threeProposals } from '@/features/plans/fixtures'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 import { failure, gate, HttpResponse, list, mockApi, single } from '@/test/server'
 import { renderHookWithClient } from '@/test/wrapper'
@@ -395,5 +398,86 @@ describe('table commands replace the scenario with the server copy', () => {
 
     expect(api.calls).toHaveLength(1)
     expect(cached(queryClient)?.[1]).toEqual(without)
+  })
+})
+
+describe('useResetPlan', () => {
+  /** What the server answers after "Usuń plan": no tables, every cluster unseated, version + 1. */
+  const emptied = () => makeScenario(10, makePlan([], [maciek, michal, placement(31, [31])]), 8)
+
+  it('DELETEs without a body and replaces only that scenario with the server copy', async () => {
+    const api = mockApi('delete', '/scenarios/10/tables', () =>
+      HttpResponse.json(single(emptied())),
+    )
+    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
+    seedScenarios(queryClient)
+
+    await act(() => result.current.mutateAsync({ capacity: 10 }))
+
+    expect(api.calls).toEqual([null])
+    expect(cached(queryClient)?.[1]).toEqual(emptied())
+    expect(cached(queryClient)?.[0]).toEqual(scenario8)
+    expect(cached(queryClient)?.[2]).toEqual(scenario12)
+  })
+
+  it("drops that capacity's proposal from the preview and keeps the others", async () => {
+    mockApi('delete', '/scenarios/10/tables', () => HttpResponse.json(single(emptied())))
+    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
+    seedScenarios(queryClient)
+    queryClient.setQueryData(keys.proposals, threeProposals())
+
+    await act(() => result.current.mutateAsync({ capacity: 10 }))
+
+    expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(
+      withoutProposal(threeProposals(), 10),
+    )
+  })
+
+  it('rejects with the ApiError on 404 and leaves the caches alone', async () => {
+    mockApi('delete', '/scenarios/10/tables', () =>
+      HttpResponse.json(failure('not_found'), { status: 404 }),
+    )
+    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
+    seedScenarios(queryClient)
+    queryClient.setQueryData(keys.proposals, threeProposals())
+
+    const error = await act(() =>
+      result.current.mutateAsync({ capacity: 10 }).catch((caught: unknown) => caught),
+    )
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(cached(queryClient)).toEqual(initial())
+    expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(threeProposals())
+  })
+
+  it('does not invent a preview when there is none', async () => {
+    mockApi('delete', '/scenarios/10/tables', () => HttpResponse.json(single(emptied())))
+    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
+    seedScenarios(queryClient)
+
+    await act(() => result.current.mutateAsync({ capacity: 10 }))
+
+    expect(queryClient.getQueryData(keys.proposals)).toBeUndefined()
+  })
+
+  it('is not optimistic: the plan stays as it was until the server answers', async () => {
+    const hold = gate()
+    mockApi('delete', '/scenarios/10/tables', async () => {
+      await hold.opened
+      return HttpResponse.json(single(emptied()))
+    })
+    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
+    seedScenarios(queryClient)
+
+    let pending!: Promise<unknown>
+    act(() => {
+      pending = result.current.mutateAsync({ capacity: 10 })
+    })
+    await waitFor(() => expect(result.current.isPending).toBe(true))
+    expect(cached(queryClient)?.[1]).toEqual(scenario10())
+
+    hold.open()
+    await act(() => pending)
+    expect(cached(queryClient)?.[1]).toEqual(emptied())
   })
 })

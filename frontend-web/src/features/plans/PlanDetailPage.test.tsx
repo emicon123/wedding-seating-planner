@@ -395,6 +395,60 @@ describe('PlanDetailPage: add and remove tables', () => {
   })
 })
 
+describe('PlanDetailPage: delete the plan', () => {
+  const emptiedScenario = () => {
+    const base = detailScenario()
+    const unseated = [...base.plan.tables.flatMap((t) => t.clusters), ...base.plan.unseated]
+    return makeScenario(10, makePlan([], unseated), 8)
+  }
+
+  it('"Usuń plan" in the header empties the floor plan and moves every cluster to the tray, staying on the page', async () => {
+    const { user } = await renderDetail()
+    const api = mockApi('delete', '/scenarios/10/tables', () =>
+      HttpResponse.json(single(emptiedScenario())),
+    )
+
+    await user.click(screen.getByRole('button', { name: /^Usuń plan/ }))
+    const dialog = await screen.findByRole('alertdialog', { name: 'Usunąć plan na 10 miejsc?' })
+    expect(within(dialog).getByText(/2 stoły i 5 osób przy stołach/)).toBeInTheDocument()
+    expect(api.calls).toHaveLength(0)
+    await user.click(within(dialog).getByRole('button', { name: 'Usuń plan 10-osobowy' }))
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Stół 1' })).toBeNull())
+    expect(screen.queryByRole('region', { name: 'Stół 2' })).toBeNull()
+    expect(api.calls).toEqual([null])
+    expect(within(tray()).getByText('Michał')).toBeInTheDocument()
+    expect(within(tray()).getByText('Maciek')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Plan na 10 miejsc' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Przelicz / Generuj' })).toBeInTheDocument()
+    expect(await screen.findByText('Usunięto plan na 10 miejsc.')).toBeInTheDocument()
+  })
+
+  it('Anuluj and Esc leave the plan alone', async () => {
+    const { user } = await renderDetail()
+    const api = mockApi('delete', '/scenarios/10/tables', () => HttpResponse.json({}))
+
+    await user.click(screen.getByRole('button', { name: /^Usuń plan/ }))
+    await user.click(await screen.findByRole('button', { name: 'Anuluj' }))
+    await user.click(screen.getByRole('button', { name: /^Usuń plan/ }))
+    await screen.findByRole('alertdialog')
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(api.calls).toHaveLength(0)
+    expect(table(1)).toBeInTheDocument()
+  })
+
+  it('is disabled when the plan has no tables', async () => {
+    serveDetail(makeScenario(10, makePlan([], [placement(4, [4, 5])]), 8))
+    renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+
+    const button = await screen.findByRole('button', { name: /^Usuń plan/ })
+
+    expect(button).toBeDisabled()
+  })
+})
+
 // --- keyboard drag ----------------------------------------------------------------------------
 
 type Rect = { x: number; y: number; w: number; h: number }

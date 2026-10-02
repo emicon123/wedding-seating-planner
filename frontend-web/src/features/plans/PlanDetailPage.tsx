@@ -11,6 +11,7 @@ import {
   useAddTable,
   useDeleteAssignment,
   useDeleteTable,
+  useResetPlan,
   useScenarios,
   useSetAssignment,
 } from '@/api/scenarios'
@@ -22,6 +23,8 @@ import { buildGuestIndex } from '@/domain/guestIndex'
 import { peopleLabel, scoreLabel, tableCountLabel, violationCountLabel } from '@/domain/labels'
 import { guestTableMap } from '@/domain/planView'
 import type { ClusterOverview, ClusterPlacement, Guest } from '@/domain/types'
+import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
+import { DeletePlanDialog } from '@/features/plans/DeletePlanDialog'
 import { DeleteTableDialog } from '@/features/plans/DeleteTableDialog'
 import { GuestDetailsPanel } from '@/features/plans/GuestDetailsPanel'
 import { PlanBoard } from '@/features/plans/PlanBoard'
@@ -67,7 +70,10 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
   const { mutateAsync: deleteAssignment } = useDeleteAssignment()
   const { mutateAsync: addTable, isPending: addingTable } = useAddTable()
   const { mutateAsync: deleteTable } = useDeleteTable()
+  const { mutateAsync: resetPlan, isPending: resettingPlan } = useResetPlan()
   const [tableToDelete, setTableToDelete] = useState<number | null>(null)
+  const [confirmingReset, setConfirmingReset] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
 
   const scenario = scenarios.data?.find((candidate) => candidate.capacity === capacity)
   const plan = scenario?.plan
@@ -168,6 +174,19 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
       toast.success(`Usunięto stół ${tableNumber}. Jego goście są w polu „Bez stołu”.`)
     } catch (failure) {
       toast.error(errorMessage(failure))
+    }
+  }
+
+  async function onConfirmReset() {
+    setResetError(null)
+    try {
+      await resetPlan({ capacity })
+      toast.success(`Usunięto plan na ${capacity} miejsc.`)
+      setConfirmingReset(false)
+    } catch (failure) {
+      const message = errorMessage(failure)
+      setResetError(message)
+      toast.error(message)
     }
   }
 
@@ -285,6 +304,13 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
               <PlusIcon aria-hidden="true" />
               Dodaj stół
             </Button>
+            <DeletePlanButton
+              empty={plan.tables.length === 0}
+              onClick={() => {
+                setResetError(null)
+                setConfirmingReset(true)
+              }}
+            />
             <Button type="button" variant="outline" aria-pressed={compact} onClick={toggleCompact}>
               <EyeIcon aria-hidden="true" />
               {compact ? 'Pokaż gości' : 'Tylko stoły'}
@@ -322,6 +348,16 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
               guestCount={plan.tables.find((t) => t.number === tableToDelete)?.fill ?? 0}
               onConfirm={() => void onConfirmDelete(tableToDelete)}
               onClose={() => setTableToDelete(null)}
+            />
+          )}
+
+          {confirmingReset && (
+            <DeletePlanDialog
+              scenarios={[scenario]}
+              pending={resettingPlan}
+              error={resetError}
+              onConfirm={() => void onConfirmReset()}
+              onClose={() => setConfirmingReset(false)}
             />
           )}
         </>

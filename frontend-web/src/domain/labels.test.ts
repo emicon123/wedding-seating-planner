@@ -8,6 +8,7 @@ import {
   preferredHereLabel,
   relationCountLabel,
   relationReasonLabel,
+  planContentsLabel,
   tableCountLabel,
   viaLabel,
   violationCountLabel,
@@ -202,5 +203,16 @@ describe('relation labels', () => {
     expect(
       relationReasonLabel({ direct: false, via: { guestId: 6, reason: 'link' } }, nameOf),
     ).toBe('przez powiązanie: Michał')
+  })
+})
+
+describe('planContentsLabel', () => {
+  it('says what a plan holds, with Polish plurals', () => {
+    expect(planContentsLabel({ tableCount: 3, seatedCount: 24 })).toBe(
+      '3 stoły i 24 osoby przy stołach',
+    )
+    expect(planContentsLabel({ tableCount: 5, seatedCount: 1 })).toBe(
+      '5 stołów i 1 osoba przy stołach',
+    )
   })
 })

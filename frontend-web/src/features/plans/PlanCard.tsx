@@ -2,15 +2,24 @@ import { ArrowRightIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { TableGlyph } from '@/components/TableGlyph'
 import { buttonVariants } from '@/components/ui/button'
+import type { Capacity } from '@/domain/capacity'
 import type { Scenario } from '@/domain/types'
+import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
 import { FillBars } from '@/features/plans/FillBars'
 import { PlanFigures } from '@/features/plans/PlanFigures'
 import { RecalculationBanner } from '@/features/plans/RecalculationBanner'
 import { cn } from '@/lib/utils'
 
 /** One stored plan on the compare screen: figures, fill bars, the recalculation call to action. */
-export function PlanCard({ scenario }: { scenario: Scenario }) {
+export function PlanCard({
+  scenario,
+  onDelete,
+}: {
+  scenario: Scenario
+  onDelete: (capacity: Capacity) => void
+}) {
   const { capacity, plan } = scenario
+  const empty = plan.summary.tableCount === 0
   return (
     <article
       aria-label={`Plan na ${capacity} miejsc`}
@@ -32,13 +41,16 @@ export function PlanCard({ scenario }: { scenario: Scenario }) {
 
       {plan.summary.needsRecalculation && <RecalculationBanner violations={plan.violations} />}
 
-      <Link
-        to={`/plany/${capacity}`}
-        className={cn(buttonVariants({ variant: 'outline' }), 'mt-auto w-full')}
-      >
-        Otwórz plan <span className="sr-only">na {capacity} miejsc</span>
-        <ArrowRightIcon aria-hidden="true" />
-      </Link>
+      <div className="mt-auto flex gap-2">
+        <Link
+          to={`/plany/${capacity}`}
+          className={cn(buttonVariants({ variant: 'outline' }), 'flex-1')}
+        >
+          Otwórz plan <span className="sr-only">na {capacity} miejsc</span>
+          <ArrowRightIcon aria-hidden="true" />
+        </Link>
+        <DeletePlanButton empty={empty} onClick={() => onDelete(capacity)} />
+      </div>
     </article>
   )
 }

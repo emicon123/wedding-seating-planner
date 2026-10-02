@@ -202,3 +202,26 @@ export function useDeleteTable() {
     onSuccess: (scenario) => replaceScenario(queryClient, scenario),
   })
 }
+
+/**
+ * "Usuń plan": the server empties the plan (no tables, no pins, everyone unseated). Not optimistic:
+ * it is destructive and rare, so the UI waits for the evaluated copy. The plan's version moved, so
+ * the preview's proposal for that capacity is stale and goes too. Toasts are the caller's job.
+ */
+export function useResetPlan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ capacity }: CapacityArg): Promise<Scenario> =>
+      (
+        await unwrap(
+          client.DELETE('/scenarios/{capacity}/tables', { params: { path: { capacity } } }),
+        )
+      ).data,
+    onSuccess: (scenario) => {
+      replaceScenario(queryClient, scenario)
+      queryClient.setQueryData<Proposal[]>(keys.proposals, (current) =>
+        current ? withoutProposal(current, scenario.capacity) : current,
+      )
+    },
+  })
+}
