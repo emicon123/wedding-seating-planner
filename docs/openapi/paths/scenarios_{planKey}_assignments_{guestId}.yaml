@@ -1,5 +1,5 @@
 parameters:
-  - $ref: ../components/parameters.yaml#/Capacity
+  - $ref: ../components/parameters.yaml#/PlanKey
   - $ref: ../components/parameters.yaml#/GuestId
 put:
   tags: [scenarios]
@@ -7,7 +7,7 @@ put:
   summary: Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
   description: |
     Applies to every member of the guest's cluster (disabled members included). Idempotent,
-    last write wins; bumps the scenario version. Exceeding capacity is allowed and reported as a violation.
+    last write wins; bumps the scenario version. Exceeding capacity (12 in the mixed plan) is allowed and reported as a violation.
   requestBody:
     required: true
     content:

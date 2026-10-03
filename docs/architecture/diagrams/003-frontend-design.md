@@ -1,6 +1,6 @@
 # 003 — Frontend design (React SPA): modules, components, state ownership, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8), task 007 (Generate stores at once + Cofnij, §9), task 009 (PIN screen / access gate, §10) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
+Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8), task 007 (Generate stores at once + Cofnij, §9), task 009 (PIN screen / access gate, §10), task 013 (five plans incl. the mixed plan, §13) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
 
 ## 1. Modules and dependency rule
 
@@ -63,7 +63,7 @@ useApplyLinkChanges()     // ONE mutation for a checklist Save or a single remov
 // api/clusters.ts
 useClusterOverview(): UseQueryResult<ClusterOverview>
 // api/scenarios.ts
-useScenarios(): UseQueryResult<Scenario[]>                                    // 4, ordered 9/10/11/12
+useScenarios(): UseQueryResult<Scenario[]>                                    // 5, ordered 9/10/11/12/mixed (task 013, §13)
 useGeneratePlans()        // task 007, §9: fetch fresh scenarios (= undo snapshot) → POST /scenarios/calculate → PUT /scenarios
                           // (basedOnVersion = snapshot versions); onSuccess: setQueryData(keys.scenarios, response) +
                           // setQueryData(keys.generateUndo, {previous: snapshot, generatedVersions}); 409: refetch scenarios
@@ -73,7 +73,7 @@ useUndoGenerate()         // PUT /scenarios with the snapshot (basedOnVersion = 
 useSetAssignment(), useDeleteAssignment()                                     // OPTIMISTIC (domain/optimistic.ts), rollback on error,
                                                                               // onSuccess: replace scenario with the server's evaluated copy
 useAddTable(), useDeleteTable()
-useResetPlan()            // task 005: DELETE /scenarios/{capacity}/tables; onSuccess: replace that scenario
+useResetPlan()            // task 005: DELETE /scenarios/{planKey}/tables; onSuccess: replace that scenario (matched by key)
 
 // domain/guestIndex.ts
 buildGuestIndex(guests: Guest[]): GuestIndex                    // byId, search(query) — case- and diacritics-insensitive ("Michal" finds "Michał")
@@ -100,8 +100,10 @@ applyMove(plan: SeatingPlan, cluster: ClusterPlacement, toTable: number | null):
 dropPreview(plan, cluster, toTable, capacity, overview): { fillAfter, overCapacity, underFloorSource, preferredHere: number }
 // domain/planView.ts (task 007)
 toTableLayouts(plan: SeatingPlan): TableLayout[]          // number, guestIds (all clusters), pinnedGuestIds (pinned clusters) — for proposals AND snapshots
-toScenariosReplace(plans: {capacity, basedOnVersion, plan}[]): ScenariosReplace
-canUndoGenerate(undo: GenerateUndo | undefined, scenarios: Scenario[] | undefined): boolean   // every scenario.version === undo.generatedVersions[capacity]
+toScenariosReplace(plans: {key, basedOnVersion, plan}[]): ScenariosReplace     // task 013: key instead of capacity
+canUndoGenerate(undo: GenerateUndo | undefined, scenarios: Scenario[] | undefined): boolean   // every scenario.version === undo.generatedVersions[scenario.key]
+// domain/plans.ts (task 013, replaces domain/capacity.ts): PLAN_KEYS, parsePlanKey, isRetiredPlanKey, planName, planTitle
+// domain/tableSizes.ts (task 013): tableSize(fill, scenario), tablesNeeded(scenario), tablesNeededLabel(needed)
 // domain/labels.ts
 violationLabel(v: Violation): string; warningLabel(w: DataWarning): string; errorLabel(e: ErrorItem): string   // Polish copy
 ```
@@ -115,7 +117,7 @@ classDiagram
     direction LR
     class PlansPage {
         <<component>>
-        compare 4 plans + Generate
+        compare 5 plans + Generate
     }
     class PlanCard {
         <<component>>
@@ -130,7 +132,7 @@ classDiagram
     }
     class PlanDetailPage {
         <<component>>
-        +capacity 9, 10, 11 or 12
+        +planKey 9, 10, 11, 12 or mixed
     }
     class FloorPlan {
         <<component>>
@@ -182,7 +184,7 @@ classDiagram
     }
     class DeletePlanDialog {
         <<component>>
-        confirm delete one plan or all four
+        confirm delete one plan or all five
     }
     class ApiHooks {
         <<module api/>>
@@ -291,6 +293,8 @@ Contract: `DELETE /scenarios/{capacity}/tables` → 200 `ScenarioResponse` with 
 - Pattern check: no undo for a delete (the Cofnij of task 007 covers only Generate); a confirmation dialog stands in. No new client state beyond the dialog's open flag and checkbox (YAGNI).
 
 ## 8. Four table sizes (task 006)
+
+> Task 013 extends this to five plans (§13): `CAPACITIES` becomes `PLAN_KEYS` and the card grid gains a fifth column. Everything else here still holds.
 
 Plans exist for **9, 10, 11 and 12** seats (was 8, 10, 12). Contract: `Capacity` enum `[9, 10, 11, 12]`; `GET /scenarios` and `POST /scenarios/calculate` return exactly four items, ordered 9, 10, 11, 12; the data warning for "too big for the smallest plan" is now `cluster_exceeds_9` (cluster > 9 enabled guests).
 
@@ -479,3 +483,70 @@ export const ISOLATED_LABEL = 'Bez znajomych przy stole'   // in domain/labels.t
 **Tests (B2):** `isIsolated` / `isolatedCount` (−1, 0, 0.5, −0.5 edge, empty list); `GuestScoreMark` renders the badge for `{satisfaction: −1, preferredTotal: 0, fallbackAtTable: 0}` (group-2-only guest) and for `{satisfaction: −1, preferredTotal: 3, preferredAtTable: 0}` (badge + brick hearts), not for `satisfaction: 0` or `2.5`; accessible name contains "Bez znajomych przy stole"; `PlanFigures` shows "Bez znajomych przy stole: 4 os." for `isolated: 4` and nothing for 0/undefined; `GuestDetailsPanel` line; a negative plan score renders as "-3". Fixtures in `features/plans/fixtures.ts`: give guests 4 and 5 (partners elsewhere, nobody at the table) `satisfaction: -1`.
 
 Pattern check: two pure helpers and props; no new hook, no context, no state. Rejected: a contract field `isolated` (derivable; would need a backend DTO change and `schema.d.ts` regeneration for nothing); a violation-style banner (nothing to "fix" by recalculating).
+
+## 13. Five plans: the mixed plan "Mieszany" (task 013)
+
+Rules: [../03-seating-model.md](../03-seating-model.md) § The mixed plan. Contract changes (regenerate `api/schema.d.ts` from the bundle): new `PlanKey = '9' | '10' | '11' | '12' | 'mixed'`; `Scenario.key` and `Proposal.key` (new, required); `Scenario.capacity` stays (12 for the mixed plan); `ScenarioLayout` has `key` **instead of** `capacity`; per-plan paths are `/scenarios/{planKey}/…` (a string; the uniform plans' URLs are unchanged); `GET /scenarios`, `POST /scenarios/calculate`, `PUT /scenarios` carry **exactly five** plans. **No size field**: table sizes and "potrzebne stoły" are derived here from `PlanTable.fill`.
+
+### 13.1 Domain (pure TS, unit-tested)
+
+```ts
+// domain/plans.ts — replaces domain/capacity.ts (the ONLY list of plans, DRY)
+export type { PlanKey } from '@/domain/types'                      // Schemas['PlanKey']
+export const PLAN_KEYS: readonly PlanKey[] = ['9', '10', '11', '12', 'mixed']
+export const isMixed = (s: Pick<Scenario, 'key'>) => s.key === 'mixed'
+export function parsePlanKey(raw: string | undefined): PlanKey | null   // route param → key, else null
+export function isRetiredPlanKey(raw: string | undefined): boolean      // '8' (task 006 bookmarks) → '9', unchanged behaviour
+export function planName(key: PlanKey): string    // "9 miejsc" … "12 miejsc" | "Mieszany"
+export function planTitle(key: PlanKey): string   // "plan na 10 miejsc" | "plan mieszany"   (dialogs, toasts, aria)
+
+// domain/tableSizes.ts
+export const TABLE_SIZES = [9, 10, 11, 12] as const
+export type TableSize = (typeof TABLE_SIZES)[number]
+/** Seats the venue must provide at this table. null = empty table (not needed). */
+export function tableSize(fill: number, scenario: Pick<Scenario, 'key' | 'capacity'>): TableSize | null
+//   fill === 0 → null; uniform → scenario.capacity; mixed → smallest of TABLE_SIZES ≥ fill, 12 when fill > 12
+export type TablesNeeded = { size: TableSize; count: number }[]          // largest size first, count > 0 only
+export function tablesNeeded(scenario: Pick<Scenario, 'key' | 'capacity' | 'plan'>): TablesNeeded
+export function tablesNeededLabel(needed: TablesNeeded): string
+//   "5 × 12, 3 × 11, 1 × 9" ; [] → "brak" ; uses "×" (U+00D7) with spaces
+export const seatsTotal = (needed: TablesNeeded) => needed.reduce((n, x) => n + x.size * x.count, 0)
+```
+
+The size of a mixed-plan table as its fill changes is the state machine in [001-state-machine.md](001-state-machine.md) §6 (a pure function of the live fill; it follows optimistic moves at once).
+
+### 13.2 Where it shows
+
+| Place | Component | Change |
+|---|---|---|
+| Plan cards grid | `PlansPage` | Five cards in `PLAN_KEYS` order, mixed last: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5` (phones 1, tablets 2, laptops 3 + 2, wide screens 5 across). Header copy: "Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany". |
+| Card header | `PlanCard` | Uniform: unchanged (`TableGlyph seats={capacity}`, "{c} miejsc", "Stoły {c}-osobowe"). Mixed: two overlapping glyphs `TableGlyph seats={12}` + smaller `seats={9}`, title **"Mieszany"**, subline "Stoły 9–12-osobowe". `aria-label` from `planTitle`. Links `/plany/{key}`. |
+| Card body (all five) | `PlanCard` → new `TablesNeededLine` | Under `PlanFigures`: **"Potrzebne stoły: 5 × 12, 3 × 11, 1 × 9 (102 miejsca)"** with a tiny `TableGlyph seats={size}` before each group (icon + text). Uniform cards show "Potrzebne stoły: 9 × 12 (108 miejsc)". Hidden when the plan has no non-empty table. This is the comparison figure ("as visual as possible"): sizes and total seats side by side across the five cards. |
+| Mixed card, extra table | `PlanCard` (mixed only) | When `mixed.tableCount === plan12.tableCount + 1` **and** `isolatedCount(mixed) < isolatedCount(plan12)`: a calm note "1 stół więcej niż plan 12 — mniej osób bez znajomych ({a} zamiast {b})". Derived from the two cached scenarios; nothing when the condition is false (also after hand edits). |
+| Fill bars | `FillBars` | No change; for mixed it scales to `capacity` (12). |
+| Switcher | `PlanSwitcher` | Five entries from `PLAN_KEYS`: "9 miejsc" … "12 miejsc", **"Mieszany"**, each with its table count. On phones it may scroll horizontally inside its own box (`overflow-x-auto`), never the page. |
+| Detail header | `PlanDetailPage` | Title from `planName`; `TablesNeededLine` next to `PlanFigures`. Routes `plany/:planKey`, `druk/:planKey`; the route guard (`CapacityRoute` → **`PlanRoute`**) uses `parsePlanKey`; `/plany/8` and `/druk/8` still redirect to 9; anything else → `/`. URL of the mixed plan: `/wesele/plany/mixed`. |
+| Table card | `TableCard` / `TableSeats` | Mixed: `TableSeats capacity={tableSize(fill) ?? 9}` (seats drawn = derived size; > 12 shows red overflow exactly like today), a size badge **"stół 11-os."** next to the number, counter **"11 os."** (not "11/11", which would always read full). `fillStatus(fill, scenario.capacity, tableCount)` unchanged (12 / floor 8). Uniform: unchanged ("9/10"). Empty table: "pusty — niepotrzebny" in muted text, glyph with 9 grey seats. |
+| Drop preview | `TableCard` `DropHintBanner` | Mixed: "Po przeniesieniu: 11 os. → stół 11-os." / "Po przeniesieniu: 13 os., za dużo osób" (the size from `tableSize(preview.fillAfter, scenario)`). Uniform unchanged. `dropHintLabel(preview, capacity, size?)`. |
+| Print view | `PrintView` / `PrintTableCard` / `domain/printPlan.ts` | Heading "Plan stołów, {c} miejsc przy stole" (uniform) / **"Plan stołów — mieszany (stoły 9–12-osobowe)"**; under it, for every plan, "Potrzebne stoły: …" (it is what the venue needs). Mixed table cards: "Stół 3 · 11-osobowy", seats drawn = size. |
+| Delete one / all | `DeletePlanDialog`, `PlansPage` | Titles via `planTitle`: "Usunąć plan mieszany?"; "Usunąć wszystkie pięć planów?" with one line per plan (five lines). "Usuń wszystkie plany" = **five** `useResetPlan().mutate({key})` via `Promise.allSettled`; failures named by `planName` ("Nie udało się usunąć planu: Mieszany"). Toasts "Usunięto plan mieszany." / "Usunięto wszystkie plany." |
+| Generate / Cofnij | `useGeneratePlans`, `useUndoGenerate`, `domain/planView.ts` | Everything keyed by `key`: `toScenariosReplace(proposals.map(p => ({key: p.key, basedOnVersion: snapshot[p.key].version, plan: p.plan})))`, `versionsOf(): Record<PlanKey, number>` over `PLAN_KEYS`, `GenerateUndo.generatedVersions: Record<PlanKey, number>`, `canUndoGenerate` requires `scenarios.length === PLAN_KEYS.length`. Success toast **"Zapisano nowe plany: 9, 10, 11, 12 miejsc i mieszany."** (`GENERATE_SAVED_MESSAGE(keys)`). Running label unchanged ("Liczę i zapisuję plany…"; ~4–5 s now). |
+| Optimistic edits, add/remove table, pins | `api/scenarios.ts` hooks | Argument `{ key: PlanKey }` instead of `{ capacity }`; cache lookups/replacements by `scenario.key`; paths `'/scenarios/{planKey}/…'`. |
+| Isolation cue | §12 | Unchanged; the mixed card's isolated count is what the "1 stół więcej" note compares. |
+
+### 13.3 Copy (Polish, new or changed)
+
+"Mieszany", "Stoły 9–12-osobowe", "Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany", "Potrzebne stoły: {lista} ({n} miejsc)", "stół {s}-os.", "{n} os.", "pusty — niepotrzebny", "1 stół więcej niż plan 12 — mniej osób bez znajomych ({a} zamiast {b})", "Plan stołów — mieszany (stoły 9–12-osobowe)", "Stół {n} · {s}-osobowy", "Usunąć plan mieszany?", "Usunąć wszystkie pięć planów?", "Usunięto plan mieszany.", "Zapisano nowe plany: 9, 10, 11, 12 miejsc i mieszany.", "Nie udało się usunąć planu: Mieszany". Polish plural via `pluralPl` for "miejsce/miejsca/miejsc".
+
+### 13.4 Tests (B2)
+
+- `domain/tableSizes.test.ts`: `tableSize` for mixed fills 0 → null, 1, 8, 9 → 9, 10 → 10, 11 → 11, 12 → 12, 13 → 12; uniform `capacity` 10 with fill 7 → 10 and fill 0 → null; `tablesNeeded` (mixed fills [12, 8, 11, 12, 0] → [{12,2},{11,1},{9,1}]; uniform 3 tables + 1 empty → [{10,3}]); `tablesNeededLabel` ("2 × 12, 1 × 11, 1 × 9", "brak"); `seatsTotal`.
+- `domain/plans.test.ts`: `PLAN_KEYS` order; `parsePlanKey` ('9', 'mixed' → key; '8', '13', 'Mixed', undefined → null); `isRetiredPlanKey('8')`; `planName` / `planTitle`.
+- `domain/planView.test.ts`: `toScenariosReplace` emits `key` (no `capacity`); `versionsOf` over five, throws when one is missing; `canUndoGenerate` false with four scenarios, true with five matching.
+- MSW hook tests: `useGeneratePlans` sends five layouts with snapshot versions keyed by `key`; `useResetPlan({key: 'mixed'})` hits `DELETE /scenarios/mixed/tables` and replaces only that scenario; optimistic move in the mixed plan updates the derived size (fill 10 → 11 changes the badge to "stół 11-os.").
+- Pages: `PlansPage` renders five cards with "Mieszany" last and a "Potrzebne stoły" line on each; delete-all dialog lists five plans and sends five DELETEs; partial failure names "Mieszany"; the "1 stół więcej niż plan 12" note appears only when both conditions hold. `PlanDetailPage` at `/plany/mixed`: switcher has five entries, table badges show sizes, empty table text. `PrintView` at `/druk/mixed`: heading and "Potrzebne stoły". Route guard: `/plany/8` → `/plany/9`, `/plany/13` → `/`.
+- Fixtures (`features/plans/fixtures.ts`): add a mixed scenario (`key: 'mixed', capacity: 12`, fills 12, 8, 11) and `key` on the existing four.
+
+### 13.5 Pattern check
+
+No new library, no client store, no new hook. Two pure modules (`plans.ts`, `tableSizes.ts`) and props. Rejected: a server field for sizes (derivable, DRY); a per-plan-kind component tree (`MixedPlanCard`) — one `PlanCard` with a small `isMixed` branch in the header (KISS); a "table inventory" input (the user chose "Algorytm sam dobiera rozmiary").

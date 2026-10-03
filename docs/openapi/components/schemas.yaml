@@ -111,7 +111,7 @@ Guest:
       example: false
     enabled:
       type: boolean
-      description: Disabled guests stay on the list but are ignored by all four plans.
+      description: Disabled guests stay on the list but are ignored by all five plans.
       example: true
     version:
       type: integer
@@ -414,10 +414,24 @@ ImportReportResponse:
       $ref: '#/Meta'
 
 # ---------- scenarios ----------
+PlanKey:
+  type: string
+  enum: ['9', '10', '11', '12', mixed]
+  x-enum-varnames: [Seats9, Seats10, Seats11, Seats12, Mixed]
+  description: |
+    Identity of one of the five permanent plans, always listed in this order: the uniform plans
+    `9`, `10`, `11`, `12` (every table has that many seats) and `mixed` ("Mieszany": tables of 9–12
+    seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
+  example: '10'
 Capacity:
   type: integer
   enum: [9, 10, 11, 12]
-  description: Seats per table; identifies one of the four plans.
+  description: |
+    Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
+    exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
+    9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
+    no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+    `PlanTable.fill`; no size is stored or sent.
   example: 10
 ClusterPlacement:
   type: object
@@ -448,7 +462,9 @@ PlanTable:
     fill:
       type: integer
       minimum: 0
-      description: Enabled guests at the table.
+      description: |
+        Enabled guests at the table. In the mixed plan it also gives the table's size (see
+        `Capacity`): the client derives it, nothing else is sent.
       example: 9
     score:
       type: number
@@ -566,8 +582,10 @@ SeatingPlan:
         $ref: '#/Violation'
 Scenario:
   type: object
-  required: [capacity, version, plan]
+  required: [key, capacity, version, plan]
   properties:
+    key:
+      $ref: '#/PlanKey'
     capacity:
       $ref: '#/Capacity'
     version:
@@ -602,8 +620,10 @@ Proposal:
   description: |
     Auto-seating result for one plan, computed by `POST /scenarios/calculate` (never stored by that
     call). "Generuj plany" stores it at once through `PUT /scenarios`; there is no preview.
-  required: [capacity, basedOnVersion, plan]
+  required: [key, capacity, basedOnVersion, plan]
   properties:
+    key:
+      $ref: '#/PlanKey'
     capacity:
       $ref: '#/Capacity'
     basedOnVersion:
@@ -619,7 +639,7 @@ ProposalListResponse:
   properties:
     data:
       type: array
-      description: Always exactly four proposals, ordered 9, 10, 11, 12.
+      description: Always exactly five proposals, ordered 9, 10, 11, 12, mixed.
       items:
         $ref: '#/Proposal'
     meta:
@@ -655,11 +675,11 @@ TableLayout:
 ScenarioLayout:
   type: object
   description: The full content of one plan to store (tables, assignments, pins).
-  required: [capacity, basedOnVersion, tables]
+  required: [key, basedOnVersion, tables]
   additionalProperties: false
   properties:
-    capacity:
-      $ref: '#/Capacity'
+    key:
+      $ref: '#/PlanKey'
     basedOnVersion:
       type: integer
       minimum: 1
@@ -673,15 +693,15 @@ ScenarioLayout:
 ScenariosReplace:
   type: object
   description: |
-    All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+    All five plans, each key (9, 10, 11, 12, mixed) exactly once, in any order. Stored atomically
     by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
   required: [plans]
   additionalProperties: false
   properties:
     plans:
       type: array
-      minItems: 4
-      maxItems: 4
+      minItems: 5
+      maxItems: 5
       items:
         $ref: '#/ScenarioLayout'
 AssignmentSet:

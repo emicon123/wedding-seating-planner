@@ -1,5 +1,5 @@
 parameters:
-  - $ref: ../components/parameters.yaml#/Capacity
+  - $ref: ../components/parameters.yaml#/PlanKey
   - $ref: ../components/parameters.yaml#/TableNumber
 delete:
   tags: [scenarios]

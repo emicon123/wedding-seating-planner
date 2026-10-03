@@ -1,5 +1,5 @@
 parameters:
-  - $ref: ../components/parameters.yaml#/Capacity
+  - $ref: ../components/parameters.yaml#/PlanKey
 post:
   tags: [scenarios]
   operationId: addTable
@@ -14,6 +14,8 @@ post:
           examples:
             added:
               $ref: ../components/examples.yaml#/Scenario10
+            addedMixed:
+              $ref: ../components/examples.yaml#/ScenarioMixed
     '400':
       $ref: ../components/responses.yaml#/BadRequest
     '401':
@@ -29,12 +31,12 @@ delete:
   operationId: resetPlan
   summary: Delete a plan — remove all its tables, assignments and pins (UC-17)
   description: |
-    "Usuń plan". The scenario itself stays (there are always four plans); it becomes an
+    "Usuń plan". The scenario itself stays (there are always five plans); it becomes an
     empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
     too). Bumps the scenario version, so a "Cofnij" of an earlier Generate is no longer
     possible (`PUT /scenarios` returns 409). Not version-checked, like the other manual plan edits: the result does not
     depend on what the client saw, and repeating it is harmless (idempotent apart from the
-    version bump). No request body. "Usuń wszystkie plany" is four calls, one per capacity.
+    version bump). No request body. "Usuń wszystkie plany" is five calls, one per plan key.
   responses:
     '200':
       description: |

@@ -1,6 +1,6 @@
 # 003 — Backend design (Go): packages, core interfaces, class diagram, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6), task 008 (anneal stage, §2.1), task 009 (access gate, §7) and task 011 (wykluczanie izolacji, §8). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
+Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6), task 008 (anneal stage, §2.1), task 009 (access gate, §7), task 011 (wykluczanie izolacji, §8) and task 013 (the mixed plan, a fifth plan, §9). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
 
 ## 1. Packages and dependency direction
 
@@ -81,7 +81,7 @@ func (g Graph) Warnings() []DataWarning                 // cluster_exceeds_9 / _
 
 type Seat  struct { Guest GuestID; Pinned bool }
 type Table struct { Number int; Seats []Seat }
-type Plan  struct { Capacity int; Tables []Table }      // tables ordered 1..k
+type Plan  struct { Capacity int; Mixed bool; Tables []Table } // tables ordered 1..k; Mixed: the mixed plan (Capacity 12), task 013 §9
 
 type Evaluation struct {
     Summary     Summary
@@ -98,7 +98,7 @@ type Violation  struct { Code ViolationCode; Table int /*0 = none*/; Guests []Gu
 type DataWarning struct { Code WarningCode; Guests []GuestID }
 
 func Evaluate(g Graph, p Plan) Evaluation         // disabled seats are ignored; NeedsRecalculation = len(Violations) > 0
-func Propose(g Graph, current Plan) Plan          // deterministic; keeps pinned clusters; enabled guests only
+func Propose(g Graph, current Plan) Plan          // deterministic; keeps pinned clusters; enabled guests only; current.Mixed → k0 / k0+1 rule (§9); result keeps Capacity and Mixed
 func ExpandDisabled(g Graph, p Plan) Plan          // adds each placed cluster's unlisted disabled members to its table (used by Service.Replace)
 ```
 
@@ -179,38 +179,42 @@ func (s *Service) Import(ctx, r io.Reader, dryRun bool) (importcsv.Report, error
 ### 2.3 `internal/scenarios`
 
 ```go
-type PlanState struct { Version int64; Plan seating.Plan }   // reuses seating.Plan (DRY): Capacity, Tables, Seats(+Pinned)
+type PlanState struct { Version int64; Plan seating.Plan }   // reuses seating.Plan (DRY): Capacity, Mixed, Tables, Seats(+Pinned)
+func (p PlanState) Key() Key
+type Key struct { Capacity int; Mixed bool }                 // task 013: plan identity; String() "9".."12" / "mixed"
+var Keys = [5]Key{{9,false},{10,false},{11,false},{12,false},{12,true}}   // canonical order (replaces Capacities)
+func ParseKey(s string) (Key, bool)
 
 type Store interface {                       // implemented by *store.Scenarios
-    List(ctx) ([]PlanState, error)                                    // 4, ordered by capacity (9, 10, 11, 12)
-    Get(ctx, capacity int) (PlanState, error)
+    List(ctx) ([]PlanState, error)                                    // 5, ordered 9, 10, 11, 12, mixed
+    Get(ctx, key Key) (PlanState, error)
     ReplacePlans(ctx, ps []PlanReplace) ([]PlanState, error)          // task 007: all given plans in ONE transaction; any stale → ErrVersionConflict, nothing written
-    SeatCluster(ctx, capacity int, members []int64, tableNumber int, pinned bool) (PlanState, error)
-    UnseatCluster(ctx, capacity int, members []int64) (PlanState, error)
-    AddTable(ctx, capacity int) (PlanState, error)
-    RemoveTable(ctx, capacity, number int) (PlanState, error)
-    ClearPlan(ctx, capacity int) (PlanState, error)                   // delete plan: all tables (cascade: assignments, pins); version+1
+    SeatCluster(ctx, key Key, members []int64, tableNumber int, pinned bool) (PlanState, error)
+    UnseatCluster(ctx, key Key, members []int64) (PlanState, error)
+    AddTable(ctx, key Key) (PlanState, error)
+    RemoveTable(ctx, key Key, number int) (PlanState, error)
+    ClearPlan(ctx, key Key) (PlanState, error)                   // delete plan: all tables (cascade: assignments, pins); version+1
 }
 type GuestSource interface { List(ctx) ([]guests.Guest, []guests.Link, error) } // *store.Guests satisfies it
 
 type Evaluated   struct { State PlanState; Eval seating.Evaluation }
 type Proposal    struct { BasedOnVersion int64; Plan seating.Plan; Eval seating.Evaluation }
-type PlanInput   struct { Capacity int; BasedOn int64; Tables []seating.Table }      // one ScenarioLayout; Seat.Pinned = id ∈ pinnedGuestIds
-type PlanReplace struct { Capacity int; ExpectedVersion int64; Plan seating.Plan }   // what the store writes
+type PlanInput   struct { Key Key; BasedOn int64; Tables []seating.Table }           // one ScenarioLayout; Seat.Pinned = id ∈ pinnedGuestIds
+type PlanReplace struct { Key Key; ExpectedVersion int64; Plan seating.Plan }        // what the store writes
 
 type Service struct { plans Store; guests GuestSource }
 func NewService(p Store, g GuestSource) *Service
 func (s *Service) List(ctx) ([]Evaluated, error)
-func (s *Service) Calculate(ctx) ([]Proposal, error)                                  // Propose ×4 (9, 10, 11, 12) from ONE graph
+func (s *Service) Calculate(ctx) ([]Proposal, error)                                  // Propose ×5 (9, 10, 11, 12, mixed) from ONE graph, parallel goroutines
 func (s *Service) Replace(ctx, in []PlanInput) ([]Evaluated, error)              // task 007, PUT /scenarios (Generate store + Cofnij); replaces Accept
-        // capacities 9,10,11,12 exactly once → per plan: validLayout (1..k, known guests, no duplicates)
+        // keys 9,10,11,12,mixed exactly once → per plan: validLayout (1..k, known guests, no duplicates)
         // + pinned ⊆ its table → pin spread to every seat of a pinned cluster (pinnedClusterKeys of the INPUT)
-        // → ExpandDisabled → plans.ReplacePlans (one tx) → Evaluate each; ordered 9..12
-func (s *Service) Seat(ctx, capacity int, guestID int64, table int, pinned bool) (Evaluated, error) // whole cluster (ClusterOf.Members)
-func (s *Service) Unseat(ctx, capacity int, guestID int64) (Evaluated, error)
-func (s *Service) AddTable(ctx, capacity int) (Evaluated, error)
-func (s *Service) RemoveTable(ctx, capacity, number int) (Evaluated, error)
-func (s *Service) Reset(ctx, capacity int) (Evaluated, error)        // UC-17 "Usuń plan": s.edit(ClearPlan); no version check
+        // → ExpandDisabled → plans.ReplacePlans (one tx) → Evaluate each; ordered 9, 10, 11, 12, mixed
+func (s *Service) Seat(ctx, key Key, guestID int64, table int, pinned bool) (Evaluated, error) // whole cluster (ClusterOf.Members)
+func (s *Service) Unseat(ctx, key Key, guestID int64) (Evaluated, error)
+func (s *Service) AddTable(ctx, key Key) (Evaluated, error)
+func (s *Service) RemoveTable(ctx, key Key, number int) (Evaluated, error)
+func (s *Service) Reset(ctx, key Key) (Evaluated, error)        // UC-17 "Usuń plan": s.edit(ClearPlan); no version check
 ```
 
 ### 2.4 `internal/store`, `internal/httpapi`, `internal/apperr`, `cmd/server`
@@ -266,6 +270,7 @@ classDiagram
         }
         class Plan {
             +Capacity int
+            +Mixed bool
             +Tables []Table
         }
         class Evaluation {
@@ -321,11 +326,11 @@ classDiagram
             +List(ctx) []Evaluated
             +Calculate(ctx) []Proposal
             +Replace(ctx, plans) []Evaluated
-            +Seat(ctx, capacity, guestID, table, pinned) Evaluated
-            +Unseat(ctx, capacity, guestID) Evaluated
-            +AddTable(ctx, capacity) Evaluated
-            +RemoveTable(ctx, capacity, number) Evaluated
-            +Reset(ctx, capacity) Evaluated
+            +Seat(ctx, key, guestID, table, pinned) Evaluated
+            +Unseat(ctx, key, guestID) Evaluated
+            +AddTable(ctx, key) Evaluated
+            +RemoveTable(ctx, key, number) Evaluated
+            +Reset(ctx, key) Evaluated
         }
         class ScenariosStore {
             <<interface>>
@@ -342,6 +347,13 @@ classDiagram
         class PlanState {
             +Version int64
             +Plan Plan
+            +Key() Key
+        }
+        class Key {
+            <<value object>>
+            +Capacity int
+            +Mixed bool
+            +String() string
         }
     }
     namespace store {
@@ -374,6 +386,8 @@ classDiagram
     StoreGuests ..|> GuestSource : implements
     StoreScenarios ..|> ScenariosStore : implements
     PlanState *-- Plan
+    PlanState ..> Key : Key()
+    ScenariosService ..> Key : addresses plans by
     SeatingFuncs ..> Graph : builds
     Graph *-- Cluster
     SeatingFuncs ..> Evaluation : returns
@@ -391,7 +405,7 @@ classDiagram
 | `httpapi.Server` | **Adapter** (to the generated strict-server interface) | Transport only: decode, call one service method, map. |
 | `Mappers` / `errorResponse` | **DTO + Mapper**, **DRY** | One mapper per type and one error mapper for every handler. |
 | `PlanState{Version; Plan seating.Plan}` | **Composition**, **DRY** | Reuses the core's `Plan` instead of a parallel struct (fixed in the audit). |
-| `version` checks in `Update` / `ReplacePlans` | **Optimistic Offline Lock** | Two flows can clobber: a guest edit form and replacing all four plans (storing a Generate over plans the user saw, or a Cofnij over the Generate's result). Manual plan edits (`Seat`, `Unseat`, `AddTable`, `RemoveTable`, `Reset`) are not version-checked: their result does not depend on a snapshot the client saw. They still bump the version, which is what makes a later Cofnij a 409. |
+| `version` checks in `Update` / `ReplacePlans` | **Optimistic Offline Lock** | Two flows can clobber: a guest edit form and replacing all five plans (storing a Generate over plans the user saw, or a Cofnij over the Generate's result). Manual plan edits (`Seat`, `Unseat`, `AddTable`, `RemoveTable`, `Reset`) are not version-checked: their result does not depend on a snapshot the client saw. They still bump the version, which is what makes a later Cofnij a 409. |
 | `cmd/server.run` | **Composition root** | Explicit constructor wiring, no DI container, testable through `run(args, getenv)`. |
 | Union-find inside `BuildGraph` | Algorithm, not a pattern | Connected components of group-0 links. |
 
@@ -413,8 +427,8 @@ classDiagram
 | Decorator | adopted only as chi middleware | Request ID, recoverer, logging, body limit: the idiomatic `func(http.Handler) http.Handler`. |
 | Generic repository | rejected | Two aggregates with different operations. |
 | Clock / ID-generator interfaces | rejected | Timestamps come from SQL defaults; ids from SQLite. |
-| Atomic four-plan replace (`ReplacePlans`, task 007) | **adopted, one store method** | A half-applied Generate is worse than none. One store method = one transaction, so no Unit of Work object is needed. |
-| Batch "delete all plans" endpoint (Unit of Work over 4 scenarios) | rejected | Four independent `DELETE /scenarios/{capacity}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the four plans to be cleared atomically (contrast: Generate, which must replace all four at once). |
+| Atomic all-plans replace (`ReplacePlans`, task 007; five plans since task 013) | **adopted, one store method** | A half-applied Generate is worse than none. One store method = one transaction, so no Unit of Work object is needed. |
+| Batch "delete all plans" endpoint (Unit of Work over 5 scenarios) | rejected | Five independent `DELETE /scenarios/{planKey}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the four plans to be cleared atomically (contrast: Generate, which must replace all four at once). |
 
 ## 5. Clean-architecture / SOLID / YAGNI audit (Skill 16)
 
@@ -797,3 +811,113 @@ D1 isolated `a` moves to its partner's table (ΔI = −size a); D2 partner leavi
 | Product option "add a table to remove isolation" | deferred | Trade-off belongs to the user; Phase C brings the numbers (§8.6). |
 
 Audit: SRP kept (`seating` only); DRY — one `hasPartners()` for Evaluate and items, one `objective()` from scratch, deltas specified once (§8.3) and checked by the property test; no new package, no new dependency; determinism and the fixed budgets unchanged.
+
+## 9. Task 013 — The mixed plan (a fifth plan)
+
+Rules: [../03-seating-model.md](../03-seating-model.md) § The mixed plan. Contract: `PlanKey` (`"9"`, `"10"`, `"11"`, `"12"`, `"mixed"`), `Scenario.key`, `Proposal.key`, `ScenarioLayout.key` (replaces `ScenarioLayout.capacity`), path parameter `{planKey}` (replaces `{capacity}`; the URLs of the four uniform plans are byte-identical), "exactly five" everywhere. Schema: [002-erd.md](002-erd.md) + `backend-go/db/migrations/00003_mixed_plan.sql` (Architect-owned, already written and verified). `sqlcgen` was regenerated against it (adds `Scenario.Mixed`); the **queries** are Backend-Go's to change (below). **Between Phase A and B1 `main` does not pass `go test` and must not be deployed:** with the migration applied `GetScenario WHERE capacity = 12` matches two rows and `List` returns five.
+
+### 9.1 Identity: `(capacity, mixed)` in the DB, `scenarios.Key` in Go, `PlanKey` in the API
+
+```mermaid
+flowchart LR
+    DB["scenario row<br/>capacity 12, mixed 1"] -->|"store: rowToState"| D["PlanState.Plan{Capacity 12, Mixed true}<br/>PlanState.Key() = Key{12, true}"]
+    D -->|"httpapi: Key.String()"| API["Scenario{key: 'mixed', capacity: 12}"]
+    URL["/scenarios/mixed/tables"] -->|"httpapi: scenarios.ParseKey (unknown → 404)"| K["Key{12, true}"] -->|"store: WHERE capacity = ? AND mixed = ?"| DB
+```
+
+*Legend:* one identity, three representations, one mapping function per boundary (**DTO + Mapper**, DRY). `capacity` keeps its meaning (max guests per table) in every layer, so `Evaluate`, violation messages and the client's fill status need no change. `Key` is a **value object** (comparable struct, usable as a map key for `generatedVersions`-style lookups in tests). Rejected: capacity `0` as the mixed key (magic number in URLs and the DB), a string `plan_key` column (duplicates `capacity` or forces parsing it back; ordering needs a CASE), a separate `kind` enum column (two values = a boolean).
+
+### 9.2 `internal/seating`
+
+```go
+type Plan struct { Capacity int; Mixed bool; Tables []Table }   // Mixed only changes Propose; Evaluate ignores it
+
+// Propose: if current.Mixed → proposeMixed; else unchanged. The result always carries current.Capacity and current.Mixed.
+func Propose(g Graph, current Plan) Plan
+
+// propose.go — pure refactor of today's k loop so both paths share it (no behaviour change for uniform plans):
+// solve returns the optimised feasible layout at the smallest feasible k (nil if none) and the
+// best-effort plan (fewest violations) used when it is nil.
+func solve(g Graph, it items, pins map[int]int) (l *layout, bestEffort Plan)
+
+// proposeMixed (capacity = current.Capacity = 12):
+//   l0, be := solve(g, it, pins); if l0 == nil → return be (Mixed = true)
+//   o0 := l0.objective()
+//   if o0.iso == 0 || (l0.k+1)*Floor > it.total → return l0
+//   l1, _ := feasibleAt(it, l0.k+1, pins)                 // same pins map; a pin to table k0+1 is kept here
+//   if l1 != nil && l1.objective().iso < o0.iso → return l1   // strictly fewer isolated; score not compared
+//   return l0
+func proposeMixed(g Graph, current Plan) Plan
+```
+
+- `pinTargets` already maps pins to 0-based tables; `pack` releases a pin to a table ≥ k, so the same `pins` map serves k0 and k0 + 1.
+- No new constants, no new PRNG use: `feasibleAt` → `optimise` is called as today (its seeds are constants), so the mixed plan is deterministic and, when k0 is chosen with the same pins, **identical to plan 12** (flagged in 03-seating-model; not a bug).
+- `ExpandDisabled`, `Evaluate`, `BuildGraph`: no change. `Evaluate` must keep returning `Plan.Mixed` untouched where it echoes the plan (it does not today; nothing to do).
+
+### 9.3 `internal/scenarios`, `internal/apperr`
+
+- `Key`, `Keys`, `ParseKey`, `Key.String()`, `PlanState.Key()` as in [../04-data-model.md](../04-data-model.md) §1. `Capacities` and `checkCapacities` are replaced by `Keys` and `checkKeys` ("Exactly 5 plans are required (9, 10, 11, 12, mixed).", "Unknown plan …", "Plan … appears more than once.").
+- `Calculate`: iterates `Keys` in parallel goroutines (one slot each, order kept); `Propose(graph, current.Plan)` already carries `Mixed`. `Proposal` gets nothing new (its `Plan` carries Capacity + Mixed; httpapi derives `key`).
+- `Replace`: `validLayout(g, key, tables)` builds `seating.Plan{Capacity: key.Capacity, Mixed: key.Mixed}`; error messages name the plan by `key.String()` ("Plan mixed: …", "Plan 10: …"); `PlanReplace` sorted by `Keys` order.
+- Per-plan methods take `Key` instead of `capacity int`; behaviour unchanged.
+- `apperr.StaleVersion{Capacity int; …}` → `StaleVersion{Plan string; Current int64}` (apperr cannot import scenarios), message "Plan mixed was changed by someone else (current version 9)."
+
+### 9.4 `internal/store`, queries (Backend-Go owns `db/queries/*.sql`)
+
+| Query | Change |
+|---|---|
+| `ListScenarios` | `ORDER BY mixed, capacity` (→ 9, 10, 11, 12, mixed) |
+| `GetScenario` | `WHERE capacity = ? AND mixed = ?` (the only lookup by identity; all other queries use `scenario_id`) |
+| `bootstrap.sql ListCapacities` | replace by a query returning `(capacity, mixed)` ordered like `ListScenarios`, or drop it if only tests use it |
+| everything else | unchanged (keyed by `scenario_id`) |
+
+`rowToState` sets `Plan.Mixed = row.Mixed != 0`. `ReplacePlans`, `tx(ctx, key, fn)` and the per-plan methods look up by `Key`. Migration test: new `TestMigration00003KeepsEveryRow` (below); `TestMigration00002KeepsEveryRow` must stop at v2 for its assertions (`provider.UpTo(ctx, 2)`) or assert the five-plan end state.
+
+### 9.5 `internal/httpapi`
+
+- Regenerate `oapi.gen.go` (`go generate ./...`). New: `type PlanKey string` with consts `Seats9 … Seats12, Mixed` and `PlanKey.Valid()`; handlers receive `request.PlanKey`; `Scenario.Key`, `Proposal.Key`, `ScenarioLayout.Key` (no `Capacity` in `ScenarioLayout`).
+- `parseKey(oapi.PlanKey) (scenarios.Key, error)` — one helper; unknown → `apperr.ErrNotFound` (404 `not_found`, the same answer an unknown capacity gave; chi does not validate the enum). In `fromScenariosReplace` an unknown key → 422 `validation_failed` (body problem, like a bad capacity was).
+- `toScenario` / `toProposal`: `Key: oapi.PlanKey(state.Key().String())`, `Capacity: oapi.Capacity(plan.Capacity)` (12 for mixed).
+- No new field for table sizes or "potrzebne stoły" (client-derived, see the `Capacity` schema description).
+
+### 9.6 Time budget
+
+Generate = five `Propose` calls in parallel; the mixed one does one or two solves (§ The mixed plan, "Time budget"). Expected on the Pi: **≈ 4.0 s** on the live list (mixed: one solve, its k0 layout has 0 isolated), **≈ 4.8 s** worst case; target ≲ 5 s. The two solves stay sequential. Re-measure in B1: `BenchmarkProposeTight` (unchanged) + a timing of `Service.Calculate` on `STOLIKI_TUNE_INPUT` (five plans), and record the numbers in 03-seating-model § Auto-seating.
+
+### 9.7 Tests (B1) — real SQLite, no mocks
+
+**seating** (`propose_test.go` / new `mixed_test.go`):
+
+| # | Case | Expected |
+|---|---|---|
+| M1 | Example C (M[3] —1— P[5], strangers 6, 2, 5, 3; N = 24), `Plan{Capacity: 12, Mixed: true}` | 3 tables, fills 8/8/8, `Summary.Isolated == 0`; same input non-mixed (plan 12): 2 tables, 8 isolated |
+| M2 | Example A (Michał; k0 = 2 has 0 isolated) | 2 tables, identical to `Propose(Plan{Capacity: 12})` (tables and seats; equality is the assertion) |
+| M3 | Example B (structural isolation M[4] —1— X[10] + strangers) with N large enough that (k0+1)·8 ≤ N | k0 (k0 + 1 does not strictly lower the isolated count) |
+| M4 | (k0 + 1)·8 > N while k0 has isolated guests (e.g. N = 23 with an unavoidable isolation) | k0, no panic |
+| M5 | k0 + 1 lowers isolation but has a **lower score** | k0 + 1 chosen (isolation primary) |
+| M6 | k0 + 1 equal isolated count, higher score | k0 (score never buys a table) |
+| M7 | Pins: a cluster pinned to table 3 in a mixed plan, k0 = 2 and k0 + 1 = 3 helps → pin kept at table 3; k0 + 1 does not help → plan has 2 tables and the pin is released | as stated |
+| M8 | Infeasible input (cluster sizes cannot meet the floor at capacity 12) | same best-effort plan as plan 12, `Mixed` true |
+| M9 | Determinism: M1–M7 run twice → identical plans | — |
+| M10 | Result carries `Capacity 12, Mixed true`; every table fill in [8, 12] (k > 1) | — |
+
+**scenarios** (`service_test.go`): `List` returns five in order 9, 10, 11, 12, mixed (empty mixed plan has `unseated_guests`); `Calculate` returns five proposals in that order, the mixed one with `Plan.Mixed`; `Replace` requires exactly the five keys (4 plans → 422, duplicate mixed → 422, unknown → 422), stores five, bumps five versions, error messages name "mixed"; one stale mixed version → `ErrVersionConflict`, nothing written in any plan; per-plan `Seat`/`Unseat`/`AddTable`/`RemoveTable`/`Reset` on `Key{12, true}` touch only the mixed plan (plan 12 unchanged, and vice versa); overfilling a mixed table to 13 → `over_capacity`.
+
+**store**: `TestMigration00003KeepsEveryRow` (pattern of the 00002 test: `UpTo(2)`, fill guests/links/tables/assignments/pins in all four plans with non-default versions, `Migrate`, assert every row and id unchanged, versions unchanged, a fifth row `(12, 1)` version 1 with no tables, `PRAGMA foreign_key_check` empty, inserting `(11, 1)`, a second `(12, 1)` or `(12, 0)` fails); `List` five ordered; `Get(Key{12,true})` ≠ `Get(Key{12,false})`; `ReplacePlans` over five; `ClearPlan(mixed)` leaves plan 12 untouched.
+
+**httpapi**: `GET /scenarios` five items with `key` and `capacity` (mixed: 12); `POST /scenarios/calculate` five; `PUT /scenarios` with five → 200, with four or with a `capacity` field (old body) → 400/422; `DELETE /scenarios/mixed/tables` 200; `/scenarios/13/tables` and `/scenarios/foo/tables` → 404 `not_found`; `PUT /scenarios/mixed/assignments/{id}` and `POST /scenarios/mixed/tables` work; the URLs `/scenarios/9…12/…` unchanged.
+
+**cmd/server**: `TestBackupSubcommand` expects five scenarios.
+
+### 9.8 Pattern evaluation and audit (task 013)
+
+| Candidate | Verdict | Reason |
+|---|---|---|
+| Strategy (uniform vs mixed seating) | rejected | One algorithm plus one decision after it (k0 vs k0 + 1); a flag on `Plan` and a ~15-line function. A Strategy interface would add a type hierarchy for two branches (YAGNI). |
+| `Plan.Mixed bool` vs a `Kind` enum | **`Mixed bool` adopted** | Two kinds only; a bool mirrors the DB column 1:1. |
+| `scenarios.Key` value object | **adopted** | Replaces `capacity int` as identity everywhere; comparable, parse/format in one place. |
+| Server-side table size / "potrzebne stoły" field | rejected | Pure function of `fill` (+ key); no consumer on the server; the client derives it (no contract field to keep in sync). |
+| Parallelising the mixed plan's two solves | rejected | CPU already saturated by restarts; the second solve depends on the first. |
+| Reusing plan 12's proposal for the mixed k0 | deferred | Only if B1 measures Generate > 5 s (identical input ⇒ identical result when pins match). |
+
+Audit: SRP kept (seating decides k; scenarios orchestrates; store maps rows; httpapi maps keys). DRY: one key mapping per boundary; size rule written once (contract + 03-seating-model) and implemented once (client). No new package, no new dependency. Determinism and budgets unchanged.

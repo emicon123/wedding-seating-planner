@@ -61,8 +61,18 @@ type ImportLink struct {     // link between guests that have no ids yet (CSV im
 // package scenarios
 type PlanState struct {      // one stored plan, as loaded for evaluation
     Version int64
-    Plan    seating.Plan     // Capacity (9/10/11/12) + Tables (ordered 1..k) + Seats{Guest, Pinned}
+    Plan    seating.Plan     // Capacity (9/10/11/12) + Mixed (task 013) + Tables (ordered 1..k) + Seats{Guest, Pinned}
 }
+func (p PlanState) Key() Key  // Key{Capacity: p.Plan.Capacity, Mixed: p.Plan.Mixed}
+
+// Key identifies one of the five plans (task 013). API form: "9", "10", "11", "12", "mixed".
+type Key struct {
+    Capacity int          // 9..12; 12 for the mixed plan
+    Mixed    bool
+}
+var Keys = [5]Key{{9, false}, {10, false}, {11, false}, {12, false}, {12, true}}  // the canonical order
+func ParseKey(s string) (Key, bool) // "9"…"12" → uniform, "mixed" → {12, true}; anything else → false
+func (k Key) String() string        // inverse of ParseKey
 ```
 
 `internal/seating` takes plain values (guests as id + enabled, links, `seating.Plan`) and returns a `Graph`, an `Evaluation` or a proposed `Plan`. The exact signatures are in [diagrams/003-backend-design.md](diagrams/003-backend-design.md) §2.
@@ -98,11 +108,12 @@ type PlanState struct {      // one stored plan, as loaded for evaluation
 
 | DB | Domain | DTO |
 |---|---|---|
-| `scenario.capacity`, `scenario.version` | `PlanState.Plan.Capacity`, `PlanState.Version` | `Scenario.capacity`, `.version` |
+| `scenario.capacity`, `scenario.mixed` (0/1) | `PlanState.Plan.Capacity`, `PlanState.Plan.Mixed` → `PlanState.Key()` | `Scenario.key` (`Key.String()`: `"9"`…`"12"`, `"mixed"`) and `Scenario.capacity` (12 for mixed) |
+| `scenario.version` | `PlanState.Version` | `Scenario.version` |
 | `dining_table.number` | `seating.Table.Number` | `PlanTable.number` |
 | `assignment.guest_id`, `.pinned` | `seating.Seat{Guest, Pinned}` | Grouped by cluster → `PlanTable.clusters[] (ClusterPlacement)` |
 | — (derived by `seating.Evaluate`) | evaluation value | `SeatingPlan.summary`, `tables[].fill/score`, `unseated`, `guestScores`, `violations` |
-| — (derived by `seating.Propose`) | proposal value | `Proposal { capacity, basedOnVersion = PlanState.Version, plan }` (returned by `POST /scenarios/calculate`; the SPA stores it at once via `PUT /scenarios`) |
+| — (derived by `seating.Propose`) | proposal value | `Proposal { key, capacity, basedOnVersion = PlanState.Version, plan }` (returned by `POST /scenarios/calculate`; the SPA stores it at once via `PUT /scenarios`) |
 | — (derived by `seating.Clusters`) | clusters + warnings | `ClusterOverview` |
 
 `ClusterPlacement.guestIds` lists **enabled** members only. Disabled members keep their assignment rows but are invisible in plan DTOs (they are visible in `GET /guests` and `GET /clusters`).
@@ -116,10 +127,11 @@ type PlanState struct {      // one stored plan, as loaded for evaluation
 | `GuestBulkToggle` | `GuestStore.SetEnabled(ids, enabled)` |
 | `GuestLinkUpsert` + `linkKey` | `guests.Link` → `GuestStore.UpsertLink` |
 | CSV body (**deferred**) | `importcsv.Parse(io.Reader)` → rows + index links + report → dry run returns the report; commit → `GuestStore.ReplaceAll(newGuests, importLinks)` |
-| `ScenariosReplace` (`PUT /scenarios`, task 007) | `fromScenariosReplace`: each `ScenarioLayout` → `scenarios.PlanInput{Capacity, BasedOn, Tables []seating.Table}` (one `Seat{Guest, Pinned: id ∈ pinnedGuestIds}` per listed guest) → `scenarios.Service.Replace` validates all four, spreads each pin to the whole cluster's seats, `seating.ExpandDisabled` → `ScenarioStore.ReplacePlans([]PlanReplace)` (ONE transaction) |
-| `AssignmentSet` + guestId | service resolves the cluster's guest ids (all members) → `ScenarioStore.SeatCluster(capacity, guestIDs, tableNumber, pinned)` |
-| DELETE assignment | `ScenarioStore.UnseatCluster(capacity, guestIDs)` |
-| DELETE `/scenarios/{capacity}/tables` (delete plan, no body) | `ScenarioStore.ClearPlan(capacity)` |
+| `ScenariosReplace` (`PUT /scenarios`, task 007) | `fromScenariosReplace`: each `ScenarioLayout` → `scenarios.PlanInput{Key (ParseKey(layout.key); invalid → 422), BasedOn, Tables []seating.Table}` (one `Seat{Guest, Pinned: id ∈ pinnedGuestIds}` per listed guest) → `scenarios.Service.Replace` validates all five, spreads each pin to the whole cluster's seats, `seating.ExpandDisabled` → `ScenarioStore.ReplacePlans([]PlanReplace)` (ONE transaction) |
+| path `planKey` (every per-plan endpoint) | `scenarios.ParseKey`; unknown → `apperr.ErrNotFound` (404 `not_found`, as an unknown capacity was) |
+| `AssignmentSet` + guestId | service resolves the cluster's guest ids (all members) → `ScenarioStore.SeatCluster(key, guestIDs, tableNumber, pinned)` |
+| DELETE assignment | `ScenarioStore.UnseatCluster(key, guestIDs)` |
+| DELETE `/scenarios/{planKey}/tables` (delete plan, no body) | `ScenarioStore.ClearPlan(key)` |
 
 ### Domain errors → error envelope
 
@@ -156,29 +168,29 @@ type GuestStore interface {
     ReplaceAll(ctx context.Context, gs []guests.NewGuest, ls []guests.ImportLink) error   // DEFERRED (import)
                                                                             // import commit: delete assignments, tables, links, guests;
                                                                             // insert guests (ids assigned), resolve ImportLink indexes → ids,
-                                                                            // insert links; bump all four scenario versions
+                                                                            // insert links; bump all five scenario versions
 }
 
 // ScenarioStore — aggregate root: Scenario (+ tables, assignments)
 type ScenarioStore interface {
-    List(ctx context.Context) ([]scenarios.PlanState, error)               // always 4, ordered by capacity (9, 10, 11, 12)
-    Get(ctx context.Context, capacity int) (scenarios.PlanState, error)
+    List(ctx context.Context) ([]scenarios.PlanState, error)               // always 5, ordered 9, 10, 11, 12, mixed (ORDER BY mixed, capacity)
+    Get(ctx context.Context, key scenarios.Key) (scenarios.PlanState, error) // WHERE capacity = ? AND mixed = ?
     ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace) ([]scenarios.PlanState, error)
                                                                             // task 007, replaces ReplacePlan. ONE transaction for all given plans:
-                                                                            // per plan: UPDATE scenario SET version = version+1 WHERE capacity=? AND version=?
-                                                                            // (0 rows → roll back everything, ErrVersionConflict naming that capacity);
+                                                                            // per plan: UPDATE scenario SET version = version+1 WHERE id=? AND version=? (id from Get(key))
+                                                                            // (0 rows → roll back everything, ErrVersionConflict naming that plan key);
                                                                             // delete its tables (cascade) → insert tables 1..k + assignments(+pinned).
-                                                                            // Returns the new states ordered by capacity.
-    // type PlanReplace struct { Capacity int; ExpectedVersion int64; Plan seating.Plan }   (package scenarios)
-    SeatCluster(ctx context.Context, capacity int, guestIDs []int64, tableNumber int, pinned bool) (scenarios.PlanState, error)
+                                                                            // Returns the new states in plan order (9, 10, 11, 12, mixed).
+    // type PlanReplace struct { Key Key; ExpectedVersion int64; Plan seating.Plan }   (package scenarios)
+    SeatCluster(ctx context.Context, key scenarios.Key, guestIDs []int64, tableNumber int, pinned bool) (scenarios.PlanState, error)
                                                                             // upsert assignment per guest; ErrNotFound if table missing; version+1
-    UnseatCluster(ctx context.Context, capacity int, guestIDs []int64) (scenarios.PlanState, error) // delete assignments; version+1
-    AddTable(ctx context.Context, capacity int) (scenarios.PlanState, error)                         // number = max+1; version+1
-    RemoveTable(ctx context.Context, capacity int, number int) (scenarios.PlanState, error)
+    UnseatCluster(ctx context.Context, key scenarios.Key, guestIDs []int64) (scenarios.PlanState, error) // delete assignments; version+1
+    AddTable(ctx context.Context, key scenarios.Key) (scenarios.PlanState, error)                         // number = max+1; version+1
+    RemoveTable(ctx context.Context, key scenarios.Key, number int) (scenarios.PlanState, error)
                                                                             // delete (cascade unseats) → renumber number>n down by 1; version+1
-    ClearPlan(ctx context.Context, capacity int) (scenarios.PlanState, error)
+    ClearPlan(ctx context.Context, key scenarios.Key) (scenarios.PlanState, error)
                                                                             // delete plan: delete ALL its tables (existing query DeleteScenarioTables;
-                                                                            // assignments + pins go by cascade) → version+1; no version check; ErrNotFound for an unknown capacity
+                                                                            // assignments + pins go by cascade) → version+1; no version check; ErrNotFound for an unknown key
 }
 ```
 
@@ -194,10 +206,10 @@ Notes for implementers:
 | REST over HTTP/JSON (Skill 8) | **adopted** | SPA ↔ one backend, same origin. GraphQL/gRPC add tooling for no gain; no push channel needed |
 | CQS | **adopted** | Queries: `GET /guests`, `/clusters`, `/scenarios`, and `POST /scenarios/calculate` (a pure computation, POST only because it is expensive and not cacheable). Commands return the updated resource so the UI needs no extra round-trip. Generate = query (`calculate`) + command (`PUT /scenarios`), so calculate stays pure (task 007) |
 | Repository | **adopted, 2 stores** | One per aggregate root (Guest, Scenario); sqlc stays inside |
-| Unit of Work | rejected | Each store method is its own transaction. The two multi-aggregate writes are single store methods: import (`ReplaceAll`) and storing/undoing a Generate (`ReplacePlans`, four scenarios in one transaction, task 007) |
+| Unit of Work | rejected | Each store method is its own transaction. The two multi-aggregate writes are single store methods: import (`ReplaceAll`) and storing/undoing a Generate (`ReplacePlans`, five scenarios in one transaction, tasks 007/013) |
 | DTO + Mapper | **adopted** | Plain functions per boundary |
 | Optimistic Offline Lock | **adopted** | `version` on guest and scenario |
 | Identity Map / caching | rejected | ~100 rows; reload per request |
-| Bulk endpoints in general | rejected except toggle and `PUT /scenarios` | "Disable all children" needs bulk (`PATCH /guests`). Generate needs all four plans replaced atomically (a half-applied Generate is worse than none), hence `PUT /scenarios` (task 007), which also serves Cofnij. "Usuń wszystkie plany" stays four per-plan calls (each is safe alone) |
+| Bulk endpoints in general | rejected except toggle and `PUT /scenarios` | "Disable all children" needs bulk (`PATCH /guests`). Generate needs all five plans replaced atomically (a half-applied Generate is worse than none), hence `PUT /scenarios` (task 007), which also serves Cofnij. "Usuń wszystkie plany" stays five per-plan calls (each is safe alone) |
 | Separate `/guest-links` list endpoint | rejected | Links are embedded in `Guest.links`, so the guest screen needs one call |
-| Separate `GET /scenarios/{capacity}` | rejected | `GET /scenarios` returns all four (small payload); mutations return the single updated scenario |
+| Separate `GET /scenarios/{planKey}` | rejected | `GET /scenarios` returns all five (small payload); mutations return the single updated scenario |

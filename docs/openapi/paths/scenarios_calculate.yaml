@@ -1,22 +1,26 @@
 post:
   tags: [scenarios]
   operationId: calculateProposals
-  summary: Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
+  summary: Compute proposals for all five plans — step 1 of "Generuj plany" (UC-10)
   description: |
-    Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
-    current guests, links and pins (pinned clusters stay at their table, `pinned: true`).
-    "Generuj plany" stores the four results straight away: the SPA sends them unchanged to
-    `PUT /scenarios` (one atomic call, version-checked) without showing a preview.
+    Pure computation — nothing is stored. Runs auto-seating for the plans 9, 10, 11, 12 and mixed
+    from the current guests, links and each plan's own pins (pinned clusters stay at their table,
+    `pinned: true`). The mixed plan uses the fewest tables of at most 12 guests, or one table more
+    when that strictly lowers the number of guests sitting without anyone from their groups 1/2
+    (docs/architecture/03-seating-model.md § The mixed plan). "Generuj plany" stores the five results
+    straight away: the SPA sends them unchanged to `PUT /scenarios` (one atomic call,
+    version-checked) without showing a preview.
   responses:
     '200':
-      description: Exactly four proposals, ordered 9, 10, 11, 12.
+      description: Exactly five proposals, ordered 9, 10, 11, 12, mixed.
       content:
         application/json:
           schema:
             $ref: ../components/schemas.yaml#/ProposalListResponse
           example:
             data:
-              - capacity: 9
+              - key: '9'
+                capacity: 9
                 basedOnVersion: 7
                 plan:
                   summary:
@@ -47,7 +51,7 @@ post:
             meta:
               requestId: 01JB8Z6Q0K3N
             page:
-              total: 4
+              total: 5
     '400':
       $ref: ../components/responses.yaml#/BadRequest
     '401':

@@ -1,12 +1,14 @@
 # 001 — State machines (domain lifecycles + UI interaction)
 
-Task 001, Phase 2 (Skill 7); updated 2026-10-02 with the user's answers (enabled toggle, generate-all-three, no login); updated 2026-10-03 for four table sizes 9/10/11/12 (task 006) and for Generate storing at once + Cofnij (task 007). Terms: [../01-domain-glossary.md](../01-domain-glossary.md). Rules: [../03-seating-model.md](../03-seating-model.md).
+Task 001, Phase 2 (Skill 7); updated 2026-10-02 with the user's answers (enabled toggle, generate-all-three, no login); updated 2026-10-03 for four table sizes 9/10/11/12 (task 006) for Generate storing at once + Cofnij (task 007) and for the mixed plan's table sizes (task 013, §6). Terms: [../01-domain-glossary.md](../01-domain-glossary.md). Rules: [../03-seating-model.md](../03-seating-model.md).
 
 Contents:
 1. [Guest lifecycle](#1-guest-lifecycle) (domain)
 2. [Plans: generate (stored at once), Cofnij](#2-plans-generate-stored-at-once-cofnij) (domain + UI)
 3. [Cluster drag & drop](#3-cluster-drag--drop-ui) (UI)
 4. [App shell and screens](#4-app-shell-and-screens) (UI)
+5. [Access gate](#5-access-gate-session-client-view-and-login-throttle-server-view--task-009) (UI + server)
+6. [Mixed plan: table size follows the fill](#6-mixed-plan-table-size-follows-the-fill-task-013) (domain, derived on the client)
 
 ## 1. Guest lifecycle
 
@@ -35,11 +37,11 @@ stateDiagram-v2
 
     note right of Enabled
         Seated / Unseated / Pinned is tracked separately
-        in EACH of the four plans (9 / 10 / 11 / 12).
+        in EACH of the five plans (9 / 10 / 11 / 12 / mixed).
         All members of a cluster share the same table.
     end note
     note right of Disabled
-        Ignored by all four plans: no seat, no fill,
+        Ignored by all five plans: no seat, no fill,
         no score. Links kept, and still define the
         cluster and its affinities. Any assignment is
         kept and follows the cluster, so toggling on
@@ -57,10 +59,10 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> Showing: open plans (GET /scenarios)
     Showing --> Generating: click Generate (no confirmation)
-    Generating --> Undoable: GET snapshot, calculate, PUT /scenarios 200 (all four stored)
+    Generating --> Undoable: GET snapshot, calculate, PUT /scenarios 200 (all five stored)
     Generating --> Showing: 409 (plans changed meanwhile) or error, nothing stored (toast)
     Undoable --> Restoring: Cofnij
-    Restoring --> Showing: PUT /scenarios 200 (previous four plans back)
+    Restoring --> Showing: PUT /scenarios 200 (previous five plans back)
     Restoring --> Showing: 409 or 422, nothing changed, "Nie można cofnąć" (toast)
     Restoring --> Undoable: network or 500 (snapshot kept, retry)
     Undoable --> Showing: any plan version moves on (edit here or elsewhere) / dismiss x / page reload
@@ -101,7 +103,7 @@ stateDiagram-v2
     end note
 ```
 
-*Legend:* the four Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` / `Empty` (inside `Showing`, and equally inside `Undoable`) are tracked per plan and derived by the server (`summary.needsRecalculation` = any violation); `Empty` is a display state (`tableCount = 0`). There is never an automatic regeneration. Generate always produces and stores all four plans, **atomically** (`PUT /scenarios`: all four or none), with no preview and no confirmation (user decision 2026-10-03, task 007). `Undoable` is a client-side state: it holds a one-slot snapshot of the four plans as they were before the Generate; **Cofnij** re-sends it through the same atomic, version-checked call, so it fails cleanly (409, nothing changed) if any plan was edited after the Generate. **Delete plan** (UC-17) has no undo; a confirmation dialog stands in for it.
+*Legend:* the five Scenarios (9, 10, 11, 12, mixed; task 013) are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` / `Empty` (inside `Showing`, and equally inside `Undoable`) are tracked per plan and derived by the server (`summary.needsRecalculation` = any violation); `Empty` is a display state (`tableCount = 0`). There is never an automatic regeneration. Generate always produces and stores all five plans, **atomically** (`PUT /scenarios`: all five or none), with no preview and no confirmation (user decision 2026-10-03, task 007). `Undoable` is a client-side state: it holds a one-slot snapshot of the five plans as they were before the Generate; **Cofnij** re-sends it through the same atomic, version-checked call, so it fails cleanly (409, nothing changed) if any plan was edited after the Generate. **Delete plan** (UC-17) has no undo; a confirmation dialog stands in for it.
 
 ## 3. Cluster drag & drop (UI)
 
@@ -171,7 +173,7 @@ stateDiagram-v2
 ```
 
 *Legend:* the access gate (task 009) wraps this whole machine — see §5; with the gate off there is no login state.
-- `Compare` shows the four plans side by side (2×2 on medium screens, 4 across on wide ones): table count, fill bars, satisfaction and violation count, plus the **Generate** button.
+- `Compare` shows the five plans side by side (2 per row on tablets, 3 + 2 on laptops, 5 across on wide screens; mixed last; task 013): table count, fill bars, satisfaction and violation count, plus the **Generate** button.
 - `PlanDetail` is the floor plan of one plan, with the unseated tray, guest search and a details panel showing where a guest's preferred companions sit, with "via group 0 of X" provenance.
 - `Guests` is the editable list. It has per-row enable switches, a child marker, the relationships panel with per-group link checklists, and data warnings ([003-frontend-design.md](003-frontend-design.md) §5).
 
@@ -219,3 +221,34 @@ stateDiagram-v2
 ```
 
 *Legend:* server-side, in memory, reset by a restart. A client is refused when **either** its own state is `Locked` **or** the global window is `Closed`; `Retry-After` is the longer of the two. A success clears only that client's entry, never the global window.
+
+## 6. Mixed plan: table size follows the fill (task 013)
+
+Rule: [../03-seating-model.md](../03-seating-model.md) § The mixed plan; client functions `tableSize` / `tablesNeeded` in [003-frontend-design.md](003-frontend-design.md) §13.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> NoSize: fill 0
+    NoSize --> Size9: fill 1..9
+    Size9 --> Size10: fill 10
+    Size10 --> Size11: fill 11
+    Size11 --> Size12: fill 12
+    Size12 --> Over12: fill 13+
+    Over12 --> Size12: fill 12
+    Size12 --> Size11: fill 11
+    Size11 --> Size10: fill 10
+    Size10 --> Size9: fill 9 or less
+    Size9 --> NoSize: fill 0
+    note right of Size9
+        fill below 8 with more than one table:
+        still size 9, plus the server's
+        under_floor violation
+    end note
+    note right of Over12
+        size 12, red overflow seats and the
+        server's over_capacity violation
+    end note
+```
+
+*Legend:* the size of one **mixed-plan** table (seats the venue must provide) as a function of its live fill. Moves can jump several states at once (a cluster of 3 takes 9 → 12); the size is always `min{s ∈ 9..12 : s ≥ fill}` (12 above 12), `NoSize` for an empty table. It follows every optimistic move at once, because `applyMove` recomputes `fill`. In a uniform plan the size is constant (`capacity`) for every non-empty table. A pure function of server data, never stored and not a State pattern; violations and scores still come from the server.

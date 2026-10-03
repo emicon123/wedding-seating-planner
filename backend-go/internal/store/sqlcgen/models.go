@@ -45,6 +45,7 @@ type GuestLink struct {
 type Scenario struct {
 	ID        int64
 	Capacity  int64
+	Mixed     int64
 	Version   int64
 	UpdatedAt string
 }

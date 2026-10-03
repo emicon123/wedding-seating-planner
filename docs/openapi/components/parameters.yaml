@@ -8,14 +8,16 @@ GuestId:
     format: int64
     minimum: 1
   example: 4
-Capacity:
-  name: capacity
+PlanKey:
+  name: planKey
   in: path
   required: true
-  description: Identifies the plan by its table capacity.
+  description: |
+    Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+    or `mixed`. Any other value → 404 `not_found`.
   schema:
-    $ref: schemas.yaml#/Capacity
-  example: 10
+    $ref: schemas.yaml#/PlanKey
+  example: '10'
 TableNumber:
   name: tableNumber
   in: path
@@ -42,7 +44,7 @@ DryRun:
   required: false
   description: |
     `true` (default) only validates and returns the report. `false` commits:
-    replaces ALL guests and links and clears all four plans.
+    replaces ALL guests and links and clears all five plans.
   schema:
     type: boolean
     default: true

@@ -2,14 +2,14 @@
 
 Task 003, Phase 5. The participants are the components and packages from [003-frontend-design.md](003-frontend-design.md) and [003-backend-design.md](003-backend-design.md). All HTTP paths are relative to `/wesele/api` ([`docs/openapi.yaml`](../../openapi.yaml)).
 
-1. [Generate all four plans → stored at once → Cofnij](#1-generate-all-four-plans--stored-at-once--cofnij) (task 007)
+1. [Generate all five plans → stored at once → Cofnij](#1-generate-all-five-plans--stored-at-once--cofnij) (tasks 007, 013)
 2. [Move a cluster (drag & drop, optimistic)](#2-move-a-cluster-drag--drop-optimistic)
 3. [Re-enable a guest → plan needs recalculation → regenerate](#3-re-enable-a-guest--plan-needs-recalculation--regenerate)
 4. [Quick-add a guest and link them through the group checklist](#4-quick-add-a-guest-and-link-them-through-the-group-checklist)
 5. [Delete a plan](#5-delete-a-plan-task-005-uc-17)
 6. [Access gate: PIN login, throttling, expiry, logout](#6-access-gate-pin-login-throttling-expiry-logout) (task 009)
 
-## 1. Generate all four plans → stored at once → Cofnij
+## 1. Generate all five plans → stored at once → Cofnij
 
 Task 007 (user decision "Zapisuj od razu"): no preview, no accept, no confirmation. Rules: [../03-seating-model.md](../03-seating-model.md) § Storing a Generate / § Undoing a Generate.
 
@@ -28,24 +28,25 @@ sequenceDiagram
     E->>UI: click "Generuj plany" (or "Przelicz / Generuj")
     UI->>Q: useGeneratePlans().mutateAsync()
     Q->>H: GET /scenarios (fetchQuery, staleTime 0)
-    H-->>Q: 4 Scenarios = undo snapshot (versions v9..v12)
+    H-->>Q: 5 Scenarios = undo snapshot (versions v9..v12, vMixed)
     Q->>H: POST /scenarios/calculate
     H->>S: Calculate(ctx)
     S->>G: List(ctx)
     S->>P: List(ctx)
-    loop capacity 9, 10, 11, 12 (one Graph)
+    par plans 9, 10, 11, 12, mixed (goroutines, one read-only Graph)
         S->>C: Propose(graph, current plan) then Evaluate
+        Note over C: mixed: solve at capacity 12 (k0); if isolated > 0 and (k0+1)*8 <= N, also k0+1; keep k0+1 only if strictly fewer isolated
     end
-    H-->>Q: 200 ProposalListResponse (4)
-    Q->>H: PUT /scenarios {plans: 4 x (capacity, basedOnVersion = snapshot version, tables + pinnedGuestIds)}
-    H->>S: Replace(ctx, 4 PlanInput)
+    H-->>Q: 200 ProposalListResponse (5, ordered 9, 10, 11, 12, mixed)
+    Q->>H: PUT /scenarios {plans: 5 x (key, basedOnVersion = snapshot version, tables + pinnedGuestIds)}
+    H->>S: Replace(ctx, 5 PlanInput)
     S->>G: List(ctx)
-    S->>C: validLayout, pins to whole cluster, ExpandDisabled (x4)
-    S->>P: ReplacePlans(ctx, 4 PlanReplace)
+    S->>C: validLayout, pins to whole cluster, ExpandDisabled (x5)
+    S->>P: ReplacePlans(ctx, 5 PlanReplace)
     Note over P: ONE transaction - per plan version CAS, delete tables, insert tables + assignments
-    alt all four versions match
-        P-->>S: 4 PlanState (version+1 each)
-        S->>C: Evaluate x4
+    alt all five versions match
+        P-->>S: 5 PlanState (version+1 each)
+        S->>C: Evaluate x5
         H-->>Q: 200 ScenarioListResponse
         Q->>Q: setQueryData keys.scenarios + keys.generateUndo (previous snapshot, generatedVersions)
         UI-->>E: new tables and guests on screen + bar "Wygenerowano nowe plany. [Cofnij] [x]"
@@ -60,7 +61,7 @@ sequenceDiagram
         E->>UI: "Cofnij"
         UI->>Q: useUndoGenerate().mutate()
         Q->>H: PUT /scenarios {plans: snapshot layouts, basedOnVersion = generatedVersions}
-        H->>S: Replace(ctx, 4 PlanInput)
+        H->>S: Replace(ctx, 5 PlanInput)
         S->>P: ReplacePlans(ctx, ...)
         alt no plan changed since the Generate
             H-->>Q: 200 ScenarioListResponse (previous plans, version+1 each)
@@ -74,7 +75,7 @@ sequenceDiagram
     end
 ```
 
-*Legend:* Generate = one **query** (`calculate`, pure, CQS) + one **command** (`PUT /scenarios`). The command is atomic over the four scenarios (one store method = one transaction) and guarded by the **Optimistic Offline Lock** with the snapshot's versions, so the snapshot is exactly what was overwritten. Cofnij re-sends that snapshot through the same command (a one-slot Memento held in the client's query cache; no server-side snapshot, no migration). All four proposals come from one `Graph` (DRY, consistent input).
+*Legend:* Generate = one **query** (`calculate`, pure, CQS) + one **command** (`PUT /scenarios`). The command is atomic over the five scenarios (one store method = one transaction) and guarded by the **Optimistic Offline Lock** with the snapshot's versions, so the snapshot is exactly what was overwritten. Cofnij re-sends that snapshot through the same command (a one-slot Memento held in the client's query cache; no server-side snapshot, no migration). All five proposals come from one `Graph` (DRY, consistent input). The mixed plan is the same pipeline at capacity 12 with one extra, strictly isolation-driven decision (no Strategy); its table sizes are not in the payload — the client derives them from `fill` (03-seating-model § The mixed plan). Expected duration on the Pi ≈ 4–5 s (five or six solves on four saturated cores).
 
 ## 2. Move a cluster (drag & drop, optimistic)
 
@@ -235,10 +236,10 @@ sequenceDiagram
         Q->>Q: replace scenario 10 (version moved: a pending Cofnij bar disappears)
         UI-->>E: "Brak stołów w tym planie." + "Przelicz / Generuj"
     end
-    Note over E,UI: "Usuń wszystkie plany" = same dialog with a must-tick checkbox, then four DELETE calls (9, 10, 11, 12) via Promise.allSettled
+    Note over E,UI: "Usuń wszystkie plany" = same dialog with a must-tick checkbox, then five DELETE calls (9, 10, 11, 12, mixed) via Promise.allSettled
 ```
 
-*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so a pending Cofnij of a Generate becomes impossible. Unknown capacity → 404 `not_found`. No undo for a delete; the confirmation dialog stands in for it. "Delete all" is four independent commands, not a batch endpoint: each delete is safe on its own and idempotent, unlike a Generate, which must replace all four plans atomically (`PUT /scenarios`).
+*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so a pending Cofnij of a Generate becomes impossible. Unknown plan key → 404 `not_found`. The mixed plan is deleted the same way (`DELETE /scenarios/mixed/tables`). No undo for a delete; the confirmation dialog stands in for it. "Delete all" is five independent commands, not a batch endpoint: each delete is safe on its own and idempotent, unlike a Generate, which must replace all five plans atomically (`PUT /scenarios`).
 
 ## 6. Access gate: PIN login, throttling, expiry, logout (task 009)
 
@@ -269,7 +270,7 @@ sequenceDiagram
     SPA->>MW: GET /scenarios (cookie)
     MW->>MW: verify HMAC + expiry, issued < 24 h ago → no re-issue
     MW->>H: pass (Cache-Control: no-store)
-    H-->>SPA: 200 four plans
+    H-->>SPA: 200 five plans
     SPA-->>U: plan 10 with "Wyloguj" in the header
 ```
 

@@ -1,17 +1,18 @@
 get:
   tags: [scenarios]
   operationId: listScenarios
-  summary: The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
+  summary: The five plans (9, 10, 11, 12, mixed) with their evaluations (UC-09, UC-14)
   responses:
     '200':
-      description: Always four scenarios, ordered 9, 10, 11, 12.
+      description: Always five scenarios, ordered 9, 10, 11, 12, mixed.
       content:
         application/json:
           schema:
             $ref: ../components/schemas.yaml#/ScenarioListResponse
           example:
             data:
-              - capacity: 9
+              - key: '9'
+                capacity: 9
                 version: 1
                 plan:
                   summary:
@@ -35,7 +36,7 @@ get:
             meta:
               requestId: 01JB8Z6Q0K3N
             page:
-              total: 4
+              total: 5
     '400':
       $ref: ../components/responses.yaml#/BadRequest
     '401':
@@ -45,14 +46,14 @@ get:
 put:
   tags: [scenarios]
   operationId: replaceScenarios
-  summary: Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+  summary: Replace all five plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
   description: |
-    Atomic: all four plans (9, 10, 11, 12) are replaced in ONE transaction, or nothing changes.
+    Atomic: all five plans (9, 10, 11, 12, mixed) are replaced in ONE transaction, or nothing changes.
     Used twice by the SPA:
 
-    * **"Generuj plany"**: the four `POST /scenarios/calculate` results, with `basedOnVersion` =
+    * **"Generuj plany"**: the five `POST /scenarios/calculate` results, with `basedOnVersion` =
       the versions of the plans the user had on screen before generating.
-    * **"Cofnij"**: the four plans as they were before that Generate, with `basedOnVersion` =
+    * **"Cofnij"**: the five plans as they were before that Generate, with `basedOnVersion` =
       the versions this call returned when the Generate was stored.
 
     For each plan: its tables and assignments are replaced by `tables` (numbers 1..k without gaps,
@@ -62,10 +63,10 @@ put:
     `pinnedGuestIds`; the pin is stored on every seat of the cluster at that table. Unlisted
     guests end up unseated. Violations never block saving. Each plan's version is bumped by 1.
 
-    Checks, in order, before anything is written: body shape and each capacity exactly once (422);
+    Checks, in order, before anything is written: body shape and each plan key exactly once (422);
     every guest id known and not seated twice in a plan, `pinnedGuestIds` ⊆ that table's
     `guestIds` (422 `validation_failed`); every `basedOnVersion` equals the stored version (409
-    `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all four plans
+    `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all five plans
     untouched.
   requestBody:
     required: true
@@ -75,7 +76,7 @@ put:
           $ref: ../components/schemas.yaml#/ScenariosReplace
         example:
           plans:
-            - capacity: 9
+            - key: '9'
               basedOnVersion: 7
               tables:
                 - number: 1
@@ -84,31 +85,38 @@ put:
                 - number: 2
                   guestIds: [1, 2, 3, 14, 15, 16, 17, 18]
                   pinnedGuestIds: []
-            - capacity: 10
+            - key: '10'
               basedOnVersion: 4
               tables: []
-            - capacity: 11
+            - key: '11'
               basedOnVersion: 1
               tables:
                 - number: 1
                   guestIds: [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13]
                   pinnedGuestIds: []
-            - capacity: 12
+            - key: '12'
               basedOnVersion: 3
               tables:
                 - number: 1
                   guestIds: [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14]
                   pinnedGuestIds: []
+            - key: mixed
+              basedOnVersion: 1
+              tables:
+                - number: 1
+                  guestIds: [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13]
+                  pinnedGuestIds: []
   responses:
     '200':
-      description: The four stored plans with their evaluations, ordered 9, 10, 11, 12 (each version + 1).
+      description: The five stored plans with their evaluations, ordered 9, 10, 11, 12, mixed (each version + 1).
       content:
         application/json:
           schema:
             $ref: ../components/schemas.yaml#/ScenarioListResponse
           example:
             data:
-              - capacity: 9
+              - key: '9'
+                capacity: 9
                 version: 8
                 plan:
                   summary:
@@ -139,7 +147,7 @@ put:
             meta:
               requestId: 01JB8Z6Q0K3N
             page:
-              total: 4
+              total: 5
     '400':
       $ref: ../components/responses.yaml#/BadRequest
     '401':
@@ -166,7 +174,7 @@ put:
       $ref: ../components/responses.yaml#/PayloadTooLarge
     '422':
       description: |
-        Invalid layout (capacity missing or repeated, unknown guest — e.g. deleted after the
+        Invalid layout (plan key missing or repeated, unknown guest — e.g. deleted after the
         Generate being undone —, guest seated twice, table numbers not 1..k, pinned guest not at
         that table). Nothing was written.
       content:

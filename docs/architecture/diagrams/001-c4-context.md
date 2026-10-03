@@ -13,7 +13,7 @@ C4Context
     Person_Ext(stranger, "Anonymous internet visitor", "Scanners, anyone with the URL; gets only the SPA shell, PIN screen, health and a throttled login")
 
     System_Boundary(pi, "Raspberry Pi home server (ARM64, Docker)") {
-        System(stoliki, "Stoliki", "Wedding seating planner: guest list, group 0/1/2 links, four scenarios (9/10/11/12 seats), auto-seating; shared-PIN gate on the API")
+        System(stoliki, "Stoliki", "Wedding seating planner: guest list, group 0/1/2 links, five scenarios (9/10/11/12 seats and a mixed 9-12 plan), auto-seating; shared-PIN gate on the API")
         System_Ext(otherapps, "Other apps on the Pi", "investing-app edge Nginx (/ , /sibling-a, /sibling-b), :8443 app — must stay untouched")
     }
 

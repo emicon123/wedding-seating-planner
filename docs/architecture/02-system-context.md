@@ -61,7 +61,7 @@ sequenceDiagram
     S->>S: access gate: valid signed cookie? (else 401 → PIN screen)
     S->>DB: read guests, links, tables, assignments
     S->>S: seating.Evaluate per scenario (clusters, satisfaction, violations)
-    S-->>U: 200 {data: [4 scenarios with evaluation], meta, page}
+    S-->>U: 200 {data: [5 scenarios with evaluation], meta, page}
 ```
 
 *Legend:* shows the three invariants of this doc. The prefix is preserved end-to-end, every API call except health/login/logout passes the PIN gate, and every read returns a freshly derived evaluation (nothing derived is stored). The home-LAN path (`http://<pi-lan-ip>:8094`) skips Tailscale but hits the same gate.
@@ -79,16 +79,16 @@ sequenceDiagram
 ## Persistence
 
 - SQLite via `modernc.org/sqlite`, with pragmas `journal_mode=WAL`, `foreign_keys=ON` and `busy_timeout=5000`. The pool has a single connection for writes (`SetMaxOpenConns(1)` is acceptable at this scale).
-- The schema changes only through **goose** migrations in `backend-go/db/migrations/` (`NNNNN_slug.sql`), embedded and applied at startup before the server listens (each one in a transaction, so a failed migration leaves the file as it was). Changing a `CHECK` or other column constraint on a table that is the parent of `ON DELETE CASCADE` foreign keys is done by **rebuilding the parent and its children together** (create `*_new` tables → copy rows with their ids → drop old child-first → rename): with `foreign_keys=ON`, dropping only the parent would cascade-delete the children, and the pragma cannot be switched off inside goose's transaction. `00002_capacity_9_10_11_12.sql` is the worked example. sqlc reads the same directory. No auto-DDL, no manual DDL.
+- The schema changes only through **goose** migrations in `backend-go/db/migrations/` (`NNNNN_slug.sql`), embedded and applied at startup before the server listens (each one in a transaction, so a failed migration leaves the file as it was). Changing a `CHECK` or other column constraint on a table that is the parent of `ON DELETE CASCADE` foreign keys is done by **rebuilding the parent and its children together** (create `*_new` tables → copy rows with their ids → drop old child-first → rename): with `foreign_keys=ON`, dropping only the parent would cascade-delete the children, and the pragma cannot be switched off inside goose's transaction. `00002_capacity_9_10_11_12.sql` is the worked example, `00003_mixed_plan.sql` the second one. sqlc reads the same directory. No auto-DDL, no manual DDL.
 - SQLite conventions: `STRICT` tables; surrogate `INTEGER PRIMARY KEY`; timestamps as RFC 3339 UTC `TEXT`; booleans as `INTEGER` with `CHECK (x IN (0,1))`; bounded values enforced with `CHECK`.
-- Stored: guests, guest links, scenarios (4 rows: 9, 10, 11, 12), dining tables, assignments (+pin). **Not** stored: clusters, affinities, proposals, evaluations, warnings.
+- Stored: guests, guest links, scenarios (5 rows, keyed by (capacity, mixed): (9, 0), (10, 0), (11, 0), (12, 0) and the mixed plan (12, 1); API key `9`…`12` / `mixed`), dining tables, assignments (+pin). Table sizes of the mixed plan are derived from fill, never stored. **Not** stored: clusters, affinities, proposals, evaluations, warnings.
 - Backup: `docker compose exec stoliki /app/server backup /data/backups/stoliki-<date>.db` (`VACUUM INTO`, consistent while running).
 - Tests: a real SQLite file in `t.TempDir()`, migrated with the embedded migrations. The DB is never mocked.
 
 ## Concurrency
 
 - A handful of editors, rarely at the same time. No live push; the SPA refetches when the window regains focus.
-- **Optimistic locking** via `version` on **Guest** (`PATCH /guests/{id}`) and **Scenario** (`PUT /scenarios`: storing a Generate and its Cofnij, all four plans atomically). A mismatch returns `409` with error code `version_conflict`; the client refetches.
+- **Optimistic locking** via `version` on **Guest** (`PATCH /guests/{id}`) and **Scenario** (`PUT /scenarios`: storing a Generate and its Cofnij, all five plans atomically). A mismatch returns `409` with error code `version_conflict`; the client refetches.
 - Last write wins, with no version check, for: cluster moves, pins, table add/remove (each bumps the scenario version), toggles (single and bulk) and link edits.
 - Each command runs in one transaction; SQLite serialises writers.
 
@@ -124,7 +124,7 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Functional core, imperative shell | **adopted** | `internal/seating` is pure; services do the I/O around it |
 | Repository | **adopted, concrete** | Two store types over sqlc (see 04-data-model). Go interfaces are declared consumer-side only if a test seam is ever needed; integration tests use the real DB |
 | Strategy (seating algorithms) | rejected | One algorithm; capacity is a parameter |
-| Command + Memento (undo/redo) | rejected as a pattern | Generate stores at once (task 007); its one-step **Cofnij** is a plain client-held snapshot of the four plans re-sent through `PUT /scenarios` (a Memento in spirit, no undo stack, no Command objects). No other undo |
+| Command + Memento (undo/redo) | rejected as a pattern | Generate stores at once (task 007); its one-step **Cofnij** is a plain client-held snapshot of the five plans re-sent through `PUT /scenarios` (a Memento in spirit, no undo stack, no Command objects). No other undo |
 | Observer / live push | rejected | Few editors; refetch on focus |
 | Adapter | **adopted** (import edge) | CSV now; a Sheets API source could replace it |
 | Optimistic Offline Lock | **adopted** | `version` on Guest and Scenario |

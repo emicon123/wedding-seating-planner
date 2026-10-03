@@ -113,7 +113,7 @@ func (q *Queries) GetDiningTableID(ctx context.Context, arg GetDiningTableIDPara
 }
 
 const getScenario = `-- name: GetScenario :one
-SELECT id, capacity, version, updated_at FROM scenario WHERE capacity = ?
+SELECT id, capacity, mixed, version, updated_at FROM scenario WHERE capacity = ?
 `
 
 func (q *Queries) GetScenario(ctx context.Context, capacity int64) (Scenario, error) {
@@ -122,6 +122,7 @@ func (q *Queries) GetScenario(ctx context.Context, capacity int64) (Scenario, er
 	err := row.Scan(
 		&i.ID,
 		&i.Capacity,
+		&i.Mixed,
 		&i.Version,
 		&i.UpdatedAt,
 	)
@@ -216,7 +217,7 @@ func (q *Queries) ListDiningTables(ctx context.Context) ([]DiningTable, error) {
 
 const listScenarios = `-- name: ListScenarios :many
 
-SELECT id, capacity, version, updated_at FROM scenario ORDER BY capacity
+SELECT id, capacity, mixed, version, updated_at FROM scenario ORDER BY capacity
 `
 
 // Scenario, table and assignment queries (B-09). Scenarios are seeded by the migration (3 rows)
@@ -233,6 +234,7 @@ func (q *Queries) ListScenarios(ctx context.Context) ([]Scenario, error) {
 		if err := rows.Scan(
 			&i.ID,
 			&i.Capacity,
+			&i.Mixed,
 			&i.Version,
 			&i.UpdatedAt,
 		); err != nil {
