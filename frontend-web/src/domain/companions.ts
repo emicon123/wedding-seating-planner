@@ -13,28 +13,86 @@ export function clusterOf(guestId: number, overview: ClusterOverview): Cluster |
 
 const polish = new Intl.Collator('pl')
 
+/** A group-0 cluster as the plain guest list sees it: only its visible members count. */
+type Unit = {
+  key: number
+  /** The Polish-collated first visible member's name. */
+  name: string
+  members: Guest[]
+}
+
+function byName(a: Guest, b: Guest): number {
+  return polish.compare(a.displayName, b.displayName) || a.id - b.id
+}
+
+function byUnit(a: Unit, b: Unit): number {
+  return polish.compare(a.name, b.name) || a.key - b.key
+}
+
+/** Visible guests grouped by cluster; one the overview does not know is a unit of one. */
+function unitsOf(guests: Guest[], overview: ClusterOverview): Map<number, Unit> {
+  const clusterKeyOf = new Map<number, number>()
+  for (const cluster of overview.clusters) {
+    for (const id of cluster.guestIds) clusterKeyOf.set(id, cluster.key)
+  }
+  const grouped = new Map<number, Guest[]>()
+  for (const guest of guests) {
+    const key = clusterKeyOf.get(guest.id) ?? guest.id
+    grouped.set(key, [...(grouped.get(key) ?? []), guest])
+  }
+  const units = new Map<number, Unit>()
+  for (const [key, members] of grouped) {
+    const sorted = members.sort(byName)
+    const [first] = sorted
+    if (first) units.set(key, { key, name: first.displayName, members: sorted })
+  }
+  return units
+}
+
+/** Level-1 partners among the visible units, read from both sides; level 2 is not used. */
+function partnerGraph(units: Map<number, Unit>, overview: ClusterOverview): Map<number, Unit[]> {
+  const partners = new Map<number, Set<Unit>>([...units.keys()].map((key) => [key, new Set()]))
+  for (const cluster of overview.clusters) {
+    const from = units.get(cluster.key)
+    if (!from) continue
+    for (const { clusterKey, level } of cluster.affinities) {
+      const to = units.get(clusterKey)
+      if (level !== 1 || !to || to === from) continue
+      partners.get(from.key)?.add(to)
+      partners.get(to.key)?.add(from)
+    }
+  }
+  return new Map([...partners].map(([key, set]) => [key, [...set].sort(byUnit)]))
+}
+
 /**
- * Default guest-list order: whole group-0 clusters together. A cluster sorts by its
- * alphabetically first member (Polish collation), members inside by name; guests the
- * overview does not know behave as clusters of one. Search hits and the "related to …"
- * view keep their own ranking — the caller applies this only to the plain list.
+ * Default guest-list order (003-frontend-design §11): group 0 first, group 1 second. A unit is a
+ * group-0 cluster with a visible member (a guest the overview does not know is a unit of one);
+ * its members stay together, ordered by name. Units joined by level-1 affinity form a block: a
+ * depth-first walk from the block's alphabetically first unit, always continuing with the
+ * first not-yet-placed partner. Blocks and loners are ordered by their first unit's name
+ * (Polish collation, ties by key), taken from visible members only. Level 2 is not used.
+ * Search hits and the "related to …" view keep their own ranking — the caller applies this
+ * only to the plain list. Pure and deterministic; returns a new array.
  */
 export function sortByCluster(guests: Guest[], overview: ClusterOverview | undefined): Guest[] {
   if (!overview) return guests
-  const names = new Map(guests.map((guest) => [guest.id, guest.displayName]))
-  const firstOf = new Map<number, string>()
-  for (const cluster of overview.clusters) {
-    const first =
-      cluster.guestIds.map((id) => names.get(id) ?? '').sort((a, b) => polish.compare(a, b))[0] ??
-      ''
-    for (const id of cluster.guestIds) firstOf.set(id, first)
+  const units = unitsOf(guests, overview)
+  const partners = partnerGraph(units, overview)
+
+  const placed = new Set<number>()
+  const result: Guest[] = []
+  for (const root of [...units.values()].sort(byUnit)) {
+    const stack = [root]
+    for (let unit = stack.pop(); unit; unit = stack.pop()) {
+      if (placed.has(unit.key)) continue
+      placed.add(unit.key)
+      result.push(...unit.members)
+      const next = (partners.get(unit.key) ?? []).filter(({ key }) => !placed.has(key))
+      stack.push(...next.reverse())
+    }
   }
-  return [...guests].sort(
-    (a, b) =>
-      polish.compare(firstOf.get(a.id) ?? a.displayName, firstOf.get(b.id) ?? b.displayName) ||
-      polish.compare(a.displayName, b.displayName) ||
-      a.id - b.id,
-  )
+  return result
 }
 
 function directLinks(guest: Guest | undefined, level: LinkLevel): number[] {

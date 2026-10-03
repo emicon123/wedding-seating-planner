@@ -11,6 +11,7 @@ import {
   makeGuest,
   makeOverview,
 } from '@/test/builders'
+import type { ClusterOverview, Guest } from '@/domain/types'
 
 describe('clusterOf', () => {
   it('finds the cluster containing the guest', () => {
@@ -134,5 +135,211 @@ describe('sortByCluster', () => {
 
   it('without an overview the order is left alone', () => {
     expect(sortByCluster(guests, undefined)).toBe(guests)
+  })
+
+  describe('group 1 as the second key (003-frontend-design §11)', () => {
+    type Pair = readonly [number, number]
+    const NAMES = ['Ala', 'Bartek', 'Celina', 'Darek', 'Ewa', 'Franek']
+    const [A, B, C, D, E, F] = [1, 2, 3, 4, 5, 6]
+
+    const sixGuests = () => NAMES.map((firstName, index) => makeGuest({ id: index + 1, firstName }))
+
+    /** One cluster per guest; each pair is a level-1 affinity listed on both sides unless one-sided. */
+    function clustersFor(
+      keys: number[],
+      pairs: Pair[],
+      { level = 1, bothSides = true }: { level?: 1 | 2; bothSides?: boolean } = {},
+    ) {
+      return makeOverview(
+        keys.map((key) =>
+          makeCluster({
+            key,
+            guestIds: [key],
+            affinities: pairs.flatMap(([from, to]) => [
+              ...(from === key ? [{ clusterKey: to, level }] : []),
+              ...(bothSides && to === key ? [{ clusterKey: from, level }] : []),
+            ]),
+          }),
+        ),
+      )
+    }
+    const sixClusters = (pairs: Pair[], options?: Parameters<typeof clustersFor>[2]) =>
+      clustersFor([A, B, C, D, E, F], pairs, options)
+    const order = (list: Guest[], overview: ClusterOverview) => names(sortByCluster(list, overview))
+
+    it('1: without affinities the order is alphabetical, as before', () => {
+      expect(order(sixGuests(), sixClusters([]))).toEqual(NAMES)
+    })
+
+    it('2: a chain A-C-E reads Ala, Celina, Ewa, then the rest', () => {
+      expect(
+        order(
+          sixGuests(),
+          sixClusters([
+            [A, C],
+            [C, E],
+          ]),
+        ),
+      ).toEqual(['Ala', 'Celina', 'Ewa', 'Bartek', 'Darek', 'Franek'])
+    })
+
+    it('3: a star puts the centre between its first partners', () => {
+      expect(
+        order(
+          sixGuests(),
+          sixClusters([
+            [D, A],
+            [D, C],
+            [D, F],
+          ]),
+        ),
+      ).toEqual(['Ala', 'Darek', 'Celina', 'Franek', 'Bartek', 'Ewa'])
+    })
+
+    it('4: a cycle terminates and lists every unit once', () => {
+      expect(
+        order(
+          sixGuests(),
+          sixClusters([
+            [A, B],
+            [B, C],
+            [C, A],
+          ]),
+        ),
+      ).toEqual(NAMES)
+    })
+
+    it('5: the walk is depth first, not breadth first', () => {
+      expect(
+        order(
+          sixGuests(),
+          sixClusters([
+            [A, B],
+            [A, C],
+            [B, D],
+          ]),
+        ),
+      ).toEqual(['Ala', 'Bartek', 'Darek', 'Celina', 'Ewa', 'Franek'])
+    })
+
+    it('6: a level-2 link does not move anyone', () => {
+      expect(order(sixGuests(), sixClusters([[A, E]], { level: 2 }))).toEqual(NAMES)
+    })
+
+    it('7: a hidden neighbour neither drags nor bridges', () => {
+      const xawery = 7
+      const overview = makeOverview([
+        ...[A, B, C, D, E, F].map((key) =>
+          makeCluster({
+            key,
+            guestIds: [key],
+            affinities: key === A || key === C ? [{ clusterKey: xawery, level: 1 }] : [],
+          }),
+        ),
+        makeCluster({
+          key: xawery,
+          guestIds: [xawery],
+          affinities: [
+            { clusterKey: A, level: 1 },
+            { clusterKey: C, level: 1 },
+          ],
+        }),
+      ])
+      expect(order(sixGuests(), overview)).toEqual(NAMES)
+    })
+
+    it('8: group 0 stays primary and the partner follows the whole cluster', () => {
+      const zosia = makeGuest({ id: 8, firstName: 'Zosia', links: [link(9, 0)] })
+      const adam = makeGuest({ id: 9, firstName: 'Adam', links: [link(8, 0)] })
+      const overview = makeOverview([
+        ...[A, B, C, D, F].map((key) => makeCluster({ key, guestIds: [key] })),
+        makeCluster({ key: E, guestIds: [E], affinities: [{ clusterKey: 8, level: 1 }] }),
+        makeCluster({ key: 8, guestIds: [8, 9], affinities: [{ clusterKey: E, level: 1 }] }),
+      ])
+      expect(order([...sixGuests(), zosia, adam], overview)).toEqual([
+        'Adam',
+        'Zosia',
+        'Ewa',
+        'Ala',
+        'Bartek',
+        'Celina',
+        'Darek',
+        'Franek',
+      ])
+    })
+
+    it('9: a hidden member does not name the unit (it no longer jumps to the top)', () => {
+      // Aaron (10) is filtered out, so the unit is named after Wiktor and sorts after Franek.
+      const wiktor = makeGuest({ id: 11, firstName: 'Wiktor', links: [link(10, 0)] })
+      const overview = makeOverview([
+        ...[A, B, C, D, E, F].map((key) => makeCluster({ key, guestIds: [key] })),
+        makeCluster({ key: 10, guestIds: [10, 11] }),
+      ])
+      expect(order([...sixGuests(), wiktor], overview)).toEqual([...NAMES, 'Wiktor'])
+    })
+
+    it('10: an affinity listed on one side only still joins the units', () => {
+      expect(order(sixGuests(), sixClusters([[A, E]], { bothSides: false }))).toEqual([
+        'Ala',
+        'Ewa',
+        'Bartek',
+        'Celina',
+        'Darek',
+        'Franek',
+      ])
+    })
+
+    it('11: an affinity to an unknown cluster key is ignored', () => {
+      const overview = makeOverview(
+        [A, B, C, D, E, F].map((key) =>
+          makeCluster({
+            key,
+            guestIds: [key],
+            affinities: key === A ? [{ clusterKey: 999, level: 1 }] : [],
+          }),
+        ),
+      )
+      expect(order(sixGuests(), overview)).toEqual(NAMES)
+    })
+
+    it('12: a guest unknown to the overview is a unit of one, ties broken by key', () => {
+      const newcomer = makeGuest({ id: 20, firstName: 'Celina' })
+      const result = sortByCluster([newcomer, ...sixGuests()], sixClusters([]))
+      expect(result.map((guest) => guest.id)).toEqual([A, B, C, 20, D, E, F])
+    })
+
+    it('13: the result does not depend on the order of the inputs', () => {
+      const pairs: Pair[] = [
+        [D, A],
+        [D, C],
+        [D, F],
+      ]
+      const expected = ['Ala', 'Darek', 'Celina', 'Franek', 'Bartek', 'Ewa']
+      const shuffled = {
+        clusters: [...sixClusters(pairs).clusters]
+          .reverse()
+          .map((cluster) => ({ ...cluster, affinities: [...cluster.affinities].reverse() })),
+        warnings: [],
+      }
+      expect(order(sixGuests(), sixClusters(pairs))).toEqual(expected)
+      expect(order([...sixGuests()].reverse(), shuffled)).toEqual(expected)
+      expect(
+        order(
+          [...sixGuests()].sort((a, b) => (a.id % 3) - (b.id % 3)),
+          shuffled,
+        ),
+      ).toEqual(expected)
+    })
+
+    it('14: returns a new array and leaves the input alone; no overview returns the input', () => {
+      const input = sixGuests()
+      const before = [...input]
+      const overview = sixClusters([[A, C]])
+      const sorted = sortByCluster(input, overview)
+
+      expect(sorted).not.toBe(input)
+      expect(input).toEqual(before)
+      expect(sortByCluster(input, undefined)).toBe(input)
+    })
   })
 })

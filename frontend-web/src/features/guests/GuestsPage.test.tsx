@@ -116,6 +116,24 @@ describe('GuestsPage: list and counters', () => {
 
     expect(rowNames()).toEqual(['Adam', 'Zosia', 'Karolina Nowak', 'Maciek', 'Michał', 'Ola'])
   })
+  it('puts group-1 partner families next to each other in the plain list', async () => {
+    const ala = makeGuest({ id: 1, firstName: 'Ala' })
+    const bartek = makeGuest({ id: 2, firstName: 'Bartek' })
+    const celina = makeGuest({ id: 3, firstName: 'Celina' })
+    serveGuests(
+      [bartek, celina, ala],
+      makeOverview([
+        makeCluster({ key: 1, guestIds: [1], affinities: [{ clusterKey: 3, level: 1 }] }),
+        makeCluster({ key: 2, guestIds: [2] }),
+        makeCluster({ key: 3, guestIds: [3], affinities: [{ clusterKey: 1, level: 1 }] }),
+      ]),
+    )
+    renderPage(<GuestsPage />, '/goscie')
+    await screen.findByRole('button', { name: 'Powiązania: Celina' })
+
+    expect(rowNames()).toEqual(['Ala', 'Celina', 'Bartek'])
+  })
+
   it('"powiązani z" lists the person first, then group 0, 1 and 2, each marked', async () => {
     serveGuests([...SMALL_LIST], MACIEK_FAMILY_OVERVIEW)
     renderPage(<GuestsPage />, '/goscie?powiazani=4')
