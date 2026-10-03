@@ -8,8 +8,13 @@ info:
     and run `make openapi` to regenerate the bundle `docs/openapi.yaml` (never edit the bundle).
 
     * Served under `/wesele/api` (prefix kept end-to-end, see docs/architecture/02-system-context.md).
-    * **No authentication:** the app is reachable only inside the tailnet (ADR-001 §2).
-      Auth must be added before any public exposure.
+    * **Access gate (shared PIN, ADR-001 §2 amendment 2026-10-03):** when the server runs with
+      `STOLIKI_PIN` set, every operation except `GET /health`, `POST /session` and `DELETE /session`
+      needs the signed session cookie `stoliki_session` (obtained with `POST /session`) and answers
+      401 `unauthenticated` without it. State-changing requests (POST/PUT/PATCH/DELETE) must also carry
+      the header `X-Stoliki-Request: 1` (CSRF guard) or get 403 `csrf_header_missing`. With
+      `STOLIKI_PIN` unset the gate is off: no 401/403 is ever returned (tailnet/LAN-only runs, dev, tests).
+      Design: docs/architecture/05-access-gate.md.
     * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
     * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
       (PUT /scenarios, which replaces all four plans at once: used by "Generuj plany" and
@@ -19,7 +24,7 @@ info:
       nothing derived (clusters, scores, violations) is stored.
 servers:
   - url: /wesele/api
-    description: Same origin as the SPA (tailnet-only)
+    description: Same origin as the SPA
 tags:
   - name: guests
     description: Guest list, enabled toggles (UC-02…UC-06)
@@ -31,9 +36,12 @@ tags:
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
     description: The four plans (9/10/11/12), generate + store (and undo), move, pin, tables, delete plan (UC-09…UC-14, UC-17)
+  - name: session
+    description: Shared-PIN login, logout and gate state (task 009)
   - name: health
     description: Liveness
-security: []
+security:
+  - sessionCookie: []
 paths:
   /guests:
     $ref: paths/guests.yaml
@@ -55,5 +63,16 @@ paths:
     $ref: paths/scenarios_{capacity}_tables.yaml
   /scenarios/{capacity}/tables/{tableNumber}:
     $ref: paths/scenarios_{capacity}_tables_{tableNumber}.yaml
+  /session:
+    $ref: paths/session.yaml
   /health:
     $ref: paths/health.yaml
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: stoliki_session
+      description: |
+        HMAC-signed session cookie set by `POST /session` (HttpOnly, SameSite=Lax, Path=/wesele,
+        Secure over HTTPS, 30-day sliding lifetime). Enforced only while the gate is on.

@@ -1,6 +1,6 @@
 # 02 — System context, runtime shape and cross-cutting rules
 
-How Stoliki is built and deployed **today**. Diagrams: [C4](diagrams/001-c4-context.md), [state machines](diagrams/001-state-machine.md), [ERD](diagrams/002-erd.md). Domain: [01-domain-glossary.md](01-domain-glossary.md). Seating rules: [03-seating-model.md](03-seating-model.md). Data model, DTOs and repositories: [04-data-model.md](04-data-model.md). API contract: [`docs/openapi.yaml`](../openapi.yaml).
+How Stoliki is built and deployed **today**. Diagrams: [C4](diagrams/001-c4-context.md), [state machines](diagrams/001-state-machine.md), [ERD](diagrams/002-erd.md). Domain: [01-domain-glossary.md](01-domain-glossary.md). Seating rules: [03-seating-model.md](03-seating-model.md). Data model, DTOs and repositories: [04-data-model.md](04-data-model.md). Access gate (task 009): [05-access-gate.md](05-access-gate.md). API contract: [`docs/openapi.yaml`](../openapi.yaml).
 
 ## Shape at a glance
 
@@ -65,7 +65,7 @@ sequenceDiagram
 
 - **Tailnet + home LAN only** (user decision 2026-10-02). Besides the tailnet mapping, the app is reachable on the home LAN at `http://<pi-lan-ip>:8094/wesele/` (plain HTTP, no login). Never forward that port on the router. The Stoliki mapping must never be funnelled. `:443` on this Pi is funnelled for other apps, and Funnel is per listener port, so Stoliki uses its own HTTPS port. `tailscale funnel status` must not list it.
 - **No app auth**, no roles, no secrets. This is a deliberate simplification (user decision, 2026-10-02).
-- **If public exposure is ever wanted, add auth first**: the shared passphrase → signed-cookie middleware described in ADR-001 §2. Nothing else in the design changes.
+- **Public exposure is being added with auth first (task 009, user decision 2026-10-03):** a shared-PIN gate (Go middleware on the API, signed `HttpOnly` session cookie, login throttling) on **every** network, LAN included, then Tailscale Funnel after the user's confirmation. Fully designed in [05-access-gate.md](05-access-gate.md); this section describes the running system and switches over when phase C1 (gate) / C2 (Funnel) are deployed.
 - Personal-data hygiene still applies: **never log guest names, notes, CSV content or request bodies**; logs carry ids and counts only. Response header `X-Robots-Tag: noindex`. Request body limit 1 MB (CSV import 2 MB).
 - The host port is published on `${STOLIKI_BIND:-0.0.0.0}:8094` (compose), so the local Tailscale daemon and the home LAN reach it; `STOLIKI_BIND=127.0.0.1` restricts it back to loopback (tailnet-only).
 
@@ -106,7 +106,7 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Frontend | React 19, TypeScript strict, Vite, React Router v7 (basename `/wesele`), TanStack Query v5, Tailwind v4, shadcn/ui, `@dnd-kit/core`, `openapi-typescript` + `openapi-fetch`; Zod for forms only |
 | Contract | OpenAPI 3.1. Source in `docs/openapi/`, bundled to `docs/openapi.yaml` and linted with `@redocly/cli@2.57.0` (`make openapi-bundle`, `make openapi-lint`, `make openapi`) |
 | Packaging | One multi-stage image → `gcr.io/distroless/static-debian12:nonroot`, `linux/arm64`; compose v2; named volume `stoliki-data` |
-| Config (env, no secrets) | `BASE_PATH=/wesele`, `PORT=8080`, `DB_PATH=/data/stoliki.db`, `WEB_ROOT=/app/web` |
+| Config (env) | `BASE_PATH=/wesele`, `PORT=8080`, `DB_PATH=/data/stoliki.db`, `WEB_ROOT=/app/web`; task 009 adds the one secret `STOLIKI_PIN` (from gitignored `infra/.env`; unset = gate off) and the generated `/data/session.key` |
 
 ## Pattern evaluation (system level)
 
@@ -122,5 +122,5 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Adapter | **adopted** (import edge) | CSV now; a Sheets API source could replace it |
 | Optimistic Offline Lock | **adopted** | `version` on Guest and Scenario |
 | DTO + Mapper | **adopted** | Boundary between sqlc rows, domain types and OpenAPI DTOs |
-| Authentication middleware | rejected for now | Tailnet + home LAN only. Re-add before any public exposure |
+| Authentication middleware | **adopted (task 009, being implemented)** | Shared-PIN gate as one chi middleware on the API sub-router; see [05-access-gate.md](05-access-gate.md) |
 | Separate Nginx container | rejected | Go serves SPA + API |

@@ -76,3 +76,72 @@ InternalError:
             message: Unexpected error; see server logs (request 01JB8Z6Q0K3N).
         meta:
           requestId: 01JB8Z6Q0K3N
+Unauthorized:
+  description: |
+    The access gate is on (`STOLIKI_PIN` configured) and the request carries no valid session cookie
+    (missing, expired, tampered, or signed with an old key). The SPA shows the PIN screen.
+    Never returned while the gate is off.
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: unauthenticated
+            field: null
+            message: PIN required.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+Forbidden:
+  description: |
+    CSRF guard (gate on only): a state-changing request (POST, PUT, PATCH, DELETE) without the header
+    `X-Stoliki-Request: 1`. The SPA's API client always sends it; cross-site forms cannot.
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: csrf_header_missing
+            field: null
+            message: Missing X-Stoliki-Request header.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+InvalidPin:
+  description: |
+    The PIN is wrong. The response is the same for every wrong value (no hint about length,
+    digits or remaining attempts). Counts towards the attempt throttle.
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: invalid_pin
+            field: pin
+            message: Wrong PIN.
+        meta:
+          requestId: 01JB8Z6Q0K3N
+TooManyAttempts:
+  description: |
+    Attempt throttle engaged (this client, or all clients together). The submitted PIN was **not**
+    evaluated, so the response is identical whether it was right or wrong. Retry after the
+    number of seconds in `Retry-After`.
+  headers:
+    Retry-After:
+      description: Seconds until the next attempt is accepted.
+      schema:
+        type: integer
+        minimum: 1
+      example: 60
+  content:
+    application/json:
+      schema:
+        $ref: schemas.yaml#/ErrorResponse
+      example:
+        errors:
+          - code: too_many_attempts
+            field: null
+            message: Too many attempts; try again later.
+        meta:
+          requestId: 01JB8Z6Q0K3N

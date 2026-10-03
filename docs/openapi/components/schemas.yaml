@@ -30,6 +30,10 @@ ErrorCode:
     - import_invalid
     - payload_too_large
     - internal_error
+    - unauthenticated
+    - invalid_pin
+    - too_many_attempts
+    - csrf_header_missing
 ErrorItem:
   type: object
   required: [code, field, message]
@@ -700,5 +704,44 @@ HealthResponse:
   properties:
     data:
       $ref: '#/HealthStatus'
+    meta:
+      $ref: '#/Meta'
+
+# ---------- access gate (task 009) ----------
+SessionCreate:
+  type: object
+  description: The shared PIN, as typed. Any length/charset is accepted by the contract; the server compares in constant time.
+  required: [pin]
+  additionalProperties: false
+  properties:
+    pin:
+      type: string
+      minLength: 1
+      maxLength: 128
+      writeOnly: true
+      example: '<PIN>'
+Session:
+  type: object
+  description: |
+    The caller's own session. `pinRequired` says whether the access gate is on (the SPA shows
+    "Wyloguj" only then). `expiresAt` is when the current cookie stops working (sliding: renewed
+    on use); null when the gate is off.
+  required: [pinRequired, expiresAt]
+  properties:
+    pinRequired:
+      type: boolean
+      readOnly: true
+      example: true
+    expiresAt:
+      type: [string, 'null']
+      format: date-time
+      readOnly: true
+      example: '2026-11-02T10:00:00Z'
+SessionResponse:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      $ref: '#/Session'
     meta:
       $ref: '#/Meta'

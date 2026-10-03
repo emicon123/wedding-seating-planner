@@ -1,6 +1,6 @@
 # 003 — Backend design (Go): packages, core interfaces, class diagram, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6) and task 008 (anneal stage, §2.1). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
+Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6), task 008 (anneal stage, §2.1) and task 009 (access gate, §7). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
 
 ## 1. Packages and dependency direction
 
@@ -451,3 +451,129 @@ flowchart TD
 - httpapi: 200 envelope with four scenarios; 409 and 422 envelopes; `PUT /scenarios/{capacity}/assignments` now 404/405 (route gone).
 
 **Delete (dead after task 007):** `scenarios.Service.Accept`; `Store.ReplacePlan` (fold its SQL into `ReplacePlans`; reuse `DeleteScenarioTables` and the insert queries; remove any sqlc query used only by it); the strict handler `AcceptProposal`; mapper `fromAcceptPlan`; their tests. Keep `Calculate`, `validLayout`, `pinnedClusterKeys` (now applied to the input plan), `toProposal`, `ExpandDisabled`.
+
+## 7. Task 009 — Access gate (shared PIN)
+
+Rules, parameters and threat model: [../05-access-gate.md](../05-access-gate.md) (authoritative; this section is the class-level map). Contract: `/session` (`getSession`, `createSession`, `deleteSession`), `securitySchemes.sessionCookie`, error codes `unauthenticated`, `invalid_pin`, `too_many_attempts`, `csrf_header_missing`. No migration, no new table.
+
+### 7.1 New package `internal/accessgate` (stdlib only: `crypto/hmac`, `crypto/sha256`, `crypto/subtle`, `crypto/rand`, `net/http`, `sync`, `time`)
+
+```go
+package accessgate
+
+const CookieName = "stoliki_session"
+const CSRFHeader = "X-Stoliki-Request"           // value "1"
+
+var ErrUnauthenticated, ErrInvalidPIN, ErrCSRF error   // sentinels; httpapi.errorResponse maps them
+type ThrottledError struct{ RetryAfter time.Duration }   // implements error
+
+// LoadOrCreateSecret reads 32 bytes from path, or creates the file (crypto/rand, mode 0600) if missing.
+func LoadOrCreateSecret(path string) ([]byte, error)
+
+// New derives pinDigest = SHA-256(pin) and key = HMAC-SHA256(secret, "stoliki-session-v1" || pinDigest).
+// The pin string is not kept. now is time.Now in production, a fixed clock in tests.
+func New(pin string, secret []byte, cookiePath string, now func() time.Time) *Gate
+
+type Gate struct {
+    pinDigest  [32]byte
+    key        []byte
+    cookiePath string                 // BASE_PATH, e.g. "/wesele"
+    throttle   *throttle
+    now        func() time.Time
+}
+
+// Middleware: mounted on the API sub-router only (§ 05-access-gate §1 flowchart).
+// Public: GET /health, POST /session, DELETE /session (paths relative to the API mount).
+// Writes 401/403 through the same error envelope as every other API error (httpapi passes its writer in).
+func (g *Gate) Middleware(writeErr func(http.ResponseWriter, *http.Request, error)) func(http.Handler) http.Handler
+
+// Login: throttle check (locked → *ThrottledError, PIN NOT evaluated) → constant-time compare →
+// ErrInvalidPIN (failure recorded) or a fresh session cookie (client's failures cleared).
+func (g *Gate) Login(clientKey, pin string, secure bool) (*http.Cookie, error)
+func (g *Gate) Logout(secure bool) *http.Cookie                        // Max-Age=0
+func Session(ctx context.Context) (expiresAt time.Time, ok bool)      // set by Middleware for authenticated requests
+func ClientKey(r *http.Request) string                                 // rightmost X-Forwarded-For entry, else RemoteAddr host
+func IsSecure(r *http.Request) bool                                    // r.TLS != nil || X-Forwarded-Proto == "https"
+
+// unexported
+type token struct{ issuedAt, expiresAt time.Time }
+func (g *Gate) sign(t token) string; func (g *Gate) verify(v string) (token, bool)
+type throttle struct {                 // all under one sync.Mutex
+    clients map[string]*clientState    // ≤ 4096 entries
+    global  []time.Time                // failure times within the last 24 h (≤ 20)
+}
+type clientState struct{ failures int; lockedUntil, lastFailure time.Time }
+func (t *throttle) check(key string, now time.Time) (retryAfter time.Duration, locked bool)
+func (t *throttle) fail(key string, now time.Time)
+func (t *throttle) succeed(key string)
+```
+
+Parameters as named constants in the package (one place): `freeFailures = 3`, `baseLock = 30*time.Second`, `maxLock = time.Hour`, `clientTTL = 24*time.Hour`, `maxClients = 4096`, `globalWindow = 24*time.Hour`, `globalMaxFailures = 20`, `sessionLifetime = 30*24*time.Hour`, `slideAfter = 24*time.Hour`.
+
+### 7.2 Changes in existing packages
+
+| Where | Change |
+|---|---|
+| `cmd/server` `config` | + `PIN string` from `STOLIKI_PIN` (empty = gate off). `serve`: if `PIN != ""` → `secret := accessgate.LoadOrCreateSecret(filepath.Join(filepath.Dir(cfg.DBPath), "session.key"))`, `gate := accessgate.New(cfg.PIN, secret, base, time.Now)`; else `gate = nil` and `slog.Warn("access gate off (STOLIKI_PIN not set)")`. The PIN is used only by `New`; never log `cfg`. `healthcheck` and `backup` ignore the PIN. |
+| `httpapi.NewRouter` | `NewRouter(basePath, webRoot string, api oapi.StrictServerInterface, gate *accessgate.Gate)`; `apiRouter` adds `gate.Middleware(writeError)` after `requestLog` and before `bodyLimit` **only when `gate != nil`**. Static routes unchanged (open). |
+| `httpapi.Server` | + field `gate *accessgate.Gate` (`NewServer(db, g, p, gate)`). New strict handlers: `GetSession` (gate nil → `{pinRequired:false, expiresAt:null}`; else `accessgate.Session(ctx)`), `CreateSession`, `DeleteSession`. The strict handlers need the `*http.Request` (client key, `IsSecure`): a small chi middleware in `apiRouter` stores it in the context (`withRequest`), or use oapi-codegen's `StrictMiddlewareFunc` — Backend-Go picks one, no other change. Cookies go out through the generated `SetCookie` response header field (`cookie.String()`), `Retry-After` through the 429 header field (whole seconds, rounded up, ≥ 1). |
+| `httpapi.errorResponse` | maps `accessgate.ErrUnauthenticated` → 401 `unauthenticated`, `ErrInvalidPIN` → 401 `invalid_pin` (field `pin`), `*ThrottledError` → 429 `too_many_attempts`, `ErrCSRF` → 403 `csrf_header_missing`. Messages are the generic English strings from the contract examples; never echo input. |
+| gated API responses | `Cache-Control: no-store` (set by the middleware when the gate is on). |
+
+```mermaid
+classDiagram
+    direction LR
+    class Gate {
+        -pinDigest [32]byte
+        -key []byte
+        -cookiePath string
+        -now func() time.Time
+        +Middleware(writeErr) func(http.Handler) http.Handler
+        +Login(clientKey, pin, secure) (*http.Cookie, error)
+        +Logout(secure) *http.Cookie
+        -sign(token) string
+        -verify(string) (token, bool)
+    }
+    class throttle {
+        -clients map[string]*clientState
+        -global []time.Time
+        +check(key, now) (retryAfter, locked)
+        +fail(key, now)
+        +succeed(key)
+    }
+    class clientState {
+        failures int
+        lockedUntil time.Time
+        lastFailure time.Time
+    }
+    class token {
+        issuedAt time.Time
+        expiresAt time.Time
+    }
+    class Server {
+        <<httpapi, implements StrictServerInterface>>
+        -gate *Gate
+        +GetSession()
+        +CreateSession()
+        +DeleteSession()
+    }
+    class NewRouter {
+        <<httpapi func>>
+        apiRouter: RequestID → recoverer → requestLog → gate.Middleware → bodyLimit
+    }
+    Gate *-- throttle
+    throttle *-- clientState
+    Gate ..> token : signs / verifies
+    Server --> Gate : Login / Logout (nil = gate off)
+    NewRouter --> Gate : mounts Middleware (only if non-nil)
+```
+
+*Legend:* `accessgate` depends on nothing in the project (like `seating`), so `httpapi` and `main` import it, never the reverse; the error writer is passed in (**Dependency Inversion** without an interface — a function value is enough). The middleware is a **Decorator** (same idiom as the existing ones). `nil` gate = off, so the gate-off path is literally today's router (one `if`). No session store, no Strategy, no interface for the clock beyond a `func() time.Time` field (needed for deterministic throttle tests).
+
+### 7.3 Tests (B1)
+
+- `accessgate` unit (fixed clock): sign/verify round trip; tampered payload, tampered MAC, wrong key (other PIN), expired → invalid; sliding re-issue only after 24 h; throttle: 3 free failures, then 30 s / 1 min / 2 min … capped at 1 h; while locked `Login` returns `*ThrottledError` **for the correct PIN too** and does not record a failure; global: the 21st failure within 24 h from 21 different client keys → locked for everyone, a success elsewhere does not reset it; entries forgotten after 24 h; table full → fail closed; `LoadOrCreateSecret` creates a 0600 file once and re-reads the same bytes.
+- `httpapi` router tests with a real SQLite temp DB and the gate on (PIN from a test constant such as `"test-pin-not-real"`, never a realistic value): **every** operation in the generated route list except the three public ones → 401 without the cookie (iterate the routes, do not hand-pick); with a valid cookie → normal status; mutating requests without `X-Stoliki-Request` → 403 (with cookie) and 401 (without); `POST /session` right → 200 + `Set-Cookie` with `HttpOnly`, `SameSite=Lax`, `Path=/wesele`, `Max-Age=2592000`, `Secure` only when `X-Forwarded-Proto: https`; wrong → 401 `invalid_pin`; throttled → 429 + `Retry-After`; `DELETE /session` → 204 + `Max-Age=0`; `GET /health` and static files (`/wesele/`, `/wesele/goscie`, an asset) → 200 without a cookie; gated responses have `Cache-Control: no-store`.
+- Gate off (`gate == nil`): the existing test suite passes unchanged; `GET /session` → 200 `pinRequired:false`; no 401/403 anywhere.
+- Log hygiene: capture `slog` output during a wrong and a right login and assert the PIN string and the attempted value do not appear; error bodies never contain them.
+- `cmd/server`: `STOLIKI_PIN` empty → gate off + warning; set → `session.key` created next to `DB_PATH`.

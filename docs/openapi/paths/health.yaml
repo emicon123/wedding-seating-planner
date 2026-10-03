@@ -2,6 +2,8 @@ get:
   tags: [health]
   operationId: getHealth
   summary: Liveness check (DB reachable)
+  description: Always public (compose healthcheck), also while the access gate is on.
+  security: []
   responses:
     '200':
       description: Healthy.

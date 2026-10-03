@@ -1,6 +1,6 @@
 # 003 — Frontend design (React SPA): modules, components, state ownership, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8), task 007 (Generate stores at once + Cofnij, §9) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
+Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8), task 007 (Generate stores at once + Cofnij, §9), task 009 (PIN screen / access gate, §10) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
 
 ## 1. Modules and dependency rule
 
@@ -328,3 +328,62 @@ User decision 2026-10-03 ("Zapisuj od razu"): after **Generuj plany** the tables
 **Tests:** `domain/planView.test.ts` (`toTableLayouts` incl. pins and empty tables, `toScenariosReplace`, `canUndoGenerate`); MSW hook tests for `useGeneratePlans` (three calls in order, snapshot versions in the PUT, cache + undo set, 409 path) and `useUndoGenerate` (200 / 409 / 500); `PlansPage.test.tsx` and `PlanDetailPage.test.tsx`: Generate shows the new plans in place with no preview, Cofnij restores, the bar hides after a move.
 
 Pattern check: no new library, no client store, no confirmation dialog. The snapshot is the minimal Memento (one slot, client memory); Command objects / undo stack stay rejected (YAGNI).
+
+## 10. PIN screen and the access gate (task 009)
+
+Server rules, cookie and throttle: [../05-access-gate.md](../05-access-gate.md). Contract: `GET/POST/DELETE /session`, `Session {pinRequired, expiresAt}`, error codes `unauthenticated` (401 on any protected call), `invalid_pin` (401 on login), `too_many_attempts` (429 + `Retry-After`), `csrf_header_missing` (403). Flow: [003-sequences.md](003-sequences.md) §6. States: [001-state-machine.md](001-state-machine.md) §5. The PIN never appears in code, tests or fixtures (tests use a fake value like `"0000-test"`) and is never stored client-side (no `localStorage`, no query cache entry, no URL).
+
+**Module changes**
+
+```ts
+// api/client.ts — every request carries the CSRF header (harmless when the gate is off)
+export const client = createClient<paths>({ baseUrl: …, fetch: …, headers: { 'X-Stoliki-Request': '1' } });
+
+// api/keys.ts
+keys.session = ['session']
+
+// api/session.ts (new)
+type SessionState = { status: 'open'; pinRequired: boolean; expiresAt: string | null } | { status: 'pinRequired' };
+useSession(): UseQueryResult<SessionState>  // GET /session; 200 → {status:'open', ...data}; 401 → {status:'pinRequired'}
+                                            // (a 401 here is a normal answer, not an error); retry: false, staleTime: Infinity,
+                                            // refetchOnWindowFocus: false (other queries' 401s keep it honest)
+useLogin()     // POST /session {pin}; onSuccess: setQueryData(keys.session, {status:'open', ...data}) then
+               // invalidateQueries({ predicate: q => q.queryKey[0] !== 'session' }) — the current route refetches
+useLogout()    // DELETE /session; onSettled (success or error): queryClient.clear(); setQueryData(keys.session, {status:'pinRequired'})
+lockApp(qc: QueryClient): void   // removeQueries({ predicate: q => q.queryKey[0] !== 'session' }); setQueryData(keys.session, {status:'pinRequired'})
+
+// app/queryClient.ts — ONE place maps any 401 to the PIN screen
+createQueryClient(): new QueryClient({
+  queryCache:    new QueryCache({    onError: (e) => isUnauthenticated(e) && lockApp(client) }),
+  mutationCache: new MutationCache({ onError: (e) => isUnauthenticated(e) && lockApp(client) }),
+  defaultOptions: { queries: { retry: (n, e) => !isUnauthenticated(e) && n < 1, … } },   // never retry a 401
+})
+// isUnauthenticated(e) = e instanceof ApiError && e.status === 401 && e.errors[0]?.code === 'unauthenticated'
+// (the login's own 401 has code invalid_pin, so a wrong PIN never "locks" the app twice)
+
+// domain/labels.ts — errorLabel: invalid_pin → "Zły PIN", too_many_attempts → "Za dużo prób — spróbuj za chwilę",
+//                    unauthenticated → "Podaj PIN", csrf_header_missing → generic error copy
+```
+
+**Components**
+
+- **`app/AccessGate.tsx`** (new): a **pathless root route** wrapping *every* route (the `Layout` routes **and** `druk/:capacity`, which sits outside `Layout`): `<Route element={<AccessGate />}> … </Route>`. Renders: session loading → the existing "Wczytuję…"; `status: 'pinRequired'` → `<PinScreen />` (full screen, no tabs); `status: 'open'` → `<Outlet />`. Because it is a route element inside the router, the URL (route, `?guest=`, filters) is untouched while the PIN screen shows; after login the same route renders again. Children (pages) mount only when open, so no data query fires before the session is known.
+- **`features/session/PinScreen.tsx`** (new, presentational + `useLogin`): centred card, large type (it must be very readable on a phone).
+  - Heading **"Podaj PIN"**, subline "Stoliki — plan stołów weselnych".
+  - One `<input type="password" inputMode="numeric" autoComplete="current-password" autoFocus>` with a visible label "PIN", large font and letter-spacing; no `maxLength`/`pattern` (the PIN may become longer or alphanumeric — then switch `inputMode` to `text`, a one-line change). Show/hide toggle (eye icon, aria-label "Pokaż PIN").
+  - Button **"Wejdź"** (full width, `type="submit"`), Enter submits; disabled while empty or pending ("Sprawdzam…").
+  - 401 `invalid_pin` → inline error **"Zły PIN"** (`role="alert"`), field cleared, focus back in the field.
+  - 429 → **"Za dużo prób — spróbuj za chwilę"**, plus "Spróbuj ponownie za {N} s / min" counting down from `Retry-After`; the button stays disabled until it reaches 0.
+  - Network / 500 → `errorMessage(error)` copy. No hint about PIN length or remaining attempts.
+- **`Layout`**: when `useSession().data` is `{status:'open', pinRequired: true}`, the header shows a **"Wyloguj"** button (ghost, `LogOutIcon`); hidden when the gate is off. Click → `useLogout().mutate()` → PIN screen. No confirmation dialog (logging back in is one PIN away). `PrintView` shows no logout button (print layout).
+
+**State ownership (adds to §4):** session state = TanStack Query `keys.session` (server state like the rest). The PIN input value = `PinScreen` local state, cleared after every submit. Countdown = `PinScreen` local state. Nothing else.
+
+**Behaviour notes**
+- A 401 in the middle of an edit (cookie expired after 30 days of not using the app) drops the user on the PIN screen; an open dialog's unsaved input is lost, the URL is kept. Accepted: sessions slide, so this only happens after a month of inactivity or after "change the PIN" / logout elsewhere.
+- Optimistic moves rolled back by a 401 are fine: `lockApp` removes the scenario cache anyway and it is refetched after login.
+- Gate off: `GET /session` → `pinRequired: false`; the app behaves exactly as before (no PIN screen, no "Wyloguj"), one extra request at start.
+
+**Tests (B2):** MSW: `useSession` maps 200/401; a page query answering 401 `unauthenticated` → PIN screen appears, other caches are emptied, URL unchanged; correct PIN (MSW returns 200) → the same route renders and refetches; wrong PIN → "Zły PIN", field cleared; 429 with `Retry-After: 30` → message + disabled button + countdown (fake timers); "Wyloguj" visible only when `pinRequired: true`, click → DELETE sent, PIN screen, cache cleared; `client` sends `X-Stoliki-Request: 1` (assert in an MSW handler); a 401 is never retried; `druk/10` is gated too.
+
+Pattern check: the global `QueryCache`/`MutationCache` `onError` is TanStack's built-in interception point, so no custom event bus, no auth context/reducer, no Zustand. `AccessGate` is a plain route element (no HOC per page).

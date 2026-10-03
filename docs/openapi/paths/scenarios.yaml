@@ -38,6 +38,8 @@ get:
               total: 4
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
     '500':
       $ref: ../components/responses.yaml#/InternalError
 put:
@@ -140,6 +142,10 @@ put:
               total: 4
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
     '409':
       description: |
         At least one plan was changed after the client read it (move, pin, table added or

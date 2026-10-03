@@ -8,8 +8,13 @@ info:
     and run `make openapi` to regenerate the bundle `docs/openapi.yaml` (never edit the bundle).
 
     * Served under `/wesele/api` (prefix kept end-to-end, see docs/architecture/02-system-context.md).
-    * **No authentication:** the app is reachable only inside the tailnet (ADR-001 §2).
-      Auth must be added before any public exposure.
+    * **Access gate (shared PIN, ADR-001 §2 amendment 2026-10-03):** when the server runs with
+      `STOLIKI_PIN` set, every operation except `GET /health`, `POST /session` and `DELETE /session`
+      needs the signed session cookie `stoliki_session` (obtained with `POST /session`) and answers
+      401 `unauthenticated` without it. State-changing requests (POST/PUT/PATCH/DELETE) must also carry
+      the header `X-Stoliki-Request: 1` (CSRF guard) or get 403 `csrf_header_missing`. With
+      `STOLIKI_PIN` unset the gate is off: no 401/403 is ever returned (tailnet/LAN-only runs, dev, tests).
+      Design: docs/architecture/05-access-gate.md.
     * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
     * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
       (PUT /scenarios, which replaces all four plans at once: used by "Generuj plany" and
@@ -19,8 +24,9 @@ info:
       nothing derived (clusters, scores, violations) is stored.
 servers:
   - url: /wesele/api
-    description: Same origin as the SPA (tailnet-only)
-security: []
+    description: Same origin as the SPA
+security:
+  - sessionCookie: []
 tags:
   - name: guests
     description: Guest list, enabled toggles (UC-02…UC-06)
@@ -32,6 +38,8 @@ tags:
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
     description: The four plans (9/10/11/12), generate + store (and undo), move, pin, tables, delete plan (UC-09…UC-14, UC-17)
+  - name: session
+    description: Shared-PIN login, logout and gate state (task 009)
   - name: health
     description: Liveness
 paths:
@@ -54,6 +62,8 @@ paths:
                   $ref: '#/components/examples/GuestList'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
     post:
@@ -83,6 +93,10 @@ paths:
                   $ref: '#/components/examples/GuestMaciek'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
         '500':
@@ -120,6 +134,10 @@ paths:
                   $ref: '#/components/examples/GuestList'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -154,6 +172,10 @@ paths:
                   $ref: '#/components/examples/GuestMaciek'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -171,6 +193,10 @@ paths:
       responses:
         '204':
           description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -210,6 +236,10 @@ paths:
                   requestId: 01JB8Z6Q0K3N
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
@@ -226,6 +256,10 @@ paths:
           description: Removed.
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -278,6 +312,8 @@ paths:
                   requestId: 01JB8Z6Q0K3N
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
   /guest-imports:
@@ -338,6 +374,10 @@ paths:
                   requestId: 01JB8Z6Q0K3N
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
@@ -390,6 +430,8 @@ paths:
                   total: 4
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
     put:
@@ -536,6 +578,10 @@ paths:
                   total: 4
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           description: |
             At least one plan was changed after the client read it (move, pin, table added or
@@ -628,6 +674,10 @@ paths:
                   total: 4
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
   /scenarios/{capacity}/assignments/{guestId}:
@@ -663,6 +713,10 @@ paths:
                   $ref: '#/components/examples/Scenario10'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
@@ -687,6 +741,10 @@ paths:
                   $ref: '#/components/examples/Scenario10'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -711,6 +769,10 @@ paths:
                   $ref: '#/components/examples/Scenario10'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -741,6 +803,10 @@ paths:
                   $ref: '#/components/examples/ScenarioEmpty'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -767,8 +833,124 @@ paths:
                   $ref: '#/components/examples/Scenario10'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /session:
+    get:
+      tags:
+        - session
+      operationId: getSession
+      summary: Am I logged in? (gate state for the SPA shell)
+      description: |
+        Behind the gate like every protected operation: with no valid cookie the gate answers 401
+        before the handler runs. With the gate off it always answers 200 with `pinRequired: false`.
+        The SPA calls it once at start to decide whether to show "Wyloguj".
+      responses:
+        '200':
+          description: Session is valid (or the gate is off).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+              examples:
+                gateOn:
+                  summary: Gate on, logged in
+                  value:
+                    data:
+                      pinRequired: true
+                      expiresAt: '2026-11-02T10:00:00Z'
+                    meta:
+                      requestId: 01JB8Z6Q0K3N
+                gateOff:
+                  summary: Gate off (STOLIKI_PIN unset)
+                  value:
+                    data:
+                      pinRequired: false
+                      expiresAt: null
+                    meta:
+                      requestId: 01JB8Z6Q0K3N
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+        - session
+      operationId: createSession
+      summary: Log in with the shared PIN
+      description: |
+        Public (no cookie needed). Correct PIN → 200 and `Set-Cookie: stoliki_session=…; Path=/wesele;
+        HttpOnly; SameSite=Lax; Max-Age=2592000` (+ `Secure` when the request came over HTTPS).
+        Wrong PIN → 401 `invalid_pin`. Throttled → 429 `too_many_attempts` without evaluating the PIN.
+        Requires the CSRF header like every state-changing request. Gate off → 200 with
+        `pinRequired: false`, no cookie, the body is ignored.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreate'
+            example:
+              pin: <PIN>
+      responses:
+        '200':
+          description: Logged in; the session cookie is set.
+          headers:
+            Set-Cookie:
+              description: The signed session cookie (see docs/architecture/05-access-gate.md § Session cookie).
+              schema:
+                type: string
+              example: stoliki_session=<token>; Path=/wesele; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+              example:
+                data:
+                  pinRequired: true
+                  expiresAt: '2026-11-02T10:00:00Z'
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/InvalidPin'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - session
+      operationId: deleteSession
+      summary: Log out ("Wyloguj")
+      description: |
+        Public and idempotent: always clears the cookie (`Set-Cookie: stoliki_session=; Path=/wesele;
+        Max-Age=0`), valid session or not. Stateless sessions: this logs out this browser only;
+        logging out every device = change `STOLIKI_PIN` (or delete the session key file) and restart.
+      security: []
+      responses:
+        '204':
+          description: Cookie cleared.
+          headers:
+            Set-Cookie:
+              description: Expires the session cookie.
+              schema:
+                type: string
+              example: stoliki_session=; Path=/wesele; Max-Age=0; HttpOnly; SameSite=Lax
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
   /health:
@@ -777,6 +959,8 @@ paths:
         - health
       operationId: getHealth
       summary: Liveness check (DB reachable)
+      description: Always public (compose healthcheck), also while the access gate is on.
+      security: []
       responses:
         '200':
           description: Healthy.
@@ -794,6 +978,14 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: stoliki_session
+      description: |
+        HMAC-signed session cookie set by `POST /session` (HttpOnly, SameSite=Lax, Path=/wesele,
+        Secure over HTTPS, 30-day sliding lifetime). Enforced only while the gate is on.
   schemas:
     LinkLevel:
       type: integer
@@ -934,6 +1126,10 @@ components:
         - import_invalid
         - payload_too_large
         - internal_error
+        - unauthenticated
+        - invalid_pin
+        - too_many_attempts
+        - csrf_header_missing
     ErrorItem:
       type: object
       required:
@@ -1660,6 +1856,50 @@ components:
           $ref: '#/components/schemas/Scenario'
         meta:
           $ref: '#/components/schemas/Meta'
+    Session:
+      type: object
+      description: |
+        The caller's own session. `pinRequired` says whether the access gate is on (the SPA shows
+        "Wyloguj" only then). `expiresAt` is when the current cookie stops working (sliding: renewed
+        on use); null when the gate is off.
+      required:
+        - pinRequired
+        - expiresAt
+      properties:
+        pinRequired:
+          type: boolean
+          readOnly: true
+          example: true
+        expiresAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          readOnly: true
+          example: '2026-11-02T10:00:00Z'
+    SessionResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Session'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SessionCreate:
+      type: object
+      description: The shared PIN, as typed. Any length/charset is accepted by the contract; the server compares in constant time.
+      required:
+        - pin
+      additionalProperties: false
+      properties:
+        pin:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+          example: <PIN>
     HealthStatus:
       type: object
       required:
@@ -1840,6 +2080,22 @@ components:
                 message: Request body is not valid JSON.
             meta:
               requestId: 01JB8Z6Q0K3N
+    Unauthorized:
+      description: |
+        The access gate is on (`STOLIKI_PIN` configured) and the request carries no valid session cookie
+        (missing, expired, tampered, or signed with an old key). The SPA shows the PIN screen.
+        Never returned while the gate is off.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: unauthenticated
+                field: null
+                message: PIN required.
+            meta:
+              requestId: 01JB8Z6Q0K3N
     InternalError:
       description: Unexpected server error.
       content:
@@ -1851,6 +2107,21 @@ components:
               - code: internal_error
                 field: null
                 message: Unexpected error; see server logs (request 01JB8Z6Q0K3N).
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    Forbidden:
+      description: |
+        CSRF guard (gate on only): a state-changing request (POST, PUT, PATCH, DELETE) without the header
+        `X-Stoliki-Request: 1`. The SPA's API client always sends it; cross-site forms cannot.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: csrf_header_missing
+                field: null
+                message: Missing X-Stoliki-Request header.
             meta:
               requestId: 01JB8Z6Q0K3N
     UnprocessableEntity:
@@ -1903,6 +2174,44 @@ components:
               - code: payload_too_large
                 field: null
                 message: Request body exceeds 2 MB.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    InvalidPin:
+      description: |
+        The PIN is wrong. The response is the same for every wrong value (no hint about length,
+        digits or remaining attempts). Counts towards the attempt throttle.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: invalid_pin
+                field: pin
+                message: Wrong PIN.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    TooManyAttempts:
+      description: |
+        Attempt throttle engaged (this client, or all clients together). The submitted PIN was **not**
+        evaluated, so the response is identical whether it was right or wrong. Retry after the
+        number of seconds in `Retry-After`.
+      headers:
+        Retry-After:
+          description: Seconds until the next attempt is accepted.
+          schema:
+            type: integer
+            minimum: 1
+          example: 60
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            errors:
+              - code: too_many_attempts
+                field: null
+                message: Too many attempts; try again later.
             meta:
               requestId: 01JB8Z6Q0K3N
   parameters:

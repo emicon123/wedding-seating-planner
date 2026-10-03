@@ -16,6 +16,10 @@ post:
               $ref: ../components/examples.yaml#/Scenario10
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
     '404':
       $ref: ../components/responses.yaml#/NotFound
     '500':
@@ -45,6 +49,10 @@ delete:
               $ref: ../components/examples.yaml#/ScenarioEmpty
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
     '404':
       $ref: ../components/responses.yaml#/NotFound
     '500':

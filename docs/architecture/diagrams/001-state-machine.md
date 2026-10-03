@@ -170,9 +170,52 @@ stateDiagram-v2
     }
 ```
 
-*Legend:* there is no login state (tailnet-only access).
+*Legend:* the access gate (task 009) wraps this whole machine — see §5; with the gate off there is no login state.
 - `Compare` shows the four plans side by side (2×2 on medium screens, 4 across on wide ones): table count, fill bars, satisfaction and violation count, plus the **Generate** button.
 - `PlanDetail` is the floor plan of one plan, with the unseated tray, guest search and a details panel showing where a guest's preferred companions sit, with "via group 0 of X" provenance.
 - `Guests` is the editable list. It has per-row enable switches, a child marker, the relationships panel with per-group link checklists, and data warnings ([003-frontend-design.md](003-frontend-design.md) §5).
 
 On a phone, `Compare`, `PlanDetail` (read-mostly, search) and `PrintView` must be usable.
+
+## 5. Access gate: session (client view) and login throttle (server view) — task 009
+
+Rules: [../05-access-gate.md](../05-access-gate.md). Flows: [003-sequences.md](003-sequences.md) §6.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Checking: app start (GET /session)
+    Checking --> Open: 200 (gate off → pinRequired false, gate on → valid cookie)
+    Checking --> PinRequired: 401 unauthenticated
+    state PinRequired {
+        [*] --> Idle
+        Idle --> Submitting: "Wejdź" (POST /session)
+        Submitting --> WrongPin: 401 invalid_pin
+        WrongPin --> Submitting: "Wejdź"
+        Submitting --> Throttled: 429 (Retry-After s)
+        Throttled --> Idle: countdown reaches 0
+        Submitting --> Idle: network / 500 (error copy)
+    }
+    PinRequired --> Open: 200 + cookie (data queries refetch, same URL)
+    Open --> PinRequired: any 401 unauthenticated (expired / bad cookie, PIN changed)
+    Open --> PinRequired: "Wyloguj" (DELETE /session, cache cleared)
+    Open --> Open: authenticated request (cookie re-issued if older than 24 h)
+```
+
+*Legend:* client states of `AccessGate` (`keys.session`). `Open` contains the whole app shell of §4. Leaving `Open` always drops cached guest data. `Throttled` disables the button; it does not reveal whether the last PIN was right (the server did not check it).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Free: first failure of a client
+    Free --> Free: failure n ≤ 3
+    Free --> Locked: failure n ≥ 4 → lock 30 s × 2^(n−4), max 1 h
+    Locked --> Locked: attempt while locked → 429, PIN not checked, not counted
+    Locked --> Free: lock expires (next failure locks again, longer)
+    Free --> [*]: success, or 24 h without failures (entry forgotten)
+    state "Global window (all clients)" as G {
+        [*] --> Accepting
+        Accepting --> Closed: 20 failures within the last 24 h
+        Closed --> Accepting: oldest failure leaves the 24 h window
+    }
+```
+
+*Legend:* server-side, in memory, reset by a restart. A client is refused when **either** its own state is `Locked` **or** the global window is `Closed`; `Retry-After` is the longer of the two. A success clears only that client's entry, never the global window.

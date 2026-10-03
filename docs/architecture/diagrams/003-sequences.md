@@ -7,6 +7,7 @@ Task 003, Phase 5. The participants are the components and packages from [003-fr
 3. [Re-enable a guest → plan needs recalculation → regenerate](#3-re-enable-a-guest--plan-needs-recalculation--regenerate)
 4. [Quick-add a guest and link them through the group checklist](#4-quick-add-a-guest-and-link-them-through-the-group-checklist)
 5. [Delete a plan](#5-delete-a-plan-task-005-uc-17)
+6. [Access gate: PIN login, throttling, expiry, logout](#6-access-gate-pin-login-throttling-expiry-logout) (task 009)
 
 ## 1. Generate all four plans → stored at once → Cofnij
 
@@ -238,3 +239,91 @@ sequenceDiagram
 ```
 
 *Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so a pending Cofnij of a Generate becomes impossible. Unknown capacity → 404 `not_found`. No undo for a delete; the confirmation dialog stands in for it. "Delete all" is four independent commands, not a batch endpoint: each delete is safe on its own and idempotent, unlike a Generate, which must replace all four plans atomically (`PUT /scenarios`).
+
+## 6. Access gate: PIN login, throttling, expiry, logout (task 009)
+
+Rules: [../05-access-gate.md](../05-access-gate.md). Components: [003-frontend-design.md](003-frontend-design.md) §10, [003-backend-design.md](003-backend-design.md) §7. Gate on (`STOLIKI_PIN` set). `<PIN>` stands for the real value, which is never written down.
+
+### 6.1 First visit → PIN → the app
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User (phone, any network)
+    participant SPA as SPA (AccessGate, PinScreen)
+    participant MW as Go: gate middleware
+    participant H as Go: session / API handlers
+    U->>SPA: open /wesele/plany/10
+    Note over SPA: static shell is open (no data inside)
+    SPA->>MW: GET /session (no cookie)
+    MW-->>SPA: 401 unauthenticated
+    SPA-->>U: PinScreen "Podaj PIN" (URL stays /wesele/plany/10)
+    U->>SPA: types the PIN, taps "Wejdź"
+    SPA->>MW: POST /session {pin} + X-Stoliki-Request: 1
+    MW->>H: public op, CSRF header ok
+    H->>H: throttle.check(client) — not locked
+    H->>H: ConstantTimeCompare(SHA-256(pin), pinDigest) — match
+    H->>H: throttle.succeed(client), sign token (issuedAt, expiresAt = +30 d)
+    H-->>SPA: 200 {pinRequired: true, expiresAt} + Set-Cookie stoliki_session (HttpOnly, SameSite=Lax, Path=/wesele, Secure on HTTPS)
+    SPA->>SPA: setQueryData(session, open), invalidate data queries
+    SPA->>MW: GET /scenarios (cookie)
+    MW->>MW: verify HMAC + expiry, issued < 24 h ago → no re-issue
+    MW->>H: pass (Cache-Control: no-store)
+    H-->>SPA: 200 four plans
+    SPA-->>U: plan 10 with "Wyloguj" in the header
+```
+
+*Legend:* the only open calls are `GET /health`, `POST /session` and `DELETE /session`; everything else meets the middleware first. The URL never changes, so the user lands where the link pointed.
+
+### 6.2 Wrong PINs and the throttle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client (one IP)
+    participant H as Go: CreateSession
+    participant T as throttle (memory)
+    loop failures 1..3
+        C->>H: POST /session {wrong}
+        H->>T: check → not locked
+        H->>H: compare → mismatch
+        H->>T: fail(client) — client n++, global += now
+        H-->>C: 401 invalid_pin "Wrong PIN."
+    end
+    C->>H: POST /session {wrong} (4th)
+    H->>T: check → not locked
+    H->>T: fail → client locked 30 s
+    H-->>C: 401 invalid_pin
+    C->>H: POST /session {any value, even the right one}
+    H->>T: check → locked (29 s)
+    Note over H: PIN NOT evaluated — same answer for right and wrong
+    H-->>C: 429 too_many_attempts, Retry-After: 29
+    Note over T: next failures lock 1 min, 2 min, 4 min … max 1 h.<br/>20 failures from ALL clients within 24 h → every login refused<br/>(429) until the oldest failure is 24 h old. Existing cookies keep working.
+```
+
+*Legend:* the lock check happens **before** the comparison, so a 429 never confirms a guess. Wrong-PIN responses are identical (no "attempts left"). Logs carry counts only.
+
+### 6.3 Cookie expired or invalid mid-use, then logout
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant SPA as SPA
+    participant QC as QueryCache / MutationCache onError
+    participant MW as Go: gate middleware
+    U->>SPA: drag a cluster (optimistic move)
+    SPA->>MW: PUT /scenarios/10/assignments/4 (expired cookie)
+    MW-->>SPA: 401 unauthenticated
+    SPA->>QC: mutation error (ApiError 401, code unauthenticated)
+    QC->>SPA: lockApp(): remove all data queries, session = pinRequired
+    SPA-->>U: PinScreen, URL unchanged
+    Note over U,SPA: … PIN as in 6.1, then the route refetches and the user repeats the move
+    U->>SPA: "Wyloguj"
+    SPA->>MW: DELETE /session + X-Stoliki-Request: 1
+    MW-->>SPA: 204 + Set-Cookie stoliki_session (empty, Max-Age=0)
+    SPA->>SPA: queryClient.clear(), session = pinRequired
+    SPA-->>U: PinScreen
+```
+
+*Legend:* one global error hook turns any `unauthenticated` 401 into the PIN screen and drops cached guest data. Logout is stateless: it clears this browser's cookie only (log out everywhere = change the PIN + restart).

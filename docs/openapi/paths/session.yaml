@@ -1,0 +1,108 @@
+get:
+  tags: [session]
+  operationId: getSession
+  summary: Am I logged in? (gate state for the SPA shell)
+  description: |
+    Behind the gate like every protected operation: with no valid cookie the gate answers 401
+    before the handler runs. With the gate off it always answers 200 with `pinRequired: false`.
+    The SPA calls it once at start to decide whether to show "Wyloguj".
+  responses:
+    '200':
+      description: Session is valid (or the gate is off).
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/SessionResponse
+          examples:
+            gateOn:
+              summary: Gate on, logged in
+              value:
+                data:
+                  pinRequired: true
+                  expiresAt: '2026-11-02T10:00:00Z'
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+            gateOff:
+              summary: Gate off (STOLIKI_PIN unset)
+              value:
+                data:
+                  pinRequired: false
+                  expiresAt: null
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+post:
+  tags: [session]
+  operationId: createSession
+  summary: Log in with the shared PIN
+  description: |
+    Public (no cookie needed). Correct PIN → 200 and `Set-Cookie: stoliki_session=…; Path=/wesele;
+    HttpOnly; SameSite=Lax; Max-Age=2592000` (+ `Secure` when the request came over HTTPS).
+    Wrong PIN → 401 `invalid_pin`. Throttled → 429 `too_many_attempts` without evaluating the PIN.
+    Requires the CSRF header like every state-changing request. Gate off → 200 with
+    `pinRequired: false`, no cookie, the body is ignored.
+  security: []
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/SessionCreate
+        example:
+          pin: '<PIN>'
+  responses:
+    '200':
+      description: Logged in; the session cookie is set.
+      headers:
+        Set-Cookie:
+          description: The signed session cookie (see docs/architecture/05-access-gate.md § Session cookie).
+          schema:
+            type: string
+          example: stoliki_session=<token>; Path=/wesele; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/SessionResponse
+          example:
+            data:
+              pinRequired: true
+              expiresAt: '2026-11-02T10:00:00Z'
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/InvalidPin
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
+    '422':
+      $ref: ../components/responses.yaml#/UnprocessableEntity
+    '429':
+      $ref: ../components/responses.yaml#/TooManyAttempts
+    '500':
+      $ref: ../components/responses.yaml#/InternalError
+delete:
+  tags: [session]
+  operationId: deleteSession
+  summary: Log out ("Wyloguj")
+  description: |
+    Public and idempotent: always clears the cookie (`Set-Cookie: stoliki_session=; Path=/wesele;
+    Max-Age=0`), valid session or not. Stateless sessions: this logs out this browser only;
+    logging out every device = change `STOLIKI_PIN` (or delete the session key file) and restart.
+  security: []
+  responses:
+    '204':
+      description: Cookie cleared.
+      headers:
+        Set-Cookie:
+          description: Expires the session cookie.
+          schema:
+            type: string
+          example: stoliki_session=; Path=/wesele; Max-Age=0; HttpOnly; SameSite=Lax
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

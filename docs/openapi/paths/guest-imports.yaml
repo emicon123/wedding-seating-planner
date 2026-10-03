@@ -54,6 +54,10 @@ post:
               requestId: 01JB8Z6Q0K3N
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
     '413':
       $ref: ../components/responses.yaml#/PayloadTooLarge
     '422':

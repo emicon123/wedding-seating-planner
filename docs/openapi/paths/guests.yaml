@@ -15,6 +15,8 @@ get:
               $ref: ../components/examples.yaml#/GuestList
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
     '500':
       $ref: ../components/responses.yaml#/InternalError
 post:
@@ -43,6 +45,10 @@ post:
               $ref: ../components/examples.yaml#/GuestMaciek
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
     '422':
       $ref: ../components/responses.yaml#/UnprocessableEntity
     '500':
@@ -76,6 +82,10 @@ patch:
               $ref: ../components/examples.yaml#/GuestList
     '400':
       $ref: ../components/responses.yaml#/BadRequest
+    '401':
+      $ref: ../components/responses.yaml#/Unauthorized
+    '403':
+      $ref: ../components/responses.yaml#/Forbidden
     '404':
       $ref: ../components/responses.yaml#/NotFound
     '500':
