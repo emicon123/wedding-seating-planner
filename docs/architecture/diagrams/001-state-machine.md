@@ -1,10 +1,10 @@
 # 001 — State machines (domain lifecycles + UI interaction)
 
-Task 001, Phase 2 (Skill 7); updated 2026-10-02 with the user's answers (enabled toggle, generate-all-three, no login); updated 2026-10-03 for four table sizes 9/10/11/12 (task 006). Terms: [../01-domain-glossary.md](../01-domain-glossary.md). Rules: [../03-seating-model.md](../03-seating-model.md).
+Task 001, Phase 2 (Skill 7); updated 2026-10-02 with the user's answers (enabled toggle, generate-all-three, no login); updated 2026-10-03 for four table sizes 9/10/11/12 (task 006) and for Generate storing at once + Cofnij (task 007). Terms: [../01-domain-glossary.md](../01-domain-glossary.md). Rules: [../03-seating-model.md](../03-seating-model.md).
 
 Contents:
 1. [Guest lifecycle](#1-guest-lifecycle) (domain)
-2. [Plans: generate, preview, accept](#2-plans-generate-preview-accept) (domain + UI)
+2. [Plans: generate (stored at once), Cofnij](#2-plans-generate-stored-at-once-cofnij) (domain + UI)
 3. [Cluster drag & drop](#3-cluster-drag--drop-ui) (UI)
 4. [App shell and screens](#4-app-shell-and-screens) (UI)
 
@@ -20,7 +20,7 @@ stateDiagram-v2
 
     state Enabled {
         [*] --> Unseated
-        Unseated --> Seated: cluster moved to a table / proposal accepted
+        Unseated --> Seated: cluster moved to a table / Generate stored / Cofnij
         Seated --> Seated: cluster moved to another table
         Seated --> Unseated: cluster moved to tray / table removed
         Seated --> Pinned: pin cluster
@@ -49,33 +49,34 @@ stateDiagram-v2
     end note
 ```
 
-*Legend:* Guest is the aggregate root of the guest list. The seating sub-state is the guest's Assignment in one scenario. One `enabled` flag replaces an attending/declined status (one switch, no extra state). Store-only-input rule: toggling writes one column and re-derives everything else. No undo stack (Command/Memento rejected): every transition has an inverse.
+*Legend:* Guest is the aggregate root of the guest list. The seating sub-state is the guest's Assignment in one scenario. One `enabled` flag replaces an attending/declined status (one switch, no extra state). Store-only-input rule: toggling writes one column and re-derives everything else. No undo stack (Command/Memento rejected as patterns): every transition has an inverse; the only undo is the one-step Cofnij of a Generate (§2).
 
-## 2. Plans: generate, preview, accept
+## 2. Plans: generate (stored at once), Cofnij
 
 ```mermaid
 stateDiagram-v2
     [*] --> Showing: open plans (GET /scenarios)
-    Showing --> Generating: click Generate
-    Generating --> Previewing: 4 proposals returned (9, 10, 11, 12)
-    Generating --> Showing: error (toast)
-    Previewing --> Accepting: accept one / several / all
-    Previewing --> Showing: discard
-    Accepting --> Showing: all PUT .../assignments succeeded
-    Accepting --> Conflict: a scenario returned 409 version_conflict
-    Conflict --> Generating: regenerate
-    Conflict --> Showing: give up (others stay accepted)
+    Showing --> Generating: click Generate (no confirmation)
+    Generating --> Undoable: GET snapshot, calculate, PUT /scenarios 200 (all four stored)
+    Generating --> Showing: 409 (plans changed meanwhile) or error, nothing stored (toast)
+    Undoable --> Restoring: Cofnij
+    Restoring --> Showing: PUT /scenarios 200 (previous four plans back)
+    Restoring --> Showing: 409 or 422, nothing changed, "Nie można cofnąć" (toast)
+    Restoring --> Undoable: network or 500 (snapshot kept, retry)
+    Undoable --> Showing: any plan version moves on (edit here or elsewhere) / dismiss x / page reload
+    Undoable --> Generating: Generate again (new snapshot replaces the old one)
     Showing --> Showing: move / pin / add or remove table / delete plan / toggle / link edit (refetch)
+    Undoable --> Undoable: toggle / link edit (plan versions unchanged)
 
     state Showing {
         [*] --> UpToDate
         UpToDate --> NeedsRecalculation: a violation appears (re-enabled guest overfills table, new guest unseated, under floor, split)
         NeedsRecalculation --> UpToDate: violations fixed by hand (move, add table)
-        NeedsRecalculation --> UpToDate: proposal accepted
+        NeedsRecalculation --> UpToDate: Generate stored without violations
         UpToDate --> Empty: delete plan (confirmed)
         NeedsRecalculation --> Empty: delete plan (confirmed)
-        Empty --> UpToDate: proposal accepted
-        Empty --> NeedsRecalculation: proposal accepted with violations / table added by hand
+        Empty --> UpToDate: Generate stored
+        Empty --> NeedsRecalculation: Generate stored with violations / table added by hand
         note right of Empty
             No tables, assignments or pins
             (DELETE .../tables). With enabled guests
@@ -84,11 +85,13 @@ stateDiagram-v2
         end note
     }
 
-    note right of Previewing
-        Proposals live in client memory only.
-        Each shows table count, fills, score and
-        violations, side by side with the current plan.
-        Nothing is written until accept.
+    note right of Undoable
+        The new plans are stored and shown in the
+        normal views (cards, floor plan). The bar
+        "Wygenerowano nowe plany. Cofnij" is shown
+        while every plan version equals the version
+        the Generate produced. Snapshot lives in the
+        client only (this tab, until reload).
     end note
     note left of Showing
         Each scenario: version bumps on every plan
@@ -98,7 +101,7 @@ stateDiagram-v2
     end note
 ```
 
-*Legend:* the four Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` is tracked per plan and derived by the server (`summary.needsRecalculation` = any violation). In `NeedsRecalculation` the plan card and the floor plan show a "Przelicz / Generuj" call to action. There is never an automatic regeneration. Each proposal carries `basedOnVersion`, and each accept is an independent PUT, so "accept all" is four calls and a conflict affects only that scenario. Generate always produces all three plans (user requirement). `Previewing` replaces an undo stack for accepting. **Delete plan** (UC-17) has no undo either; a confirmation dialog stands in for it. `Empty` is a display state, not a stored one: the server still derives `needsRecalculation` (true when any enabled guest exists), the UI additionally recognises `tableCount = 0` to show the empty state and disable "Usuń plan". Discarding a preview ("Odrzuć", `Previewing → Showing`) is a different thing: it never touches a stored plan.
+*Legend:* the four Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` / `Empty` (inside `Showing`, and equally inside `Undoable`) are tracked per plan and derived by the server (`summary.needsRecalculation` = any violation); `Empty` is a display state (`tableCount = 0`). There is never an automatic regeneration. Generate always produces and stores all four plans, **atomically** (`PUT /scenarios`: all four or none), with no preview and no confirmation (user decision 2026-10-03, task 007). `Undoable` is a client-side state: it holds a one-slot snapshot of the four plans as they were before the Generate; **Cofnij** re-sends it through the same atomic, version-checked call, so it fails cleanly (409, nothing changed) if any plan was edited after the Generate. **Delete plan** (UC-17) has no undo; a confirmation dialog stands in for it.
 
 ## 3. Cluster drag & drop (UI)
 

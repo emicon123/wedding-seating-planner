@@ -1,10 +1,12 @@
 post:
   tags: [scenarios]
   operationId: calculateProposals
-  summary: Generate proposals for all four plans (UC-10)
+  summary: Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
   description: |
     Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
-    current guests, links and pins. Accept a proposal with `PUT /scenarios/{capacity}/assignments`.
+    current guests, links and pins (pinned clusters stay at their table, `pinned: true`).
+    "Generuj plany" stores the four results straight away: the SPA sends them unchanged to
+    `PUT /scenarios` (one atomic call, version-checked) without showing a preview.
   responses:
     '200':
       description: Exactly four proposals, ordered 9, 10, 11, 12.

@@ -1,6 +1,6 @@
 # 003 — Frontend design (React SPA): modules, components, state ownership, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
+Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8), task 007 (Generate stores at once + Cofnij, §9) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
 
 ## 1. Modules and dependency rule
 
@@ -16,7 +16,7 @@ frontend-web/src/
 │   ├── guests/          GuestsPage, QuickAddBar, GuestTable, GuestRow, GuestFilters, BulkToggleBar,
 │   │                    GuestEditDialog, DeleteGuestDialog, LinkEditor (relationships panel), RelationBlock,
 │   │                    LinkPicker (per-group checklist), ClusterWarnings
-│   ├── plans/           PlansPage (compare), PlanCard, GenerateButton, ProposalPreview, RecalculationBanner,
+│   ├── plans/           PlansPage (compare), PlanCard, GenerateButton, UndoGenerateBar (task 007), RecalculationBanner,
 │   │                    PlanDetailPage, FloorPlan, TableCard, ClusterChip, UnseatedTray, GuestDetailsPanel,
 │   │                    PlanSearch, PrintView, DeleteTableDialog, DeletePlanDialog (task 005)
 │   └── import/          ImportPage (DEFERRED)
@@ -52,7 +52,7 @@ export const client = createClient<paths>({ baseUrl: API_BASE });
 export class ApiError extends Error { status: number; errors: ErrorItem[] }  // thrown by every hook on non-2xx
 
 // api/keys.ts
-export const keys = { guests: ['guests'], clusters: ['clusters'], scenarios: ['scenarios'], proposals: ['proposals'] } as const;
+export const keys = { guests: ['guests'], clusters: ['clusters'], scenarios: ['scenarios'], generateUndo: ['generateUndo'] } as const;
 
 // api/guests.ts
 useGuests(): UseQueryResult<Guest[]>
@@ -64,12 +64,16 @@ useApplyLinkChanges()     // ONE mutation for a checklist Save or a single remov
 useClusterOverview(): UseQueryResult<ClusterOverview>
 // api/scenarios.ts
 useScenarios(): UseQueryResult<Scenario[]>                                    // 4, ordered 9/10/11/12
-useCalculateProposals()   // onSuccess: setQueryData(keys.proposals, proposals)  (transient preview lives in the query cache)
-useAcceptProposal()       // onSuccess: replace that scenario in keys.scenarios; on 409: refetch scenarios + toast
+useGeneratePlans()        // task 007, §9: fetch fresh scenarios (= undo snapshot) → POST /scenarios/calculate → PUT /scenarios
+                          // (basedOnVersion = snapshot versions); onSuccess: setQueryData(keys.scenarios, response) +
+                          // setQueryData(keys.generateUndo, {previous: snapshot, generatedVersions}); 409: refetch scenarios
+useGenerateUndo(): GenerateUndo | undefined   // reads keys.generateUndo (skipToken, staleTime/gcTime Infinity, like the old preview)
+useUndoGenerate()         // PUT /scenarios with the snapshot (basedOnVersion = generatedVersions); onSuccess: setQueryData(keys.scenarios)
+                          // + clear keys.generateUndo; on 409/422: clear keys.generateUndo + refetch scenarios
 useSetAssignment(), useDeleteAssignment()                                     // OPTIMISTIC (domain/optimistic.ts), rollback on error,
                                                                               // onSuccess: replace scenario with the server's evaluated copy
 useAddTable(), useDeleteTable()
-useResetPlan()            // task 005: DELETE /scenarios/{capacity}/tables; onSuccess: replace that scenario + drop its proposal
+useResetPlan()            // task 005: DELETE /scenarios/{capacity}/tables; onSuccess: replace that scenario
 
 // domain/guestIndex.ts
 buildGuestIndex(guests: Guest[]): GuestIndex                    // byId, search(query) — case- and diacritics-insensitive ("Michal" finds "Michał")
@@ -93,6 +97,10 @@ clusterAfter(guest, guests, selected); clusterSizeWarning(seatedSize)   // group
 applyMove(plan: SeatingPlan, cluster: ClusterPlacement, toTable: number | null): SeatingPlan   // moves the placement, recomputes fills only
 // domain/dropPreview.ts
 dropPreview(plan, cluster, toTable, capacity, overview): { fillAfter, overCapacity, underFloorSource, preferredHere: number }
+// domain/planView.ts (task 007)
+toTableLayouts(plan: SeatingPlan): TableLayout[]          // number, guestIds (all clusters), pinnedGuestIds (pinned clusters) — for proposals AND snapshots
+toScenariosReplace(plans: {capacity, basedOnVersion, plan}[]): ScenariosReplace
+canUndoGenerate(undo: GenerateUndo | undefined, scenarios: Scenario[] | undefined): boolean   // every scenario.version === undo.generatedVersions[capacity]
 // domain/labels.ts
 violationLabel(v: Violation): string; warningLabel(w: DataWarning): string; errorLabel(e: ErrorItem): string   // Polish copy
 ```
@@ -114,11 +122,10 @@ classDiagram
         summary, fill bars, violations
         RecalculationBanner if needsRecalculation
     }
-    class ProposalPreview {
+    class UndoGenerateBar {
         <<component>>
-        +proposals Proposal[]
-        +current Scenario[]
-        accept one / all, discard
+        shown while canUndoGenerate
+        Cofnij / dismiss
     }
     class PlanDetailPage {
         <<component>>
@@ -179,7 +186,7 @@ classDiagram
     class ApiHooks {
         <<module api/>>
         useGuests / useClusterOverview / useScenarios
-        useCalculateProposals / useAcceptProposal
+        useGeneratePlans / useGenerateUndo / useUndoGenerate
         useSetAssignment / useDeleteAssignment (optimistic)
         useCreateGuest / useToggleGuests / useApplyLinkChanges
         useResetPlan
@@ -192,7 +199,8 @@ classDiagram
     }
 
     PlansPage *-- PlanCard
-    PlansPage *-- ProposalPreview
+    PlansPage *-- UndoGenerateBar
+    PlanDetailPage *-- UndoGenerateBar
     PlanDetailPage *-- FloorPlan
     PlanDetailPage *-- UnseatedTray
     FloorPlan *-- TableCard
@@ -223,7 +231,7 @@ classDiagram
 | `domain/` | **Functional core** | Display logic is pure and unit-tested without React. |
 | Pages → presentational children | **Container / presentational split** | Pages own the hooks; children get props, so they are easy to test and to print. |
 | Optimistic moves | **Optimistic UI with rollback** (TanStack `onMutate` / `onError`) | The drag must feel instant (state machine §3). |
-| Proposals in the query cache (`keys.proposals`) | **YAGNI** over a client store | Transient server-derived data. A Zustand store is not needed. |
+| Undo snapshot in the query cache (`keys.generateUndo`, task 007) | **YAGNI** over a client store; a one-slot **Memento** in spirit | Transient, per tab, never fetched. No Zustand, no undo stack. |
 | `@dnd-kit` sensors | **Accessibility** | Keyboard drag is a requirement. |
 
 ## 4. State ownership
@@ -231,7 +239,7 @@ classDiagram
 | State | Owner | Notes |
 |---|---|---|
 | Guests, clusters, scenarios | TanStack Query (`keys.*`) | Refetch on window focus. Mutations invalidate or replace. |
-| Proposals (preview) | TanStack Query cache `keys.proposals` | Cleared on accept-all or discard. |
+| Undo snapshot of the last Generate (`{previous: Scenario[], generatedVersions}`) | TanStack Query cache `keys.generateUndo` | Task 007. Set by a successful Generate (replacing any older one), cleared by Cofnij (success, 409 or 422) and by "×". Lost on reload (by design). Visibility is derived: `canUndoGenerate`. |
 | Guest filters, selection for bulk toggle, search text | `GuestsPage` local state (filters mirrored to the URL query string so a reload keeps them) | Includes the **"Powiązani z: X"** filter, URL-mirrored as `?powiazani=<guestId>` (`domain/guestFilters.ts`), set by "Pokaż na liście" in the relationships panel. |
 | Relationships panel: which person is shown, the "Wróć" trail, which group's checklist is open | `LinkEditor` local state | Closing the panel forgets it. |
 | Checklist selection, search text, "Tylko zaznaczeni" | `LinkPicker` local state | Nothing is sent before "Zapisz"; "Anuluj" / Esc discards. |
@@ -257,7 +265,7 @@ classDiagram
 | Zustand / global client store | rejected | Every piece of state has an owner in §4. |
 | Redux / context-based store | rejected | Same reason. |
 | Canvas library (Konva) | rejected | DOM/SVG keeps dnd-kit accessible (ADR-001). |
-| Command/undo stack | rejected | No undo (user-confirmed). |
+| Command/undo stack | rejected | Only a one-step Cofnij of the last Generate (task 007): one snapshot, re-sent through `PUT /scenarios`. |
 | Client-side scoring | rejected | The server is the single source of truth (DRY). Only display hints are computed client-side. |
 | Form library for QuickAddBar | rejected | One input. React Hook Form + Zod only in `GuestEditDialog`. |
 | MSW (Mock Service Worker) for hook/component tests | **adopted, test-only** | Free (MIT). Tests the real fetch layer against contract-shaped responses (`schema.d.ts` types). |
@@ -265,10 +273,10 @@ classDiagram
 **Audit.**
 - SRP: pages fetch, children render, `domain/` computes, `api/` talks HTTP.
 - DRY: one API client, generated types, one place for Polish labels.
-- YAGNI: no global store, no undo, no canvas, no batch-create endpoint, import screen deferred.
+- YAGNI: no global store, no undo stack (one-step Cofnij of Generate only), no canvas, no batch-create endpoint, import screen deferred.
 - Found and fixed:
   1. The drop-preview "satisfaction hint" in state machine §3 could have turned into client-side scoring. It is limited to counting preferred companions already at the target table (`dropPreview.preferredHere`).
-  2. The proposal preview initially needed a client store. The query cache is enough.
+  2. The proposal preview initially needed a client store. The query cache is enough. (The preview itself was removed in task 007; the undo snapshot uses the same query-cache approach.)
 
 ## 7. Delete a plan (task 005, UC-17)
 
@@ -277,18 +285,46 @@ Contract: `DELETE /scenarios/{capacity}/tables` → 200 `ScenarioResponse` with 
 - **Where.** A destructive-styled **"Usuń plan"** button (trash icon + text) on each `PlanCard` (PlansPage, at the bottom next to "Otwórz plan") and in the `PlanDetailPage` header next to "Dodaj stół". A **"Usuń wszystkie plany"** button in the "Aktualne plany" section header of `PlansPage`. Each is **disabled when there is nothing to delete** (`summary.tableCount === 0`; for "all": all four).
 - **Confirmation (`DeletePlanDialog`, an `AlertDialog` like `DeleteTableDialog`).** One plan: title "Usunąć plan na {capacity} miejsc?"; body states what is cleared, from the cached scenario: "{tableCount} stołów i {seatedCount} osób przy stołach. Wszyscy trafią do pola „Bez stołu”. Pinezki znikną. Tego nie da się cofnąć." Buttons "Anuluj" (default focus) / "Usuń plan" (destructive). All plans: title "Usunąć wszystkie cztery plany?", a line per plan with its counts, the same irreversibility text, and a **stronger confirmation**: the "Usuń wszystkie plany" button stays disabled until the checkbox "Rozumiem, że tego nie da się cofnąć" is ticked.
 - **Calls.** One plan = one `useResetPlan().mutate({capacity})`. All plans = four calls (9, 10, 11, 12) via `Promise.allSettled`; plans that failed are named in one error toast ("Nie udało się usunąć planu: 10"), the others stay deleted (each call is independent and idempotent, so retrying is safe).
-- **After success.** The hook replaces the scenario in `keys.scenarios` with the server copy and drops that capacity's proposal from `keys.proposals` (its `basedOnVersion` is now stale; accepting it would be a 409). Toast "Usunięto plan na {capacity} miejsc." / "Usunięto wszystkie plany.". On `PlanDetailPage` the user stays on the page.
+- **After success.** The hook replaces the scenario in `keys.scenarios` with the server copy (its version moves on, so a pending Cofnij of a Generate disappears: `canUndoGenerate` is false). Toast "Usunięto plan na {capacity} miejsc." / "Usunięto wszystkie plany.". On `PlanDetailPage` the user stays on the page.
 - **What the empty plan shows.** Nothing new: the existing empty state "Brak stołów w tym planie." (`FillBars`), every cluster in `UnseatedTray`, and — when there are enabled guests — the server's `unseated_guests` violation, so `needsRecalculation` is true and `RecalculationBanner` offers "Przelicz / Generuj".
-- **Not the same as "Odrzuć".** Discarding a preview (`useDiscardProposals`, "Odrzuć") already exists and never touches a stored plan; "Usuń plan" never touches a preview except dropping its now-stale proposal.
-- Pattern check: no undo / Command (rejected, user-confirmed); a confirmation dialog stands in. No new client state beyond the dialog's open flag and checkbox (YAGNI).
+- Pattern check: no undo for a delete (the Cofnij of task 007 covers only Generate); a confirmation dialog stands in. No new client state beyond the dialog's open flag and checkbox (YAGNI).
 
 ## 8. Four table sizes (task 006)
 
 Plans exist for **9, 10, 11 and 12** seats (was 8, 10, 12). Contract: `Capacity` enum `[9, 10, 11, 12]`; `GET /scenarios` and `POST /scenarios/calculate` return exactly four items, ordered 9, 10, 11, 12; the data warning for "too big for the smallest plan" is now `cluster_exceeds_9` (cluster > 9 enabled guests).
 
-- **One list of sizes.** `domain/capacity.ts` `CAPACITIES = [9, 10, 11, 12]` is the only place that lists them; every page, switcher, "delete all" and "accept all" iterates it (DRY). The `Capacity` type comes from `schema.d.ts`.
-- **Four cards, readable.** `PlansPage` (current plans) and `ProposalPreview` lay the cards out as 1 column on phones, **2 × 2 on medium screens**, **4 across on wide screens** (Tailwind `grid-cols-1 md:grid-cols-2 xl:grid-cols-4`). The cards keep the same content; nothing new is added to them. The plan switcher in `PlanDetailPage` lists the four sizes; the print view is per capacity (`/druk/:capacity`). Old bookmarks `/plany/8` and `/druk/8` redirect to 9.
+- **One list of sizes.** `domain/capacity.ts` `CAPACITIES = [9, 10, 11, 12]` is the only place that lists them; every page, switcher, "delete all" and the Generate/Cofnij body builder iterates it (DRY). The `Capacity` type comes from `schema.d.ts`.
+- **Four cards, readable.** `PlansPage` (current plans) lays the cards out as 1 column on phones, **2 × 2 on medium screens**, **4 across on wide screens** (Tailwind `grid-cols-1 md:grid-cols-2 xl:grid-cols-4`). The cards keep the same content; nothing new is added to them. The plan switcher in `PlanDetailPage` lists the four sizes; the print view is per capacity (`/druk/:capacity`). Old bookmarks `/plany/8` and `/druk/8` redirect to 9.
 - **Odd seat counts.** `TableSeats` / the round-table drawing, the drop preview and the move menu must place **9 and 11** seats evenly around the table (angle = 360° / capacity, no assumption of an even count or of pairs facing each other).
 - **Polish copy.** "Cztery plany naraz: stoły 9-, 10-, 11- i 12-osobowe"; "Zapisano plany: 9, 10, 11, 12 miejsc."; "Usunąć wszystkie cztery plany?" (four DELETE calls); warning label `cluster_exceeds_9`: "Ta paczka (grupa 0) jest za duża na stół 9-osobowy"; the client preview `clusterSizeWarning` uses > 9 / > 12.
 - **Floor 8** (was 6): `domain/dropPreview.ts` `MIN_TABLE_FILL = 8` is the single client constant (drop preview, table status, labels "minimum 8", `FillBars` floor line); the `PlanLegend` copy "minimum 6" becomes "minimum 8". Scores and violations still come from the server.
 - Pattern check: nothing new. No per-size component, no configuration endpoint for sizes (YAGNI: the sizes are fixed by the contract enum).
+
+## 9. Generate stores at once, Cofnij (task 007)
+
+User decision 2026-10-03 ("Zapisuj od razu"): after **Generuj plany** the tables and assignments are visible immediately in the normal plan views. No preview, no "Akceptuj", **no confirmation dialog** before overwriting (Cofnij covers mistakes; fewer clicks). Contract: `POST /scenarios/calculate` (unchanged) + `PUT /scenarios` (new, atomic, all four plans); `PUT /scenarios/{capacity}/assignments` is gone. Rules: [../03-seating-model.md](../03-seating-model.md) § Storing a Generate / § Undoing a Generate. Flow: [003-sequences.md](003-sequences.md) §1. States: [001-state-machine.md](001-state-machine.md) §2.
+
+**`useGeneratePlans()`** (one mutation, `mutationKey: GENERATE_MUTATION_KEY` so every Generuj button disables while it runs):
+1. `snapshot = await queryClient.fetchQuery({ queryKey: keys.scenarios, staleTime: 0, ... })` — fresh `Scenario[]`.
+2. `proposals = POST /scenarios/calculate`.
+3. `PUT /scenarios` with `toScenariosReplace(proposals.map(p => ({capacity: p.capacity, basedOnVersion: snapshot[p.capacity].version, plan: p.plan})))` — the **snapshot's** versions, so what is overwritten is exactly the snapshot.
+4. onSuccess: `setQueryData(keys.scenarios, response.data)`; `setQueryData(keys.generateUndo, { previous: snapshot, generatedVersions: {9: v, 10: v, 11: v, 12: v} from the response })`; invalidate nothing else.
+5. 409: invalidate `keys.scenarios`, toast "Plany zmieniły się w międzyczasie — kliknij „Generuj plany” jeszcze raz." Other errors: `errorMessage(error)` toast. Nothing is stored on any error (the PUT is atomic).
+
+**`GenerateButton`.** Same component on both entry points (`PlansPage` header, `RecalculationBanner` on `PlanCard` and `PlanDetailPage`); label "Generuj plany" / "Przelicz / Generuj", running label "Liczę i zapisuję plany…". **No navigation after success**: the `onGenerated` prop is removed and `PlanDetailPage` no longer navigates to `/`; the page you are on re-renders from the updated cache (overview: four cards with new fills; detail: the floor plan with tables and guests). Success toast: "Zapisano nowe plany: 9, 10, 11, 12 miejsc." (no action in the toast — Cofnij lives in the bar).
+
+**`UndoGenerateBar`** (new, presentational + `useGenerateUndo`/`useUndoGenerate`), rendered at the top of **both** `PlansPage` and `PlanDetailPage`, only while `canUndoGenerate(undo, scenarios)` is true:
+- Text: "Wygenerowano nowe plany. Poprzednie można przywrócić." Buttons: **"Cofnij"** (outline, `Undo2Icon`) and an icon button "×" (aria-label "Zamknij", clears `keys.generateUndo`). `role="status"`.
+- "Cofnij" → `useUndoGenerate().mutate()` → `PUT /scenarios` with `toScenariosReplace(previous.map(s => ({capacity: s.capacity, basedOnVersion: generatedVersions[s.capacity], plan: s.plan})))`. While pending: "Przywracam…", button disabled.
+  - 200: `setQueryData(keys.scenarios, response.data)`, clear `keys.generateUndo`, toast "Przywrócono poprzednie plany."
+  - 409 or 422: clear `keys.generateUndo`, invalidate `keys.scenarios`, toast.error "Nie można cofnąć — plany zmieniono po wygenerowaniu." Nothing changed on the server.
+  - Other errors (network, 500): keep the snapshot (retry possible), toast `errorMessage(error)`.
+- The bar disappears by itself as soon as any plan version differs from `generatedVersions` (a move, pin, table change or delete in this tab, or a refetch showing another device's change), because `canUndoGenerate` is derived from the cache — no hook needs to clear it.
+
+**Polish copy (new):** "Liczę i zapisuję plany…", "Zapisano nowe plany: 9, 10, 11, 12 miejsc.", "Wygenerowano nowe plany. Poprzednie można przywrócić.", "Cofnij", "Przywracam…", "Przywrócono poprzednie plany.", "Nie można cofnąć — plany zmieniono po wygenerowaniu.", "Plany zmieniły się w międzyczasie — kliknij „Generuj plany” jeszcze raz."
+
+**Delete (dead after task 007):** `features/plans/ProposalPreview.tsx`, `features/plans/ProposalCard.tsx`; in `api/scenarios.ts`: `useCalculateProposals`, `CALCULATE_MUTATION_KEY` (→ `GENERATE_MUTATION_KEY`), `useProposals`, `useDiscardProposals`, `useDropProposal`, `useAcceptProposal`, the proposal-dropping part of `useResetPlan`; `keys.proposals` in `api/keys.ts`; in `domain/planView.ts`: `toAcceptTables` (→ `toTableLayouts` with `pinnedGuestIds`), `isProposalStale`, `withoutProposal`; `AcceptPlan` in `domain/types.ts` (add `ScenariosReplace`, `ScenarioLayout`; keep `Proposal`, now an internal step); `PlanFigures`' `current` prop ("obecnie …") if `ProposalCard` was its only user; `fourProposals` in `features/plans/fixtures.ts` if no test still needs it; the `onGenerated` prop of `GenerateButton` / `RecalculationBanner` and the `navigate('/')` in `PlanDetailPage`; preview-related tests and copy ("Akceptuj", "Akceptuj wszystkie", "Odrzuć", "Generuj ponownie", "obecnie"). Regenerate `api/schema.d.ts` from the new bundle.
+
+**Tests:** `domain/planView.test.ts` (`toTableLayouts` incl. pins and empty tables, `toScenariosReplace`, `canUndoGenerate`); MSW hook tests for `useGeneratePlans` (three calls in order, snapshot versions in the PUT, cache + undo set, 409 path) and `useUndoGenerate` (200 / 409 / 500); `PlansPage.test.tsx` and `PlanDetailPage.test.tsx`: Generate shows the new plans in place with no preview, Cofnij restores, the bar hides after a move.
+
+Pattern check: no new library, no client store, no confirmation dialog. The snapshot is the minimal Memento (one slot, client memory); Command objects / undo stack stay rejected (YAGNI).

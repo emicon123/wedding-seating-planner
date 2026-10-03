@@ -2,11 +2,11 @@
 
 Stoliki plans the table seating of **one** wedding. This document is the shared vocabulary for every agent and for the code. Go/TS identifiers, OpenAPI schema names and DB tables use the English terms; the UI uses the Polish ones.
 
-> Status: Phases 1–4 (tasks 001–002), updated 2026-10-02 with the user's answers and with UC-17 (delete a plan, task 005). Items marked **[A-n]** are open assumptions (see [Assumptions](#assumptions)); confirmed answers are folded in as fact.
+> Status: Phases 1–4 (tasks 001–002), updated 2026-10-02 with the user's answers and with UC-17 (delete a plan, task 005); updated 2026-10-03 for task 007 (Generate stores the plans at once, Cofnij). Items marked **[A-n]** are open assumptions (see [Assumptions](#assumptions)); confirmed answers are folded in as fact.
 
 ## 1. Requirements summary
 
-**Goal.** Seat **~85–100 guests** at round tables. Every "must sit together" group stays intact, and plans use as few tables as possible with no table below 8 guests. Within that, as many preferred companions as possible sit together. Three plans are always produced side by side, one each for 8-, 10- and 12-seat tables. The result must be visual and easy to adjust by hand.
+**Goal.** Seat **~85–100 guests** at round tables. Every "must sit together" group stays intact, and plans use as few tables as possible with no table below 8 guests. Within that, as many preferred companions as possible sit together. Four plans are always produced side by side, one each for 9-, 10-, 11- and 12-seat tables. The result must be visual and easy to adjust by hand.
 
 **Actors**
 
@@ -34,19 +34,20 @@ Stoliki plans the table seating of **one** wedding. This document is the shared 
 | **Cluster affinity** | Sympatia między paczkami | The group-1/2 relation **between whole clusters** (user rule): if any member of cluster A has a level-1 (or level-2) link to any member of cluster B, then **all of A** has that level with **all of B**. The relation is symmetric and not transitive. Links of disabled members still count, because the families know each other regardless. **Defensive rule for bad data only:** if links between two clusters carry different levels, the strongest wins (1 over 2) and a `conflicting_link_levels` **data warning** is shown. This is what makes partners "come along automatically" and lets the UI show "Ola — przez grupę 0: Michał". Derived, never stored. |
 | **Oversized cluster** | Za duża paczka | A cluster whose seated size exceeds a scenario's capacity. That cluster cannot be seated in that scenario (violation). A data warning is also raised when the seated size exceeds 9 (does not fit the smallest, 9-seat plan), so a stray link that merges two families is noticed. |
 | **Scenario** | Plan (9 / 10 / 11 / 12) | One seating plan in which **every table has the same capacity**. Exactly four exist permanently, identified by capacity: **9, 10, 11, 12** (always listed in that order). They share the guest list and links; each has its own tables, assignments and pins. They are always shown and generated together. |
-| **Delete a plan** | Usuń plan / Usuń wszystkie plany | Resets one scenario to an **empty plan**: all its tables, assignments and pins are removed (disabled guests' assignments too) and its `version` is bumped. The scenario itself is never deleted (there are always four). Irreversible (no undo). An empty plan with enabled guests has an `unseated_guests` violation, so it shows **Needs recalculation**. "Usuń wszystkie plany" = the same for 9, 10, 11 and 12. Not to be confused with discarding a **Proposal** ("Odrzuć"), which never touches a stored plan. |
+| **Delete a plan** | Usuń plan / Usuń wszystkie plany | Resets one scenario to an **empty plan**: all its tables, assignments and pins are removed (disabled guests' assignments too) and its `version` is bumped. The scenario itself is never deleted (there are always four). Irreversible (no undo; a confirmation dialog stands in). An empty plan with enabled guests has an `unseated_guests` violation, so it shows **Needs recalculation**. "Usuń wszystkie plany" = the same for 9, 10, 11 and 12. |
 | **Capacity** | Liczba miejsc | Seats per table in a scenario (9, 10, 11 or 12). Hard upper bound. |
 | **Floor** | Minimalne obłożenie | **8 guests** (was 6 until 2026-10-03), a hard lower bound for every table in all four scenarios, waived only when the whole scenario needs a single table. Any fill between 8 and capacity is equally good: evenness is not rewarded. Some guest counts cannot meet it with small tables (e.g. 10–15 guests at capacity 9); the plan then shows `under_floor` violations ([03-seating-model.md](03-seating-model.md) § Feasibility). |
 | **Table** | Stół | A table in a scenario, numbered 1…k with no gaps (removing a table renumbers the later ones). No seat positions inside a table. |
 | **Assignment** | Przydział | "Guest g sits at table t in scenario s." At most one per guest per scenario. Assignments are always changed **per cluster**. Disabled members keep their assignment and move with their cluster. A re-enabled guest **must** sit with their cluster, so they reappear at the family's table even if it is full. That table then gets an `over_capacity` violation, and the plan is flagged **Needs recalculation** (user-confirmed). |
-| **Unseated** | Bez stołu | An enabled guest with no assignment in a scenario (e.g. added after the plan was accepted). Shown in the unseated tray. |
+| **Unseated** | Bez stołu | An enabled guest with no assignment in a scenario (e.g. added after the plan was generated). Shown in the unseated tray. |
 | **Pin** | Przypięcie | "Keep this cluster at this table when plans are regenerated." Stored on the members' assignments. A cluster is pinned if any member is pinned; pinning or unpinning always applies to the whole cluster. |
-| **Generate** | Generuj plany | Runs auto-seating for **all four scenarios at once** and returns four **Proposals**. Pure computation: nothing changes until a proposal is accepted. Rules: [03-seating-model.md](03-seating-model.md). |
-| **Proposal** | Propozycja | The transient output of Generate for one scenario: tables, assignments and an evaluation, plus the scenario `version` it was based on. **Accepting** it replaces that scenario's tables and assignments (pins kept). Never stored. |
+| **Generate** | Generuj plany | Runs auto-seating for **all four scenarios at once** and **stores the four results straight away**, replacing the four plans atomically (all or none; pins kept). The new tables and assignments are visible at once; there is no preview and no per-plan accept. Rules: [03-seating-model.md](03-seating-model.md) § Storing a Generate. |
+| **Cofnij (undo Generate)** | Cofnij | Restores the four plans (tables, assignments, pins) as they were before the **last Generate made in this browser tab**. Possible only while no plan has been changed since that Generate (otherwise 409, "Nie można cofnąć"). The only undo in the app. |
+| **Proposal** | Propozycja | The intermediate output of auto-seating for one scenario (`POST /scenarios/calculate`): tables, assignments, evaluation, `basedOnVersion`. Generate stores it immediately; the user never sees it as a separate thing. |
 | **Evaluation** | Ocena | Derived facts about a scenario or proposal: table count, fill per table, **satisfaction**, **violations**. Recomputed by the backend whenever a scenario is read or changed. |
 | **Satisfaction** | Zadowolenie | For an enabled guest g: the sum over enabled table-mates h outside g's cluster of `w(affinity)`, where `w1 = 1.0`, `w2 = 0.5` and a stranger counts 0. Also reported as "k of n preferred companions at this table". Table and scenario scores are sums. |
 | **Violation** | Naruszenie | A broken hard rule in a stored plan: cluster split, over capacity, under floor, unseated guests, oversized cluster. Violations never block saving; they are displayed. |
-| **Needs recalculation** | Wymaga przeliczenia | Derived flag on a stored plan: true when the plan has at least one violation (e.g. a re-enabled guest overfills the family's table, or a new guest is unseated). The UI shows a prominent "Przelicz / Generuj" call to action. The server **never regenerates on its own**: the user clicks Generate and accepts. Exposed as `SeatingPlan.summary.needsRecalculation`. |
+| **Needs recalculation** | Wymaga przeliczenia | Derived flag on a stored plan: true when the plan has at least one violation (e.g. a re-enabled guest overfills the family's table, or a new guest is unseated). The UI shows a prominent "Przelicz / Generuj" call to action. The server **never regenerates on its own**: the user clicks Generate (which stores the new plans at once). Exposed as `SeatingPlan.summary.needsRecalculation`. |
 | **Data warning** | Ostrzeżenie | A problem in the guest data rather than the plan: cluster > 9 (`cluster_exceeds_9`), cluster > 12 (`cluster_exceeds_12`), conflicting link levels. |
 | **Guest import** | Import listy | **Deferred (post-MVP).** For the MVP, guests and links are entered manually. Loads the guest list from a CSV export of the Google Sheet. A **dry run** returns an **Import report**. A **commit** replaces all guests and links and clears all three scenarios. |
 | **Import report** | Raport importu | Counts (guests, children, links, clusters) and problems per row. **Errors** block the commit: missing first name, duplicate name, malformed file. **Warnings** do not: an unmatched or ambiguous name reference (that link is dropped), a self-link, conflicting levels for one pair (the strongest is kept). |
@@ -82,7 +83,7 @@ All paths are relative to `/wesele/api`. The contract is [`docs/openapi.yaml`](.
 | UC-08 | **Review clusters and data warnings** | `GET /clusters` |
 | — | Liveness | `GET /health` |
 | UC-09 | **View / compare the four plans**: table count, fill, satisfaction, violations | `GET /scenarios` |
-| UC-10 | **Generate all four plans**, preview them side by side, then **accept** one, several or all (each version-checked), or discard | `POST /scenarios/calculate` → `PUT /scenarios/{capacity}/assignments` per accepted plan |
+| UC-10 | **Generate all four plans and store them at once** ("Generuj plany", no preview, no confirmation); then optionally **Cofnij** to restore the four previous plans (last Generate in this tab, only if no plan changed since) | `GET /scenarios` (undo snapshot) → `POST /scenarios/calculate` → `PUT /scenarios` (all four, atomic, version-checked). Cofnij: `PUT /scenarios` with the snapshot |
 | UC-11 | **Move a cluster** to another table or back to the tray (drag & drop or keyboard) | `PUT` / `DELETE /scenarios/{capacity}/assignments/{guestId}` |
 | UC-12 | **Pin / unpin a cluster** at its table | `PUT /scenarios/{capacity}/assignments/{guestId}` with `pinned` |
 | UC-13 | **Add or remove a table** in a plan (removing one unseats its guests and renumbers) | `POST /scenarios/{capacity}/tables`, `DELETE /scenarios/{capacity}/tables/{tableNumber}` |
@@ -105,7 +106,7 @@ flowchart LR
     end
     subgraph SC[Plans 9 / 10 / 11 / 12]
         UC09[UC-09 Compare plans]
-        UC10[UC-10 Generate all four, accept]
+        UC10[UC-10 Generate all four + store, Cofnij]
         UC11[UC-11 Move cluster]
         UC12[UC-12 Pin]
         UC13[UC-13 Add / remove table]
@@ -127,7 +128,7 @@ flowchart LR
 
 ## Assumptions
 
-Confirmed by the user on 2026-10-02 and folded in above: tailnet-only with no app login and equal rights; single-size plans, always generated together (four sizes, 9/10/11/12, since 2026-10-03; originally 8/10/12); no hard "must not sit together"; the couple is not on the list, so no head table or seat order; floor 6 on every table, and fewest tables always beats satisfaction; whole-cluster moves + pins + preview, no undo; CSV replace-all import with a dry run; browser print; weights 1.0 / 0.5; ~85–100 guests; cluster-to-cluster link semantics; enabled toggle + child flag.
+Confirmed by the user on 2026-10-02 and folded in above: tailnet-only with no app login and equal rights; single-size plans, always generated together (four sizes, 9/10/11/12, since 2026-10-03; originally 8/10/12); no hard "must not sit together"; the couple is not on the list, so no head table or seat order; floor 6 on every table, and fewest tables always beats satisfaction; whole-cluster moves + pins + preview, no undo (**superseded 2026-10-03, task 007, user decision "Zapisuj od razu": Generate stores the plans immediately, no preview; Cofnij undoes the last Generate**); CSV replace-all import with a dry run; browser print; weights 1.0 / 0.5; ~85–100 guests; cluster-to-cluster link semantics; enabled toggle + child flag.
 
 Also confirmed (2026-10-02, second round): clusters are computed over all guests, disabled included (A-13); a re-enabled guest returns to their cluster's table, and an overfilled table flags the plan **Needs recalculation** with no automatic regeneration (A-14 + A-17); CSV import is **deferred** to post-MVP, and the MVP relies on fast manual entry (A-15).
 
@@ -138,5 +139,5 @@ Still open (defaults chosen; ranked by impact):
 | A-15 | (Deferred feature) CSV format: header `imie,nazwisko,dziecko,grupa0,grupa1,grupa2,uwagi`; names separated by `;` or `,`; a reference matches a full name, or a first name if unique. To be confirmed when import is picked up. | Low now (post-MVP). |
 | A-16 | Display names are unique, case-insensitive. | Low. |
 | A-18 | No scheduled backup inside the app; `server backup` is run manually or by cron. | Low. |
-| A-19 | **Needs recalculation** = "the plan has any violation". There is no separate "data changed since accept" staleness flag: link or toggle changes that do not break a hard rule only change the score. | Low. |
+| A-19 | **Needs recalculation** = "the plan has any violation". There is no separate "data changed since the last Generate" staleness flag: link or toggle changes that do not break a hard rule only change the score. | Low. |
 | A-20 | Quick-add creates one guest per Enter (one `POST /guests` each, no batch endpoint). Typing speed is the limit, and ~100 sequential requests on a LAN are instant. | Low: a batch endpoint can be added later if needed. |

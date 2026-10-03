@@ -2,19 +2,21 @@
 
 Task 003, Phase 5. The participants are the components and packages from [003-frontend-design.md](003-frontend-design.md) and [003-backend-design.md](003-backend-design.md). All HTTP paths are relative to `/wesele/api` ([`docs/openapi.yaml`](../../openapi.yaml)).
 
-1. [Generate all four plans → preview → accept](#1-generate-all-four-plans--preview--accept)
+1. [Generate all four plans → stored at once → Cofnij](#1-generate-all-four-plans--stored-at-once--cofnij) (task 007)
 2. [Move a cluster (drag & drop, optimistic)](#2-move-a-cluster-drag--drop-optimistic)
 3. [Re-enable a guest → plan needs recalculation → regenerate](#3-re-enable-a-guest--plan-needs-recalculation--regenerate)
 4. [Quick-add a guest and link them through the group checklist](#4-quick-add-a-guest-and-link-them-through-the-group-checklist)
 5. [Delete a plan](#5-delete-a-plan-task-005-uc-17)
 
-## 1. Generate all four plans → preview → accept
+## 1. Generate all four plans → stored at once → Cofnij
+
+Task 007 (user decision "Zapisuj od razu"): no preview, no accept, no confirmation. Rules: [../03-seating-model.md](../03-seating-model.md) § Storing a Generate / § Undoing a Generate.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor E as Editor
-    participant UI as PlansPage / ProposalPreview
+    participant UI as GenerateButton / UndoGenerateBar (PlansPage or PlanDetailPage)
     participant Q as api hooks (TanStack Query)
     participant H as httpapi.Server
     participant S as scenarios.Service
@@ -22,50 +24,56 @@ sequenceDiagram
     participant P as store.Scenarios
     participant C as seating
 
-    E->>UI: click "Generuj plany"
-    UI->>Q: useCalculateProposals().mutate()
+    E->>UI: click "Generuj plany" (or "Przelicz / Generuj")
+    UI->>Q: useGeneratePlans().mutateAsync()
+    Q->>H: GET /scenarios (fetchQuery, staleTime 0)
+    H-->>Q: 4 Scenarios = undo snapshot (versions v9..v12)
     Q->>H: POST /scenarios/calculate
     H->>S: Calculate(ctx)
     S->>G: List(ctx)
-    G-->>S: guests, links
     S->>P: List(ctx)
-    P-->>S: 3 PlanState (versions, pins)
-    S->>C: BuildGraph(guests, links)
-    loop capacity 9, 10, 11, 12
-        S->>C: Propose(graph, current plan)
-        C-->>S: proposed Plan
-        S->>C: Evaluate(graph, proposed)
-        C-->>S: Evaluation
+    loop capacity 9, 10, 11, 12 (one Graph)
+        S->>C: Propose(graph, current plan) then Evaluate
     end
-    S-->>H: 3 Proposals (basedOnVersion)
-    H-->>Q: 200 ProposalListResponse
-    Q->>Q: setQueryData(keys.proposals)
-    UI-->>E: 4 proposals side by side vs current plans
-    E->>UI: "Akceptuj wszystkie"
-    loop each accepted capacity
-        UI->>Q: useAcceptProposal().mutate(capacity, basedOnVersion, tables)
-        Q->>H: PUT /scenarios/{capacity}/assignments
-        H->>S: Accept(ctx, capacity, basedOn, tables)
-        S->>G: List(ctx)
-        S->>P: Get(ctx, capacity)
-        S->>C: ExpandDisabled(graph, plan with prior pins)
-        S->>P: ReplacePlan(ctx, capacity, basedOn, plan)
-        alt version matches
-            P-->>S: PlanState (version+1)
-            S->>C: Evaluate(graph, plan)
-            H-->>Q: 200 ScenarioResponse
-            Q->>Q: replace scenario in keys.scenarios
-        else stale version
-            P-->>S: apperr.ErrVersionConflict
-            H-->>Q: 409 version_conflict
-            Q->>Q: refetch scenarios, keep other accepts
-            UI-->>E: toast "Plan 10 zmienił się — wygeneruj ponownie"
+    H-->>Q: 200 ProposalListResponse (4)
+    Q->>H: PUT /scenarios {plans: 4 x (capacity, basedOnVersion = snapshot version, tables + pinnedGuestIds)}
+    H->>S: Replace(ctx, 4 PlanInput)
+    S->>G: List(ctx)
+    S->>C: validLayout, pins to whole cluster, ExpandDisabled (x4)
+    S->>P: ReplacePlans(ctx, 4 PlanReplace)
+    Note over P: ONE transaction - per plan version CAS, delete tables, insert tables + assignments
+    alt all four versions match
+        P-->>S: 4 PlanState (version+1 each)
+        S->>C: Evaluate x4
+        H-->>Q: 200 ScenarioListResponse
+        Q->>Q: setQueryData keys.scenarios + keys.generateUndo (previous snapshot, generatedVersions)
+        UI-->>E: new tables and guests on screen + bar "Wygenerowano nowe plany. [Cofnij] [x]"
+    else any plan changed since the snapshot
+        P-->>S: ErrVersionConflict (rolled back, nothing written)
+        H-->>Q: 409 version_conflict
+        Q->>Q: invalidate keys.scenarios
+        UI-->>E: toast "Plany zmieniły się w międzyczasie — kliknij Generuj plany jeszcze raz."
+    end
+
+    opt Cofnij (bar visible only while every version == generatedVersions)
+        E->>UI: "Cofnij"
+        UI->>Q: useUndoGenerate().mutate()
+        Q->>H: PUT /scenarios {plans: snapshot layouts, basedOnVersion = generatedVersions}
+        H->>S: Replace(ctx, 4 PlanInput)
+        S->>P: ReplacePlans(ctx, ...)
+        alt no plan changed since the Generate
+            H-->>Q: 200 ScenarioListResponse (previous plans, version+1 each)
+            Q->>Q: setQueryData keys.scenarios + clear keys.generateUndo
+            UI-->>E: previous plans back, toast "Przywrócono poprzednie plany."
+        else a plan was edited meanwhile (409) or a guest was deleted (422)
+            H-->>Q: 409 version_conflict / 422 validation_failed (nothing written)
+            Q->>Q: clear keys.generateUndo + invalidate keys.scenarios
+            UI-->>E: toast "Nie można cofnąć — plany zmieniono po wygenerowaniu."
         end
     end
-    UI->>Q: clear keys.proposals
 ```
 
-*Legend:* Generate is a pure **query** (CQS) that stores nothing. Each accept is an independent **command** guarded by the **Optimistic Offline Lock**. All four proposals come from one `Graph` built once (DRY, consistent input).
+*Legend:* Generate = one **query** (`calculate`, pure, CQS) + one **command** (`PUT /scenarios`). The command is atomic over the four scenarios (one store method = one transaction) and guarded by the **Optimistic Offline Lock** with the snapshot's versions, so the snapshot is exactly what was overwritten. Cofnij re-sends that snapshot through the same command (a one-slot Memento held in the client's query cache; no server-side snapshot, no migration). All four proposals come from one `Graph` (DRY, consistent input).
 
 ## 2. Move a cluster (drag & drop, optimistic)
 
@@ -136,7 +144,7 @@ sequenceDiagram
     PP-->>E: plan 10 card flagged "Wymaga przeliczenia" + button "Przelicz / Generuj"
     Note over SS: no automatic regeneration (A-17)
     E->>PP: click "Przelicz / Generuj"
-    PP->>Q: useCalculateProposals() (continues as flow 1)
+    PP->>Q: useGeneratePlans() (continues as flow 1: plans stored at once, Cofnij offered)
 ```
 
 *Legend:* `needsRecalculation` is **derived** (any violation) and never stored, so nothing can go stale. Zosia **must** sit with her cluster (user rule), which is why the overfill is reported instead of moving her to the tray.
@@ -223,10 +231,10 @@ sequenceDiagram
         S->>C: Evaluate(graph, empty plan)
         C-->>S: unseated_guests, needsRecalculation true
         H-->>Q: 200 ScenarioResponse
-        Q->>Q: replace scenario 10, drop proposal 10 from keys.proposals
+        Q->>Q: replace scenario 10 (version moved: a pending Cofnij bar disappears)
         UI-->>E: "Brak stołów w tym planie." + "Przelicz / Generuj"
     end
     Note over E,UI: "Usuń wszystkie plany" = same dialog with a must-tick checkbox, then four DELETE calls (9, 10, 11, 12) via Promise.allSettled
 ```
 
-*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so older proposals become stale. Unknown capacity → 404 `not_found`. No undo (Command/Memento rejected); the confirmation dialog stands in for it. "Delete all" is four independent commands, not a batch endpoint (independent aggregates, idempotent calls, same reasoning as "accept all").
+*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so a pending Cofnij of a Generate becomes impossible. Unknown capacity → 404 `not_found`. No undo for a delete; the confirmation dialog stands in for it. "Delete all" is four independent commands, not a batch endpoint: each delete is safe on its own and idempotent, unlike a Generate, which must replace all four plans atomically (`PUT /scenarios`).

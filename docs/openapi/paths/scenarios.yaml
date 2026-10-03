@@ -40,3 +40,139 @@ get:
       $ref: ../components/responses.yaml#/BadRequest
     '500':
       $ref: ../components/responses.yaml#/InternalError
+put:
+  tags: [scenarios]
+  operationId: replaceScenarios
+  summary: Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+  description: |
+    Atomic: all four plans (9, 10, 11, 12) are replaced in ONE transaction, or nothing changes.
+    Used twice by the SPA:
+
+    * **"Generuj plany"**: the four `POST /scenarios/calculate` results, with `basedOnVersion` =
+      the versions of the plans the user had on screen before generating.
+    * **"Cofnij"**: the four plans as they were before that Generate, with `basedOnVersion` =
+      the versions this call returned when the Generate was stored.
+
+    For each plan: its tables and assignments are replaced by `tables` (numbers 1..k without gaps,
+    a guest at most once, empty tables allowed, `tables: []` = empty plan); each listed guest is
+    seated as given; every unlisted disabled member of a cluster is seated at the table of the
+    cluster's lowest-id listed enabled member (rides along). A cluster is pinned when any of its listed members is in
+    `pinnedGuestIds`; the pin is stored on every seat of the cluster at that table. Unlisted
+    guests end up unseated. Violations never block saving. Each plan's version is bumped by 1.
+
+    Checks, in order, before anything is written: body shape and each capacity exactly once (422);
+    every guest id known and not seated twice in a plan, `pinnedGuestIds` ⊆ that table's
+    `guestIds` (422 `validation_failed`); every `basedOnVersion` equals the stored version (409
+    `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all four plans
+    untouched.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas.yaml#/ScenariosReplace
+        example:
+          plans:
+            - capacity: 9
+              basedOnVersion: 7
+              tables:
+                - number: 1
+                  guestIds: [4, 5, 6, 7, 10, 11, 12, 13]
+                  pinnedGuestIds: [4, 5]
+                - number: 2
+                  guestIds: [1, 2, 3, 14, 15, 16, 17, 18]
+                  pinnedGuestIds: []
+            - capacity: 10
+              basedOnVersion: 4
+              tables: []
+            - capacity: 11
+              basedOnVersion: 1
+              tables:
+                - number: 1
+                  guestIds: [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13]
+                  pinnedGuestIds: []
+            - capacity: 12
+              basedOnVersion: 3
+              tables:
+                - number: 1
+                  guestIds: [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14]
+                  pinnedGuestIds: []
+  responses:
+    '200':
+      description: The four stored plans with their evaluations, ordered 9, 10, 11, 12 (each version + 1).
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ScenarioListResponse
+          example:
+            data:
+              - capacity: 9
+                version: 8
+                plan:
+                  summary:
+                    tableCount: 2
+                    seatedCount: 16
+                    unseatedCount: 0
+                    score: 41.5
+                    violationCount: 0
+                    needsRecalculation: false
+                  tables:
+                    - number: 1
+                      fill: 8
+                      score: 18
+                      clusters:
+                        - clusterKey: 4
+                          guestIds: [4, 5]
+                          pinned: true
+                  unseated: []
+                  guestScores:
+                    - guestId: 4
+                      tableNumber: 1
+                      satisfaction: 4
+                      preferredTotal: 20
+                      preferredAtTable: 4
+                      fallbackAtTable: 0
+                      strangersAtTable: 2
+                  violations: []
+            meta:
+              requestId: 01JB8Z6Q0K3N
+            page:
+              total: 4
+    '400':
+      $ref: ../components/responses.yaml#/BadRequest
+    '409':
+      description: |
+        At least one plan was changed after the client read it (move, pin, table added or
+        removed, plan deleted, another Generate). Nothing was written. For "Cofnij" it means the
+        undo is no longer possible; for "Generuj plany" the client refetches and the user retries.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ErrorResponse
+          example:
+            errors:
+              - code: version_conflict
+                field: plans
+                message: Plan 10 was changed by someone else (current version 9).
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '413':
+      $ref: ../components/responses.yaml#/PayloadTooLarge
+    '422':
+      description: |
+        Invalid layout (capacity missing or repeated, unknown guest — e.g. deleted after the
+        Generate being undone —, guest seated twice, table numbers not 1..k, pinned guest not at
+        that table). Nothing was written.
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas.yaml#/ErrorResponse
+          example:
+            errors:
+              - code: validation_failed
+                field: plans
+                message: Plan 10, Unknown guest id 57.
+            meta:
+              requestId: 01JB8Z6Q0K3N
+    '500':
+      $ref: ../components/responses.yaml#/InternalError

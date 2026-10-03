@@ -1,6 +1,6 @@
 # 003 — Backend design (Go): packages, core interfaces, class diagram, audit
 
-Task 003, Phase 5 (Skills 13–16). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
+Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
 
 ## 1. Packages and dependency direction
 
@@ -98,7 +98,7 @@ type DataWarning struct { Code WarningCode; Guests []GuestID }
 
 func Evaluate(g Graph, p Plan) Evaluation         // disabled seats are ignored; NeedsRecalculation = len(Violations) > 0
 func Propose(g Graph, current Plan) Plan          // deterministic; keeps pinned clusters; enabled guests only
-func ExpandDisabled(g Graph, p Plan) Plan          // adds each placed cluster's disabled members to its table (used on accept)
+func ExpandDisabled(g Graph, p Plan) Plan          // adds each placed cluster's unlisted disabled members to its table (used by Service.Replace)
 ```
 
 Internal (unexported, but each has its own table-driven tests): `minTables`, `pack`, `repairFloor`, `improve` (move/swap, first-improvement, capped at a fixed number of passes, no wall-clock), `score`. **No time budget based on the clock**: a pass cap keeps it deterministic and testable. At ~100 guests it finishes well under a second.
@@ -151,7 +151,7 @@ type PlanState struct { Version int64; Plan seating.Plan }   // reuses seating.P
 type Store interface {                       // implemented by *store.Scenarios
     List(ctx) ([]PlanState, error)                                    // 4, ordered by capacity (9, 10, 11, 12)
     Get(ctx, capacity int) (PlanState, error)
-    ReplacePlan(ctx, capacity int, expectedVersion int64, p seating.Plan) (PlanState, error)
+    ReplacePlans(ctx, ps []PlanReplace) ([]PlanState, error)          // task 007: all given plans in ONE transaction; any stale → ErrVersionConflict, nothing written
     SeatCluster(ctx, capacity int, members []int64, tableNumber int, pinned bool) (PlanState, error)
     UnseatCluster(ctx, capacity int, members []int64) (PlanState, error)
     AddTable(ctx, capacity int) (PlanState, error)
@@ -160,15 +160,19 @@ type Store interface {                       // implemented by *store.Scenarios
 }
 type GuestSource interface { List(ctx) ([]guests.Guest, []guests.Link, error) } // *store.Guests satisfies it
 
-type Evaluated struct { State PlanState; Eval seating.Evaluation }
-type Proposal  struct { BasedOnVersion int64; Plan seating.Plan; Eval seating.Evaluation }
+type Evaluated   struct { State PlanState; Eval seating.Evaluation }
+type Proposal    struct { BasedOnVersion int64; Plan seating.Plan; Eval seating.Evaluation }
+type PlanInput   struct { Capacity int; BasedOn int64; Tables []seating.Table }      // one ScenarioLayout; Seat.Pinned = id ∈ pinnedGuestIds
+type PlanReplace struct { Capacity int; ExpectedVersion int64; Plan seating.Plan }   // what the store writes
 
 type Service struct { plans Store; guests GuestSource }
 func NewService(p Store, g GuestSource) *Service
 func (s *Service) List(ctx) ([]Evaluated, error)
 func (s *Service) Calculate(ctx) ([]Proposal, error)                                  // Propose ×4 (9, 10, 11, 12) from ONE graph
-func (s *Service) Accept(ctx, capacity int, basedOn int64, tables []seating.Table) (Evaluated, error)
-        // validate 1..k + no duplicate guest → keep pins of previously pinned clusters → ExpandDisabled → ReplacePlan
+func (s *Service) Replace(ctx, in []PlanInput) ([]Evaluated, error)              // task 007, PUT /scenarios (Generate store + Cofnij); replaces Accept
+        // capacities 9,10,11,12 exactly once → per plan: validLayout (1..k, known guests, no duplicates)
+        // + pinned ⊆ its table → pin spread to every seat of a pinned cluster (pinnedClusterKeys of the INPUT)
+        // → ExpandDisabled → plans.ReplacePlans (one tx) → Evaluate each; ordered 9..12
 func (s *Service) Seat(ctx, capacity int, guestID int64, table int, pinned bool) (Evaluated, error) // whole cluster (ClusterOf.Members)
 func (s *Service) Unseat(ctx, capacity int, guestID int64) (Evaluated, error)
 func (s *Service) AddTable(ctx, capacity int) (Evaluated, error)
@@ -200,7 +204,7 @@ func NewRouter(basePath, webRoot string, api oapi.StrictServerInterface) http.Ha
         // basePath+"/api": RequestID, Recoverer, slog request log (method, path, status, duration — NO bodies), body limit, X-Robots-Tag
         // basePath+"/": static files from webRoot, index.html fallback; basePath → 301 basePath+"/"; Compress
 func errorResponse(err error) (status int, body oapi.ErrorResponse)   // the ONE error mapper (04-data-model § errors)
-// mapping.go: toGuest, toGuestList, toLink, toClusterOverview, toScenario, toProposal, toSeatingPlan, fromAcceptPlan
+// mapping.go: toGuest, toGuestList, toLink, toClusterOverview, toScenario, toProposal, toSeatingPlan, fromScenariosReplace
 
 package main
 func run(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error
@@ -283,7 +287,7 @@ classDiagram
             -guests GuestSource
             +List(ctx) []Evaluated
             +Calculate(ctx) []Proposal
-            +Accept(ctx, capacity, basedOn, tables) Evaluated
+            +Replace(ctx, plans) []Evaluated
             +Seat(ctx, capacity, guestID, table, pinned) Evaluated
             +Unseat(ctx, capacity, guestID) Evaluated
             +AddTable(ctx, capacity) Evaluated
@@ -293,7 +297,7 @@ classDiagram
         class ScenariosStore {
             <<interface>>
             +List / Get
-            +ReplacePlan
+            +ReplacePlans
             +SeatCluster / UnseatCluster
             +AddTable / RemoveTable
             +ClearPlan
@@ -354,7 +358,7 @@ classDiagram
 | `httpapi.Server` | **Adapter** (to the generated strict-server interface) | Transport only: decode, call one service method, map. |
 | `Mappers` / `errorResponse` | **DTO + Mapper**, **DRY** | One mapper per type and one error mapper for every handler. |
 | `PlanState{Version; Plan seating.Plan}` | **Composition**, **DRY** | Reuses the core's `Plan` instead of a parallel struct (fixed in the audit). |
-| `version` checks in `Update` / `ReplacePlan` | **Optimistic Offline Lock** | Two flows can clobber: a guest edit form and accepting a proposal. Manual plan edits (`Seat`, `Unseat`, `AddTable`, `RemoveTable`, `Reset`) are not version-checked: their result does not depend on a snapshot the client saw. They still bump the version, which makes older proposals stale. |
+| `version` checks in `Update` / `ReplacePlans` | **Optimistic Offline Lock** | Two flows can clobber: a guest edit form and replacing all four plans (storing a Generate over plans the user saw, or a Cofnij over the Generate's result). Manual plan edits (`Seat`, `Unseat`, `AddTable`, `RemoveTable`, `Reset`) are not version-checked: their result does not depend on a snapshot the client saw. They still bump the version, which is what makes a later Cofnij a 409. |
 | `cmd/server.run` | **Composition root** | Explicit constructor wiring, no DI container, testable through `run(args, getenv)`. |
 | Union-find inside `BuildGraph` | Algorithm, not a pattern | Connected components of group-0 links. |
 
@@ -364,7 +368,7 @@ classDiagram
 |---|---|---|
 | Strategy (seating algorithm) | rejected | One algorithm; capacity is a parameter. Add it only if a second algorithm is actually built. |
 | Template Method | rejected | No algorithm family. |
-| Command / Memento (undo) | rejected | No undo (user-confirmed); Generate is previewed instead. |
+| Command / Memento (undo) | rejected as patterns | Task 007's one-step Cofnij needs no server code: the client re-sends its pre-Generate snapshot through the same `PUT /scenarios`. No undo stack, no snapshot table. |
 | Observer / domain events | rejected | Nothing reacts asynchronously; plans are evaluated on read. |
 | State (plan "needs recalculation") | rejected as a pattern | It is a derived boolean (`len(violations) > 0`), not a stored state machine. |
 | Facade | rejected | Two services already form the API surface. |
@@ -375,7 +379,8 @@ classDiagram
 | Decorator | adopted only as chi middleware | Request ID, recoverer, logging, body limit: the idiomatic `func(http.Handler) http.Handler`. |
 | Generic repository | rejected | Two aggregates with different operations. |
 | Clock / ID-generator interfaces | rejected | Timestamps come from SQL defaults; ids from SQLite. |
-| Batch "delete all plans" endpoint (Unit of Work over 4 scenarios) | rejected | Four independent `DELETE /scenarios/{capacity}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the three plans to change atomically (they are independent aggregates, like "accept all"). |
+| Atomic four-plan replace (`ReplacePlans`, task 007) | **adopted, one store method** | A half-applied Generate is worse than none. One store method = one transaction, so no Unit of Work object is needed. |
+| Batch "delete all plans" endpoint (Unit of Work over 4 scenarios) | rejected | Four independent `DELETE /scenarios/{capacity}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the four plans to be cleared atomically (contrast: Generate, which must replace all four at once). |
 
 ## 5. Clean-architecture / SOLID / YAGNI audit (Skill 16)
 
@@ -389,3 +394,31 @@ classDiagram
 | **Law of Demeter** | Handlers call one service method each; services do not reach through store internals. |
 | **YAGNI** | No Strategy, no event bus, no caching, no Zustand, no auth, no config package, no batch create endpoint. Import is kept in the contract but implemented last. |
 | **Found and fixed in this audit** | (1) `scenarios.PlanState` duplicated the core plan shape, so it now embeds `seating.Plan` (04-data-model §1 updated). (2) `importcsv` importing `guests` while `guests.Service.Import` imports `importcsv` would be an import cycle, so `importcsv` now returns its own row types and depends only on `seating`. (3) The wall-clock time budget in `Propose` made tests flaky by design, so it is replaced by a fixed pass cap (deterministic). (4) `GET /clusters` and plan reads both need the graph: built by one function (`seating.BuildGraph`) via `guests.ToSeating`, not duplicated. |
+
+## 6. Task 007 — Generate stores at once, Cofnij (`PUT /scenarios`)
+
+Contract: `PUT /scenarios` (`replaceScenarios`, body `ScenariosReplace`, 200 `ScenarioListResponse`); `PUT /scenarios/{capacity}/assignments` (`acceptProposal`, `AcceptPlan`) is **removed**. `POST /scenarios/calculate` is unchanged (still pure). Rules: [../03-seating-model.md](../03-seating-model.md) § Storing a Generate / § Undoing a Generate. No migration.
+
+```mermaid
+flowchart TD
+    A["httpapi.ReplaceScenarios: fromScenariosReplace(body) → []PlanInput"] --> B["Service.Replace"]
+    B --> C{"capacities = {9,10,11,12}, each once?"}
+    C -- no --> X1["422 validation_failed, field plans"]
+    C -- yes --> D["graph := BuildGraph(guests, links)"]
+    D --> E["per plan: validLayout (1..k, known guest, not twice) + pinned ⊆ table"]
+    E -- invalid --> X1
+    E --> F["per plan: pinnedClusterKeys(input) → mark every seat of those clusters Pinned"]
+    F --> G["per plan: seating.ExpandDisabled"]
+    G --> H["plans.ReplacePlans([]PlanReplace) — ONE transaction"]
+    H -- "any version ≠ expected" --> X2["rollback → 409 version_conflict (nothing written)"]
+    H -- ok --> I["Evaluate ×4 → 200, ordered 9, 10, 11, 12, each version + 1"]
+```
+
+*Legend:* validation (422) happens before the transaction; the version check happens inside it (atomic compare-and-set per scenario row, `UPDATE … WHERE version = ?`). Functional core / imperative shell is unchanged: `validLayout`, `pinnedClusterKeys` and `ExpandDisabled` are pure; only `ReplacePlans` touches the DB.
+
+**Tests (real SQLite, no DB mocks):**
+- store: `ReplacePlans` writes four plans and bumps four versions; one stale version among four → `ErrVersionConflict` and **all four plans byte-for-byte unchanged** (tables, assignments, pins, versions); empty `tables` → empty plan.
+- service: missing/duplicate capacity → 422; unknown guest / guest twice / bad numbering / pinned guest not at its table → 422 naming the plan; pins from `pinnedGuestIds` reach every seat of the cluster incl. ride-along disabled members; disabled members ride along; round trip "GET → calculate → PUT (snapshot versions) → PUT(snapshot, returned versions)" restores the exact original tables, enabled assignments and pins.
+- httpapi: 200 envelope with four scenarios; 409 and 422 envelopes; `PUT /scenarios/{capacity}/assignments` now 404/405 (route gone).
+
+**Delete (dead after task 007):** `scenarios.Service.Accept`; `Store.ReplacePlan` (fold its SQL into `ReplacePlans`; reuse `DeleteScenarioTables` and the insert queries; remove any sqlc query used only by it); the strict handler `AcceptProposal`; mapper `fromAcceptPlan`; their tests. Keep `Calculate`, `validLayout`, `pinnedClusterKeys` (now applied to the input plan), `toProposal`, `ExpandDisabled`.

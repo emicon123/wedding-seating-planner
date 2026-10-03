@@ -81,7 +81,7 @@ sequenceDiagram
 ## Concurrency
 
 - A handful of editors, rarely at the same time. No live push; the SPA refetches when the window regains focus.
-- **Optimistic locking** via `version` on **Guest** (`PATCH /guests/{id}`) and **Scenario** (accepting a proposal). A mismatch returns `409` with error code `version_conflict`; the client refetches.
+- **Optimistic locking** via `version` on **Guest** (`PATCH /guests/{id}`) and **Scenario** (`PUT /scenarios`: storing a Generate and its Cofnij, all four plans atomically). A mismatch returns `409` with error code `version_conflict`; the client refetches.
 - Last write wins, with no version check, for: cluster moves, pins, table add/remove (each bumps the scenario version), toggles (single and bulk) and link edits.
 - Each command runs in one transaction; SQLite serialises writers.
 
@@ -117,7 +117,7 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Functional core, imperative shell | **adopted** | `internal/seating` is pure; services do the I/O around it |
 | Repository | **adopted, concrete** | Two store types over sqlc (see 04-data-model). Go interfaces are declared consumer-side only if a test seam is ever needed; integration tests use the real DB |
 | Strategy (seating algorithms) | rejected | One algorithm; capacity is a parameter |
-| Command + Memento (undo/redo) | rejected | No undo (user confirmed); Generate is previewed instead |
+| Command + Memento (undo/redo) | rejected as a pattern | Generate stores at once (task 007); its one-step **Cofnij** is a plain client-held snapshot of the four plans re-sent through `PUT /scenarios` (a Memento in spirit, no undo stack, no Command objects). No other undo |
 | Observer / live push | rejected | Few editors; refetch on focus |
 | Adapter | **adopted** (import edge) | CSV now; a Sheets API source could replace it |
 | Optimistic Offline Lock | **adopted** | `version` on Guest and Scenario |

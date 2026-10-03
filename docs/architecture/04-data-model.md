@@ -102,7 +102,7 @@ type PlanState struct {      // one stored plan, as loaded for evaluation
 | `dining_table.number` | `seating.Table.Number` | `PlanTable.number` |
 | `assignment.guest_id`, `.pinned` | `seating.Seat{Guest, Pinned}` | Grouped by cluster → `PlanTable.clusters[] (ClusterPlacement)` |
 | — (derived by `seating.Evaluate`) | evaluation value | `SeatingPlan.summary`, `tables[].fill/score`, `unseated`, `guestScores`, `violations` |
-| — (derived by `seating.Propose`) | proposal value | `Proposal { capacity, basedOnVersion = PlanState.Version, plan }` |
+| — (derived by `seating.Propose`) | proposal value | `Proposal { capacity, basedOnVersion = PlanState.Version, plan }` (returned by `POST /scenarios/calculate`; the SPA stores it at once via `PUT /scenarios`) |
 | — (derived by `seating.Clusters`) | clusters + warnings | `ClusterOverview` |
 
 `ClusterPlacement.guestIds` lists **enabled** members only. Disabled members keep their assignment rows but are invisible in plan DTOs (they are visible in `GET /guests` and `GET /clusters`).
@@ -116,7 +116,7 @@ type PlanState struct {      // one stored plan, as loaded for evaluation
 | `GuestBulkToggle` | `GuestStore.SetEnabled(ids, enabled)` |
 | `GuestLinkUpsert` + `linkKey` | `guests.Link` → `GuestStore.UpsertLink` |
 | CSV body (**deferred**) | `importcsv.Parse(io.Reader)` → rows + index links + report → dry run returns the report; commit → `GuestStore.ReplaceAll(newGuests, importLinks)` |
-| `AcceptPlan` | `[]TableLayout` → `[]seating.Table` → service keeps prior pins + `seating.ExpandDisabled` → `ScenarioStore.ReplacePlan(capacity, basedOnVersion, plan)` |
+| `ScenariosReplace` (`PUT /scenarios`, task 007) | `fromScenariosReplace`: each `ScenarioLayout` → `scenarios.PlanInput{Capacity, BasedOn, Tables []seating.Table}` (one `Seat{Guest, Pinned: id ∈ pinnedGuestIds}` per listed guest) → `scenarios.Service.Replace` validates all four, spreads each pin to the whole cluster's seats, `seating.ExpandDisabled` → `ScenarioStore.ReplacePlans([]PlanReplace)` (ONE transaction) |
 | `AssignmentSet` + guestId | service resolves the cluster's guest ids (all members) → `ScenarioStore.SeatCluster(capacity, guestIDs, tableNumber, pinned)` |
 | DELETE assignment | `ScenarioStore.UnseatCluster(capacity, guestIDs)` |
 | DELETE `/scenarios/{capacity}/tables` (delete plan, no body) | `ScenarioStore.ClearPlan(capacity)` |
@@ -163,8 +163,13 @@ type GuestStore interface {
 type ScenarioStore interface {
     List(ctx context.Context) ([]scenarios.PlanState, error)               // always 4, ordered by capacity (9, 10, 11, 12)
     Get(ctx context.Context, capacity int) (scenarios.PlanState, error)
-    ReplacePlan(ctx context.Context, capacity int, expectedVersion int64, p seating.Plan) (scenarios.PlanState, error)
-                                                                            // ErrVersionConflict; delete tables (cascade) → insert tables 1..k + assignments; version+1
+    ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace) ([]scenarios.PlanState, error)
+                                                                            // task 007, replaces ReplacePlan. ONE transaction for all given plans:
+                                                                            // per plan: UPDATE scenario SET version = version+1 WHERE capacity=? AND version=?
+                                                                            // (0 rows → roll back everything, ErrVersionConflict naming that capacity);
+                                                                            // delete its tables (cascade) → insert tables 1..k + assignments(+pinned).
+                                                                            // Returns the new states ordered by capacity.
+    // type PlanReplace struct { Capacity int; ExpectedVersion int64; Plan seating.Plan }   (package scenarios)
     SeatCluster(ctx context.Context, capacity int, guestIDs []int64, tableNumber int, pinned bool) (scenarios.PlanState, error)
                                                                             // upsert assignment per guest; ErrNotFound if table missing; version+1
     UnseatCluster(ctx context.Context, capacity int, guestIDs []int64) (scenarios.PlanState, error) // delete assignments; version+1
@@ -179,7 +184,7 @@ type ScenarioStore interface {
 
 Notes for implementers:
 - Renumbering tables (`UPDATE dining_table SET number = number - 1 WHERE scenario_id = ? AND number > ?`) would collide with `UNIQUE (scenario_id, number)` mid-update in SQLite. Do it in two steps inside the transaction: `SET number = number + 1000 WHERE number > n`, then `SET number = number - 1001 WHERE number > 1000`. A negation trick would break `CHECK (number >= 1)`.
-- `ReplaceAll`, `ReplacePlan` and `ClearPlan` are the only bulk deletes; everything else is a row-level upsert or delete. `ClearPlan` needs no new SQL and no migration: it reuses `DeleteScenarioTables` (the first half of `ReplacePlan`) and the `dining_table → assignment` cascade.
+- `ReplaceAll`, `ReplacePlans` and `ClearPlan` are the only bulk deletes; everything else is a row-level upsert or delete. `ClearPlan` needs no new SQL and no migration: it reuses `DeleteScenarioTables` (also used per plan by `ReplacePlans`) and the `dining_table → assignment` cascade.
 - Reads for a scenario response: the service loads `GuestStore.List` (guests + links) and `ScenarioStore.Get/List`, then calls `seating.Evaluate`. At ~100 guests that is a few small queries; there is no caching (YAGNI).
 
 ## Pattern evaluation (Phases 3–4)
@@ -187,12 +192,12 @@ Notes for implementers:
 | Candidate | Verdict | Why |
 |---|---|---|
 | REST over HTTP/JSON (Skill 8) | **adopted** | SPA ↔ one backend, same origin. GraphQL/gRPC add tooling for no gain; no push channel needed |
-| CQS | **adopted** | Queries: `GET /guests`, `/clusters`, `/scenarios`, and `POST /scenarios/calculate` (a pure computation, POST only because it is expensive and not cacheable). Commands return the updated resource so the UI needs no extra round-trip |
+| CQS | **adopted** | Queries: `GET /guests`, `/clusters`, `/scenarios`, and `POST /scenarios/calculate` (a pure computation, POST only because it is expensive and not cacheable). Commands return the updated resource so the UI needs no extra round-trip. Generate = query (`calculate`) + command (`PUT /scenarios`), so calculate stays pure (task 007) |
 | Repository | **adopted, 2 stores** | One per aggregate root (Guest, Scenario); sqlc stays inside |
-| Unit of Work | rejected | Each store method is its own transaction; no cross-aggregate transaction except import (`ReplaceAll`, one method) |
+| Unit of Work | rejected | Each store method is its own transaction. The two multi-aggregate writes are single store methods: import (`ReplaceAll`) and storing/undoing a Generate (`ReplacePlans`, four scenarios in one transaction, task 007) |
 | DTO + Mapper | **adopted** | Plain functions per boundary |
 | Optimistic Offline Lock | **adopted** | `version` on guest and scenario |
 | Identity Map / caching | rejected | ~100 rows; reload per request |
-| Bulk endpoints in general | rejected except toggle | Only "disable all children" needs bulk (`PATCH /guests`). "Usuń wszystkie plany" is four per-plan calls, like "accept all" |
+| Bulk endpoints in general | rejected except toggle and `PUT /scenarios` | "Disable all children" needs bulk (`PATCH /guests`). Generate needs all four plans replaced atomically (a half-applied Generate is worse than none), hence `PUT /scenarios` (task 007), which also serves Cofnij. "Usuń wszystkie plany" stays four per-plan calls (each is safe alone) |
 | Separate `/guest-links` list endpoint | rejected | Links are embedded in `Guest.links`, so the guest screen needs one call |
 | Separate `GET /scenarios/{capacity}` | rejected | `GET /scenarios` returns all four (small payload); mutations return the single updated scenario |

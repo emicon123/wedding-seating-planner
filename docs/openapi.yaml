@@ -12,9 +12,9 @@ info:
       Auth must be added before any public exposure.
     * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
     * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
-      (PUT /scenarios/{capacity}/assignments). Stale version → 409 `version_conflict`.
-      Manual plan edits (move, pin, add/remove table, delete plan) are not version-checked
-      but bump the scenario version.
+      (PUT /scenarios, which replaces all four plans at once: used by "Generuj plany" and
+      its "Cofnij"). Stale version → 409 `version_conflict`. Manual plan edits (move, pin,
+      add/remove table, delete plan) are not version-checked but bump the scenario version.
     * Every scenario-returning endpoint returns the freshly computed evaluation;
       nothing derived (clusters, scores, violations) is stored.
 servers:
@@ -31,7 +31,7 @@ tags:
   - name: imports
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
-    description: The four plans (9/10/11/12), generate, accept, move, pin, tables, delete plan (UC-09…UC-14, UC-17)
+    description: The four plans (9/10/11/12), generate + store (and undo), move, pin, tables, delete plan (UC-09…UC-14, UC-17)
   - name: health
     description: Liveness
 paths:
@@ -392,15 +392,197 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
+    put:
+      tags:
+        - scenarios
+      operationId: replaceScenarios
+      summary: Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+      description: |
+        Atomic: all four plans (9, 10, 11, 12) are replaced in ONE transaction, or nothing changes.
+        Used twice by the SPA:
+
+        * **"Generuj plany"**: the four `POST /scenarios/calculate` results, with `basedOnVersion` =
+          the versions of the plans the user had on screen before generating.
+        * **"Cofnij"**: the four plans as they were before that Generate, with `basedOnVersion` =
+          the versions this call returned when the Generate was stored.
+
+        For each plan: its tables and assignments are replaced by `tables` (numbers 1..k without gaps,
+        a guest at most once, empty tables allowed, `tables: []` = empty plan); each listed guest is
+        seated as given; every unlisted disabled member of a cluster is seated at the table of the
+        cluster's lowest-id listed enabled member (rides along). A cluster is pinned when any of its listed members is in
+        `pinnedGuestIds`; the pin is stored on every seat of the cluster at that table. Unlisted
+        guests end up unseated. Violations never block saving. Each plan's version is bumped by 1.
+
+        Checks, in order, before anything is written: body shape and each capacity exactly once (422);
+        every guest id known and not seated twice in a plan, `pinnedGuestIds` ⊆ that table's
+        `guestIds` (422 `validation_failed`); every `basedOnVersion` equals the stored version (409
+        `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all four plans
+        untouched.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenariosReplace'
+            example:
+              plans:
+                - capacity: 9
+                  basedOnVersion: 7
+                  tables:
+                    - number: 1
+                      guestIds:
+                        - 4
+                        - 5
+                        - 6
+                        - 7
+                        - 10
+                        - 11
+                        - 12
+                        - 13
+                      pinnedGuestIds:
+                        - 4
+                        - 5
+                    - number: 2
+                      guestIds:
+                        - 1
+                        - 2
+                        - 3
+                        - 14
+                        - 15
+                        - 16
+                        - 17
+                        - 18
+                      pinnedGuestIds: []
+                - capacity: 10
+                  basedOnVersion: 4
+                  tables: []
+                - capacity: 11
+                  basedOnVersion: 1
+                  tables:
+                    - number: 1
+                      guestIds:
+                        - 1
+                        - 2
+                        - 3
+                        - 4
+                        - 5
+                        - 6
+                        - 7
+                        - 10
+                        - 11
+                        - 12
+                        - 13
+                      pinnedGuestIds: []
+                - capacity: 12
+                  basedOnVersion: 3
+                  tables:
+                    - number: 1
+                      guestIds:
+                        - 1
+                        - 2
+                        - 3
+                        - 4
+                        - 5
+                        - 6
+                        - 7
+                        - 10
+                        - 11
+                        - 12
+                        - 13
+                        - 14
+                      pinnedGuestIds: []
+      responses:
+        '200':
+          description: The four stored plans with their evaluations, ordered 9, 10, 11, 12 (each version + 1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioListResponse'
+              example:
+                data:
+                  - capacity: 9
+                    version: 8
+                    plan:
+                      summary:
+                        tableCount: 2
+                        seatedCount: 16
+                        unseatedCount: 0
+                        score: 41.5
+                        violationCount: 0
+                        needsRecalculation: false
+                      tables:
+                        - number: 1
+                          fill: 8
+                          score: 18
+                          clusters:
+                            - clusterKey: 4
+                              guestIds:
+                                - 4
+                                - 5
+                              pinned: true
+                      unseated: []
+                      guestScores:
+                        - guestId: 4
+                          tableNumber: 1
+                          satisfaction: 4
+                          preferredTotal: 20
+                          preferredAtTable: 4
+                          fallbackAtTable: 0
+                          strangersAtTable: 2
+                      violations: []
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+                page:
+                  total: 4
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: |
+            At least one plan was changed after the client read it (move, pin, table added or
+            removed, plan deleted, another Generate). Nothing was written. For "Cofnij" it means the
+            undo is no longer possible; for "Generuj plany" the client refetches and the user retries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                errors:
+                  - code: version_conflict
+                    field: plans
+                    message: Plan 10 was changed by someone else (current version 9).
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          description: |
+            Invalid layout (capacity missing or repeated, unknown guest — e.g. deleted after the
+            Generate being undone —, guest seated twice, table numbers not 1..k, pinned guest not at
+            that table). Nothing was written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                errors:
+                  - code: validation_failed
+                    field: plans
+                    message: Plan 10, Unknown guest id 57.
+                meta:
+                  requestId: 01JB8Z6Q0K3N
+        '500':
+          $ref: '#/components/responses/InternalError'
   /scenarios/calculate:
     post:
       tags:
         - scenarios
       operationId: calculateProposals
-      summary: Generate proposals for all four plans (UC-10)
+      summary: Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
       description: |
         Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
-        current guests, links and pins. Accept a proposal with `PUT /scenarios/{capacity}/assignments`.
+        current guests, links and pins (pinned clusters stay at their table, `pinned: true`).
+        "Generuj plany" stores the four results straight away: the SPA sends them unchanged to
+        `PUT /scenarios` (one atomic call, version-checked) without showing a preview.
       responses:
         '200':
           description: Exactly four proposals, ordered 9, 10, 11, 12.
@@ -446,64 +628,6 @@ paths:
                   total: 4
         '400':
           $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalError'
-  /scenarios/{capacity}/assignments:
-    parameters:
-      - $ref: '#/components/parameters/Capacity'
-    put:
-      tags:
-        - scenarios
-      operationId: acceptProposal
-      summary: Accept a proposal — replace the plan's tables and assignments (UC-10)
-      description: |
-        Version-checked against `basedOnVersion`. Disabled members of each cluster are seated with
-        their cluster; clusters that were pinned stay pinned. Bumps the scenario version.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AcceptPlan'
-            example:
-              basedOnVersion: 7
-              tables:
-                - number: 1
-                  guestIds:
-                    - 4
-                    - 5
-                    - 6
-                    - 7
-                    - 10
-                    - 11
-                    - 12
-                    - 13
-                - number: 2
-                  guestIds:
-                    - 1
-                    - 2
-                    - 3
-                    - 14
-                    - 15
-                    - 16
-      responses:
-        '200':
-          description: The stored plan with its evaluation.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ScenarioResponse'
-              examples:
-                accepted:
-                  $ref: '#/components/examples/Scenario10'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '422':
-          $ref: '#/components/responses/UnprocessableEntity'
         '500':
           $ref: '#/components/responses/InternalError'
   /scenarios/{capacity}/assignments/{guestId}:
@@ -599,8 +723,8 @@ paths:
       description: |
         "Usuń plan". The scenario itself stays (there are always four plans); it becomes an
         empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
-        too). Bumps the scenario version, so a proposal generated before is stale (accepting it
-        returns 409). Not version-checked, like the other manual plan edits: the result does not
+        too). Bumps the scenario version, so a "Cofnij" of an earlier Generate is no longer
+        possible (`PUT /scenarios` returns 409). Not version-checked, like the other manual plan edits: the result does not
         depend on what the client saw, and repeating it is harmless (idempotent apart from the
         version bump). No request body. "Usuń wszystkie plany" is four calls, one per capacity.
       responses:
@@ -1223,7 +1347,7 @@ components:
             True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
             cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
             cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
-            regenerates on its own. Always false for a proposal without violations.
+            regenerates on its own. False for a freshly generated plan without violations.
           example: false
     ClusterPlacement:
       type: object
@@ -1403,9 +1527,86 @@ components:
           $ref: '#/components/schemas/Meta'
         page:
           $ref: '#/components/schemas/Page'
+    TableLayout:
+      type: object
+      description: One table of a plan to store. Mapped 1:1 from a `PlanTable` (its clusters' `guestIds`, and those of its `pinned` clusters).
+      required:
+        - number
+        - guestIds
+        - pinnedGuestIds
+      additionalProperties: false
+      properties:
+        number:
+          type: integer
+          minimum: 1
+          example: 1
+        guestIds:
+          type: array
+          description: Guests at this table (enabled ones; disabled cluster members are added by the server). May be empty.
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+          example:
+            - 4
+            - 5
+            - 6
+            - 7
+            - 10
+            - 11
+            - 12
+            - 13
+        pinnedGuestIds:
+          type: array
+          description: Subset of `guestIds` whose clusters are pinned to this table (pin = whole cluster).
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+          example:
+            - 4
+            - 5
+    ScenarioLayout:
+      type: object
+      description: The full content of one plan to store (tables, assignments, pins).
+      required:
+        - capacity
+        - basedOnVersion
+        - tables
+      additionalProperties: false
+      properties:
+        capacity:
+          $ref: '#/components/schemas/Capacity'
+        basedOnVersion:
+          type: integer
+          minimum: 1
+          description: The stored version this layout replaces (optimistic lock).
+          example: 7
+        tables:
+          type: array
+          description: Tables 1..k without gaps; `[]` = empty plan.
+          items:
+            $ref: '#/components/schemas/TableLayout'
+    ScenariosReplace:
+      type: object
+      description: |
+        All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+        by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
+      required:
+        - plans
+      additionalProperties: false
+      properties:
+        plans:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/ScenarioLayout'
     Proposal:
       type: object
-      description: Transient auto-seating result for one plan (never stored).
+      description: |
+        Auto-seating result for one plan, computed by `POST /scenarios/calculate` (never stored by that
+        call). "Generuj plany" stores it at once through `PUT /scenarios`; there is no preview.
       required:
         - capacity
         - basedOnVersion
@@ -1416,7 +1617,7 @@ components:
         basedOnVersion:
           type: integer
           minimum: 1
-          description: Scenario version the proposal was computed from; send it back when accepting.
+          description: Scenario version the proposal was computed from.
           example: 7
         plan:
           $ref: '#/components/schemas/SeatingPlan'
@@ -1436,49 +1637,6 @@ components:
           $ref: '#/components/schemas/Meta'
         page:
           $ref: '#/components/schemas/Page'
-    TableLayout:
-      type: object
-      required:
-        - number
-        - guestIds
-      properties:
-        number:
-          type: integer
-          minimum: 1
-        guestIds:
-          type: array
-          description: Enabled guests at this table (disabled cluster members are added by the server).
-          items:
-            type: integer
-            format: int64
-    AcceptPlan:
-      type: object
-      description: |
-        Replaces the plan's tables and assignments with the given layout (normally a proposal's tables).
-        Table numbers must be 1..k without gaps; a guest may appear at most once.
-        Clusters that were pinned stay pinned.
-      required:
-        - basedOnVersion
-        - tables
-      additionalProperties: false
-      properties:
-        basedOnVersion:
-          type: integer
-          minimum: 1
-        tables:
-          type: array
-          items:
-            $ref: '#/components/schemas/TableLayout'
-    ScenarioResponse:
-      type: object
-      required:
-        - data
-        - meta
-      properties:
-        data:
-          $ref: '#/components/schemas/Scenario'
-        meta:
-          $ref: '#/components/schemas/Meta'
     AssignmentSet:
       type: object
       description: Seat the guest's WHOLE cluster at a table, and set its pin.
@@ -1492,6 +1650,16 @@ components:
           minimum: 1
         pinned:
           type: boolean
+    ScenarioResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Scenario'
+        meta:
+          $ref: '#/components/schemas/Meta'
     HealthStatus:
       type: object
       required:

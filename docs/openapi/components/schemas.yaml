@@ -528,7 +528,7 @@ PlanSummary:
         True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
         cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
         cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
-        regenerates on its own. Always false for a proposal without violations.
+        regenerates on its own. False for a freshly generated plan without violations.
       example: false
 SeatingPlan:
   type: object
@@ -590,7 +590,9 @@ ScenarioListResponse:
       $ref: '#/Page'
 Proposal:
   type: object
-  description: Transient auto-seating result for one plan (never stored).
+  description: |
+    Auto-seating result for one plan, computed by `POST /scenarios/calculate` (never stored by that
+    call). "Generuj plany" stores it at once through `PUT /scenarios`; there is no preview.
   required: [capacity, basedOnVersion, plan]
   properties:
     capacity:
@@ -598,7 +600,7 @@ Proposal:
     basedOnVersion:
       type: integer
       minimum: 1
-      description: Scenario version the proposal was computed from; send it back when accepting.
+      description: Scenario version the proposal was computed from.
       example: 7
     plan:
       $ref: '#/SeatingPlan'
@@ -617,33 +619,62 @@ ProposalListResponse:
       $ref: '#/Page'
 TableLayout:
   type: object
-  required: [number, guestIds]
+  description: One table of a plan to store. Mapped 1:1 from a `PlanTable` (its clusters' `guestIds`, and those of its `pinned` clusters).
+  required: [number, guestIds, pinnedGuestIds]
+  additionalProperties: false
   properties:
     number:
       type: integer
       minimum: 1
+      example: 1
     guestIds:
       type: array
-      description: Enabled guests at this table (disabled cluster members are added by the server).
+      description: Guests at this table (enabled ones; disabled cluster members are added by the server). May be empty.
+      uniqueItems: true
       items:
         type: integer
         format: int64
-AcceptPlan:
+      example: [4, 5, 6, 7, 10, 11, 12, 13]
+    pinnedGuestIds:
+      type: array
+      description: Subset of `guestIds` whose clusters are pinned to this table (pin = whole cluster).
+      uniqueItems: true
+      items:
+        type: integer
+        format: int64
+      example: [4, 5]
+ScenarioLayout:
   type: object
-  description: |
-    Replaces the plan's tables and assignments with the given layout (normally a proposal's tables).
-    Table numbers must be 1..k without gaps; a guest may appear at most once.
-    Clusters that were pinned stay pinned.
-  required: [basedOnVersion, tables]
+  description: The full content of one plan to store (tables, assignments, pins).
+  required: [capacity, basedOnVersion, tables]
   additionalProperties: false
   properties:
+    capacity:
+      $ref: '#/Capacity'
     basedOnVersion:
       type: integer
       minimum: 1
+      description: The stored version this layout replaces (optimistic lock).
+      example: 7
     tables:
       type: array
+      description: Tables 1..k without gaps; `[]` = empty plan.
       items:
         $ref: '#/TableLayout'
+ScenariosReplace:
+  type: object
+  description: |
+    All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+    by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
+  required: [plans]
+  additionalProperties: false
+  properties:
+    plans:
+      type: array
+      minItems: 4
+      maxItems: 4
+      items:
+        $ref: '#/ScenarioLayout'
 AssignmentSet:
   type: object
   description: Seat the guest's WHOLE cluster at a table, and set its pin.

@@ -12,9 +12,9 @@ info:
       Auth must be added before any public exposure.
     * Envelopes: single `{data, meta}`, list `{data, meta, page}`, error `{errors, meta}`.
     * Optimistic locking: `version` on Guest (PATCH /guests/{guestId}) and Scenario
-      (PUT /scenarios/{capacity}/assignments). Stale version → 409 `version_conflict`.
-      Manual plan edits (move, pin, add/remove table, delete plan) are not version-checked
-      but bump the scenario version.
+      (PUT /scenarios, which replaces all four plans at once: used by "Generuj plany" and
+      its "Cofnij"). Stale version → 409 `version_conflict`. Manual plan edits (move, pin,
+      add/remove table, delete plan) are not version-checked but bump the scenario version.
     * Every scenario-returning endpoint returns the freshly computed evaluation;
       nothing derived (clusters, scores, violations) is stored.
 servers:
@@ -30,7 +30,7 @@ tags:
   - name: imports
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
-    description: The four plans (9/10/11/12), generate, accept, move, pin, tables, delete plan (UC-09…UC-14, UC-17)
+    description: The four plans (9/10/11/12), generate + store (and undo), move, pin, tables, delete plan (UC-09…UC-14, UC-17)
   - name: health
     description: Liveness
 security: []
@@ -49,8 +49,6 @@ paths:
     $ref: paths/scenarios.yaml
   /scenarios/calculate:
     $ref: paths/scenarios_calculate.yaml
-  /scenarios/{capacity}/assignments:
-    $ref: paths/scenarios_{capacity}_assignments.yaml
   /scenarios/{capacity}/assignments/{guestId}:
     $ref: paths/scenarios_{capacity}_assignments_{guestId}.yaml
   /scenarios/{capacity}/tables:
