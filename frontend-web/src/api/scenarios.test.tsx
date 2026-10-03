@@ -17,7 +17,7 @@ import {
 } from '@/api/scenarios'
 import type { Proposal, Scenario } from '@/domain/types'
 import { withoutProposal } from '@/domain/planView'
-import { threeProposals } from '@/features/plans/fixtures'
+import { fourProposals } from '@/features/plans/fixtures'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 import { failure, gate, HttpResponse, list, mockApi, single } from '@/test/server'
 import { renderHookWithClient } from '@/test/wrapper'
@@ -38,9 +38,10 @@ function scenario10(version = 7) {
     version,
   )
 }
-const scenario8 = makeScenario(8, makePlan([{ number: 1, clusters: [] }]), 2)
+const scenario9 = makeScenario(9, makePlan([{ number: 1, clusters: [] }]), 2)
 const scenario12 = makeScenario(12, makePlan([{ number: 1, clusters: [] }]), 3)
-const initial = (): Scenario[] => [scenario8, scenario10(), scenario12]
+const scenario11 = makeScenario(11, makePlan([{ number: 1, clusters: [] }]), 4)
+const initial = (): Scenario[] => [scenario9, scenario10(), scenario11, scenario12]
 
 /** What the server would answer after Maciek's cluster moved to table 2 (scores recomputed). */
 function serverCopyAfterMove(): Scenario {
@@ -68,18 +69,18 @@ function seedScenarios(queryClient: QueryClient) {
 }
 
 describe('useScenarios', () => {
-  it('returns the three scenarios', async () => {
+  it('returns the four scenarios', async () => {
     mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
 
     const { result } = renderHookWithClient(() => useScenarios())
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.map((s) => s.capacity)).toEqual([8, 10, 12])
+    expect(result.current.data?.map((s) => s.capacity)).toEqual([9, 10, 11, 12])
   })
 })
 
 describe('proposals live in the query cache', () => {
-  const proposals: Proposal[] = [8, 10, 12].map((capacity) => ({
+  const proposals: Proposal[] = [9, 10, 11, 12].map((capacity) => ({
     capacity: capacity as Proposal['capacity'],
     basedOnVersion: 7,
     plan: scenario10().plan,
@@ -133,12 +134,12 @@ describe('proposals live in the query cache', () => {
       drop: useDropProposal(),
     }))
     await act(() => result.current.calculate.mutateAsync())
-    await waitFor(() => expect(result.current.preview.data).toHaveLength(3))
+    await waitFor(() => expect(result.current.preview.data).toHaveLength(4))
 
     act(() => result.current.drop(10))
 
     await waitFor(() =>
-      expect(result.current.preview.data?.map((p) => p.capacity)).toEqual([8, 12]),
+      expect(result.current.preview.data?.map((p) => p.capacity)).toEqual([9, 11, 12]),
     )
   })
 
@@ -170,17 +171,18 @@ describe('useAcceptProposal', () => {
 
     expect(api.calls).toEqual([{ basedOnVersion: 7, tables }])
     const after = cached(queryClient)
-    expect(after?.map((s) => s.capacity)).toEqual([8, 10, 12])
+    expect(after?.map((s) => s.capacity)).toEqual([9, 10, 11, 12])
     expect(after?.[1]).toEqual(accepted)
-    expect(after?.[0]).toEqual(scenario8)
-    expect(after?.[2]).toEqual(scenario12)
+    expect(after?.[0]).toEqual(scenario9)
+    expect(after?.[2]).toEqual(scenario11)
+    expect(after?.[3]).toEqual(scenario12)
   })
 
   it('on a 409 refetches the scenarios and rejects with a version_conflict ApiError', async () => {
     mockApi('put', '/scenarios/10/assignments', () =>
       HttpResponse.json(failure('version_conflict', 'version'), { status: 409 }),
     )
-    const fresh = [scenario8, scenario10(9), scenario12]
+    const fresh = [scenario9, scenario10(9), scenario11, scenario12]
     const refetch = mockApi('get', '/scenarios', () => HttpResponse.json(list(fresh)))
     const { result } = renderHookWithClient(() => ({
       scenarios: useScenarios(),
@@ -247,7 +249,7 @@ describe('useSetAssignment (optimistic)', () => {
     expect(api.calls).toEqual([{ tableNumber: 2, pinned: false }])
     expect(cached(queryClient)?.[1]).toEqual(serverCopyAfterMove())
     expect(cached(queryClient)?.[1]?.plan.summary.score).toBe(99)
-    expect(cached(queryClient)?.[0]).toEqual(scenario8)
+    expect(cached(queryClient)?.[0]).toEqual(scenario9)
   })
 
   it('rolls back to the previous plan when the server refuses, and rejects with the ApiError', async () => {
@@ -383,7 +385,7 @@ describe('table commands replace the scenario with the server copy', () => {
     await act(() => result.current.mutateAsync({ capacity: 10 }))
 
     expect(cached(queryClient)?.[1]).toEqual(withTable)
-    expect(cached(queryClient)?.[0]).toEqual(scenario8)
+    expect(cached(queryClient)?.[0]).toEqual(scenario9)
   })
 
   it('useDeleteTable', async () => {
@@ -416,20 +418,21 @@ describe('useResetPlan', () => {
 
     expect(api.calls).toEqual([null])
     expect(cached(queryClient)?.[1]).toEqual(emptied())
-    expect(cached(queryClient)?.[0]).toEqual(scenario8)
-    expect(cached(queryClient)?.[2]).toEqual(scenario12)
+    expect(cached(queryClient)?.[0]).toEqual(scenario9)
+    expect(cached(queryClient)?.[2]).toEqual(scenario11)
+    expect(cached(queryClient)?.[3]).toEqual(scenario12)
   })
 
   it("drops that capacity's proposal from the preview and keeps the others", async () => {
     mockApi('delete', '/scenarios/10/tables', () => HttpResponse.json(single(emptied())))
     const { result, queryClient } = renderHookWithClient(() => useResetPlan())
     seedScenarios(queryClient)
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
 
     await act(() => result.current.mutateAsync({ capacity: 10 }))
 
     expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(
-      withoutProposal(threeProposals(), 10),
+      withoutProposal(fourProposals(), 10),
     )
   })
 
@@ -439,7 +442,7 @@ describe('useResetPlan', () => {
     )
     const { result, queryClient } = renderHookWithClient(() => useResetPlan())
     seedScenarios(queryClient)
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
 
     const error = await act(() =>
       result.current.mutateAsync({ capacity: 10 }).catch((caught: unknown) => caught),
@@ -447,7 +450,7 @@ describe('useResetPlan', () => {
 
     expect(error).toBeInstanceOf(ApiError)
     expect(cached(queryClient)).toEqual(initial())
-    expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(threeProposals())
+    expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(fourProposals())
   })
 
   it('does not invent a preview when there is none', async () => {

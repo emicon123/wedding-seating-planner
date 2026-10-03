@@ -238,7 +238,7 @@ classDiagram
 | Delete-plan confirmation open, acknowledgement checkbox | `PlansPage` / `PlanDetailPage` local state | Task 005, §7. |
 | Active drag | dnd-kit (`DndContext`) | — |
 | Selected guest in a plan (details panel) | `PlanDetailPage` local state + URL param `?guest=` | Deep link: "where does Ania sit". |
-| Remembered tab / last plan opened | `localStorage` (wrapped in try/catch) | Convenience only. |
+| Remembered tab / last plan opened | _not implemented_ (YAGNI; would be `localStorage` in try/catch) | Convenience only. |
 
 ## 5. Manual-entry UX (MVP data entry, first-class)
 
@@ -287,7 +287,7 @@ Contract: `DELETE /scenarios/{capacity}/tables` → 200 `ScenarioResponse` with 
 Plans exist for **9, 10, 11 and 12** seats (was 8, 10, 12). Contract: `Capacity` enum `[9, 10, 11, 12]`; `GET /scenarios` and `POST /scenarios/calculate` return exactly four items, ordered 9, 10, 11, 12; the data warning for "too big for the smallest plan" is now `cluster_exceeds_9` (cluster > 9 enabled guests).
 
 - **One list of sizes.** `domain/capacity.ts` `CAPACITIES = [9, 10, 11, 12]` is the only place that lists them; every page, switcher, "delete all" and "accept all" iterates it (DRY). The `Capacity` type comes from `schema.d.ts`.
-- **Four cards, readable.** `PlansPage` (current plans) and `ProposalPreview` lay the cards out as 1 column on phones, **2 × 2 on medium screens**, **4 across on wide screens** (Tailwind `grid-cols-1 md:grid-cols-2 xl:grid-cols-4`). The cards keep the same content; nothing new is added to them. The plan switcher in `PlanDetailPage` and the print view list four sizes.
+- **Four cards, readable.** `PlansPage` (current plans) and `ProposalPreview` lay the cards out as 1 column on phones, **2 × 2 on medium screens**, **4 across on wide screens** (Tailwind `grid-cols-1 md:grid-cols-2 xl:grid-cols-4`). The cards keep the same content; nothing new is added to them. The plan switcher in `PlanDetailPage` lists the four sizes; the print view is per capacity (`/druk/:capacity`). Old bookmarks `/plany/8` and `/druk/8` redirect to 9.
 - **Odd seat counts.** `TableSeats` / the round-table drawing, the drop preview and the move menu must place **9 and 11** seats evenly around the table (angle = 360° / capacity, no assumption of an even count or of pairs facing each other).
 - **Polish copy.** "Cztery plany naraz: stoły 9-, 10-, 11- i 12-osobowe"; "Zapisano plany: 9, 10, 11, 12 miejsc."; "Usunąć wszystkie cztery plany?" (four DELETE calls); warning label `cluster_exceeds_9`: "Ta paczka (grupa 0) jest za duża na stół 9-osobowy"; the client preview `clusterSizeWarning` uses > 9 / > 12.
 - **Floor 8** (was 6): `domain/dropPreview.ts` `MIN_TABLE_FILL = 8` is the single client constant (drop preview, table status, labels "minimum 8", `FillBars` floor line); the `PlanLegend` copy "minimum 6" becomes "minimum 8". Scores and violations still come from the server.

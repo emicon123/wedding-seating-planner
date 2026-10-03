@@ -78,7 +78,7 @@ describe('PlanDetailPage: the hall (read)', () => {
     await screen.findByRole('region', { name: 'Stół 1' })
 
     expect(within(table(1)).getByText('Za dużo osób: 11/10')).toBeInTheDocument()
-    expect(within(table(2)).getByText('Za mało osób (minimum 6)')).toBeInTheDocument()
+    expect(within(table(2)).getByText('Za mało osób (minimum 8)')).toBeInTheDocument()
     expect(within(table(3)).queryByText(/Za (dużo|mało)/)).toBeNull()
   })
 
@@ -353,7 +353,7 @@ describe('PlanDetailPage: add and remove tables', () => {
     expect(await screen.findByRole('region', { name: 'Stół 3' })).toBeInTheDocument()
     expect(api.calls).toHaveLength(1)
     expect(within(table(3)).getByText('0/10')).toBeInTheDocument()
-    expect(within(table(3)).getByText('Za mało osób (minimum 6)')).toBeInTheDocument()
+    expect(within(table(3)).getByText('Za mało osób (minimum 8)')).toBeInTheDocument()
   })
 
   it('deleting a table asks first, then its guests show up in the tray', async () => {

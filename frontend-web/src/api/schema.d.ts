@@ -19,7 +19,7 @@ export interface paths {
         put?: never;
         /**
          * Add a guest (UC-02)
-         * @description The new guest is enabled by default and unseated in all three plans.
+         * @description The new guest is enabled by default and unseated in all four plans.
          */
         post: operations["createGuest"];
         delete?: never;
@@ -128,7 +128,7 @@ export interface paths {
          *     A name reference matches a full display name, or a first name if exactly one guest has it.
          *
          *     `dryRun=true` (default): validate only, return the report.
-         *     `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all three plans,
+         *     `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all four plans,
          *     in one transaction; with errors → 422 and nothing changes.
          */
         post: operations["importGuests"];
@@ -145,7 +145,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The three plans (8, 10, 12) with their evaluations (UC-09, UC-14) */
+        /** The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14) */
         get: operations["listScenarios"];
         put?: never;
         post?: never;
@@ -165,8 +165,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Generate proposals for all three plans (UC-10)
-         * @description Pure computation — nothing is stored. Runs auto-seating for capacity 8, 10 and 12 from the
+         * Generate proposals for all four plans (UC-10)
+         * @description Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
          *     current guests, links and pins. Accept a proposal with `PUT /scenarios/{capacity}/assignments`.
          */
         post: operations["calculateProposals"];
@@ -258,12 +258,12 @@ export interface paths {
         post: operations["addTable"];
         /**
          * Delete a plan — remove all its tables, assignments and pins (UC-17)
-         * @description "Usuń plan". The scenario itself stays (there are always three plans); it becomes an
+         * @description "Usuń plan". The scenario itself stays (there are always four plans); it becomes an
          *     empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
          *     too). Bumps the scenario version, so a proposal generated before is stale (accepting it
          *     returns 409). Not version-checked, like the other manual plan edits: the result does not
          *     depend on what the client saw, and repeating it is harmless (idempotent apart from the
-         *     version bump). No request body. "Usuń wszystkie plany" is three calls, one per capacity.
+         *     version bump). No request body. "Usuń wszystkie plany" is four calls, one per capacity.
          */
         delete: operations["resetPlan"];
         options?: never;
@@ -359,7 +359,7 @@ export interface components {
             /** @example false */
             isChild: boolean;
             /**
-             * @description Disabled guests stay on the list but are ignored by all three plans.
+             * @description Disabled guests stay on the list but are ignored by all four plans.
              * @example true
              */
             enabled: boolean;
@@ -511,11 +511,14 @@ export interface components {
         };
         DataWarning: {
             /**
-             * @example cluster_exceeds_8
+             * @description `cluster_exceeds_9`: a group-0 cluster of 10–12 enabled guests does not fit the smallest
+             *     (9-seat) plan. `cluster_exceeds_12`: 13+ enabled guests, fits no plan.
+             *     `conflicting_link_levels`: two clusters are linked at both level 1 and level 2.
+             * @example cluster_exceeds_9
              * @enum {string}
              */
-            code: "cluster_exceeds_8" | "cluster_exceeds_12" | "conflicting_link_levels";
-            /** @example A group-0 cluster of 9 enabled guests does not fit the 8-seat plan. */
+            code: "cluster_exceeds_9" | "cluster_exceeds_12" | "conflicting_link_levels";
+            /** @example A group-0 cluster of 10 enabled guests does not fit the 9-seat plan. */
             message: string;
             /**
              * @example [
@@ -527,7 +530,8 @@ export interface components {
              *       11,
              *       12,
              *       13,
-             *       14
+             *       14,
+             *       15
              *     ]
              */
             guestIds: number[];
@@ -591,11 +595,11 @@ export interface components {
             meta: components["schemas"]["Meta"];
         };
         /**
-         * @description Seats per table; identifies one of the three plans.
+         * @description Seats per table; identifies one of the four plans.
          * @example 10
          * @enum {integer}
          */
-        Capacity: 8 | 10 | 12;
+        Capacity: 9 | 10 | 11 | 12;
         PlanSummary: {
             /** @example 10 */
             tableCount: number;
@@ -682,7 +686,7 @@ export interface components {
              * @enum {string}
              */
             code: "cluster_split" | "over_capacity" | "under_floor" | "unseated_guests" | "oversized_cluster";
-            /** @example Table 3 has 4 guests (minimum 6). */
+            /** @example Table 3 has 6 guests (minimum 8). */
             message: string;
             /** @example 3 */
             tableNumber: number | null;
@@ -721,7 +725,7 @@ export interface components {
             plan: components["schemas"]["SeatingPlan"];
         };
         ProposalListResponse: {
-            /** @description Always exactly three proposals, ordered 8, 10, 12. */
+            /** @description Always exactly four proposals, ordered 9, 10, 11, 12. */
             data: components["schemas"]["Proposal"][];
             meta: components["schemas"]["Meta"];
             page: components["schemas"]["Page"];
@@ -915,7 +919,7 @@ export interface components {
         LinkKey: string;
         /**
          * @description `true` (default) only validates and returns the report. `false` commits:
-         *     replaces ALL guests and links and clears all three plans.
+         *     replaces ALL guests and links and clears all four plans.
          * @example true
          */
         DryRun: boolean;
@@ -1262,7 +1266,7 @@ export interface operations {
             query?: {
                 /**
                  * @description `true` (default) only validates and returns the report. `false` commits:
-                 *     replaces ALL guests and links and clears all three plans.
+                 *     replaces ALL guests and links and clears all four plans.
                  * @example true
                  */
                 dryRun?: components["parameters"]["DryRun"];
@@ -1334,7 +1338,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Always three scenarios, ordered 8, 10, 12. */
+            /** @description Always four scenarios, ordered 9, 10, 11, 12. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1344,7 +1348,7 @@ export interface operations {
                      * @example {
                      *       "data": [
                      *         {
-                     *           "capacity": 8,
+                     *           "capacity": 9,
                      *           "version": 1,
                      *           "plan": {
                      *             "summary": {
@@ -1385,7 +1389,7 @@ export interface operations {
                      *         "requestId": "01JB8Z6Q0K3N"
                      *       },
                      *       "page": {
-                     *         "total": 3
+                     *         "total": 4
                      *       }
                      *     }
                      */
@@ -1405,7 +1409,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Exactly three proposals, ordered 8, 10, 12. */
+            /** @description Exactly four proposals, ordered 9, 10, 11, 12. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1415,7 +1419,7 @@ export interface operations {
                      * @example {
                      *       "data": [
                      *         {
-                     *           "capacity": 8,
+                     *           "capacity": 9,
                      *           "basedOnVersion": 7,
                      *           "plan": {
                      *             "summary": {
@@ -1463,7 +1467,7 @@ export interface operations {
                      *         "requestId": "01JB8Z6Q0K3N"
                      *       },
                      *       "page": {
-                     *         "total": 3
+                     *         "total": 4
                      *       }
                      *     }
                      */

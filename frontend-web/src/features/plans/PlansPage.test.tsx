@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import { keys } from '@/api/keys'
 import { CAPACITIES, type Capacity } from '@/domain/capacity'
 import type { Proposal } from '@/domain/types'
-import { evenPlan, serveScenarios, threeProposals, threeScenarios } from '@/features/plans/fixtures'
+import { evenPlan, serveScenarios, fourProposals, fourScenarios } from '@/features/plans/fixtures'
 import { PlansPage } from '@/features/plans/PlansPage'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 import { renderPage } from '@/test/renderPage'
@@ -10,9 +10,9 @@ import { failure, gate, HttpResponse, list, mockApi, single } from '@/test/serve
 
 const card = (name: string) => screen.getByRole('article', { name })
 
-describe('PlansPage: compare the three plans', () => {
+describe('PlansPage: compare the four plans', () => {
   it('shows a card per capacity with table count, fill bars, score and violations', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     renderPage(<PlansPage />)
 
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -23,14 +23,15 @@ describe('PlansPage: compare the three plans', () => {
 
     const cards = screen.getAllByRole('article')
     expect(cards.map((c) => c.getAttribute('aria-label'))).toEqual([
-      'Plan na 8 miejsc',
+      'Plan na 9 miejsc',
       'Plan na 10 miejsc',
+      'Plan na 11 miejsc',
       'Plan na 12 miejsc',
     ])
   })
 
   it('links every card to its floor plan under the router basename', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     renderPage(<PlansPage />)
 
     const link = await screen.findByRole('link', { name: /Otwórz plan\s*na 12 miejsc/ })
@@ -47,7 +48,7 @@ describe('PlansPage: compare the three plans', () => {
     )
     broken.violations = [{ code: 'over_capacity', message: 'x', tableNumber: 1, guestIds: [] }]
     broken.summary = { ...broken.summary, violationCount: 1, needsRecalculation: true }
-    serveScenarios(threeScenarios({ 10: broken }))
+    serveScenarios(fourScenarios({ 10: broken }))
     renderPage(<PlansPage />)
 
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -55,14 +56,14 @@ describe('PlansPage: compare the three plans', () => {
     expect(within(ten).getByText('Stół 1 jest przepełniony')).toBeInTheDocument()
     expect(within(ten).getByRole('button', { name: 'Przelicz / Generuj' })).toBeInTheDocument()
     // the calm plans carry no banner
-    expect(within(card('Plan na 8 miejsc')).queryByText('Wymaga przeliczenia')).toBeNull()
+    expect(within(card('Plan na 9 miejsc')).queryByText('Wymaga przeliczenia')).toBeNull()
   })
 
   it('never regenerates by itself', async () => {
     const calculate = mockApi('post', '/scenarios/calculate', () =>
-      HttpResponse.json(list(threeProposals())),
+      HttpResponse.json(list(fourProposals())),
     )
-    serveScenarios(threeScenarios({ 10: makePlan([{ number: 1, clusters: [] }]) }))
+    serveScenarios(fourScenarios({ 10: makePlan([{ number: 1, clusters: [] }]) }))
     renderPage(<PlansPage />)
     await screen.findByText('Wymaga przeliczenia')
 
@@ -79,9 +80,9 @@ describe('PlansPage: compare the three plans', () => {
 })
 
 describe('PlansPage: generate, preview, accept', () => {
-  it('Generate shows three proposals next to the current plans, and writes nothing', async () => {
-    serveScenarios(threeScenarios())
-    const proposals = threeProposals()
+  it('Generate shows four proposals next to the current plans, and writes nothing', async () => {
+    serveScenarios(fourScenarios())
+    const proposals = fourProposals()
     proposals[1] = { ...proposals[1]!, plan: evenPlan(4, 6) }
     const calculate = mockApi('post', '/scenarios/calculate', () =>
       HttpResponse.json(list(proposals)),
@@ -101,11 +102,11 @@ describe('PlansPage: generate, preview, accept', () => {
   })
 
   it('disables Generate while the server computes and says so', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const hold = gate()
     mockApi('post', '/scenarios/calculate', async () => {
       await hold.opened
-      return HttpResponse.json(list(threeProposals()))
+      return HttpResponse.json(list(fourProposals()))
     })
     const { user } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -118,7 +119,7 @@ describe('PlansPage: generate, preview, accept', () => {
   })
 
   it('a failed Generate shows a toast and no preview', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     mockApi('post', '/scenarios/calculate', () =>
       HttpResponse.json(failure('internal_error'), { status: 500 }),
     )
@@ -132,10 +133,10 @@ describe('PlansPage: generate, preview, accept', () => {
   })
 
   it('Odrzuć clears the preview and keeps the stored plans', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const { user, queryClient } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
     await screen.findByRole('region', { name: 'Propozycje do przejrzenia' })
 
     await user.click(screen.getByRole('button', { name: 'Odrzuć' }))
@@ -147,8 +148,8 @@ describe('PlansPage: generate, preview, accept', () => {
   })
 
   function acceptHandlers(statusByCapacity: Partial<Record<number, number>> = {}) {
-    const store = threeScenarios()
-    return ([8, 10, 12] as const).map((capacity) => {
+    const store = fourScenarios()
+    return ([9, 10, 11, 12] as const).map((capacity) => {
       const stored = store.find((s) => s.capacity === capacity)!
       return {
         capacity,
@@ -164,11 +165,11 @@ describe('PlansPage: generate, preview, accept', () => {
   }
 
   it('"Akceptuj wszystkie" sends one PUT per plan with basedOnVersion and the proposal tables', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const handlers = acceptHandlers()
     const { user, queryClient } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
 
     await user.click(await screen.findByRole('button', { name: 'Akceptuj wszystkie' }))
 
@@ -180,15 +181,15 @@ describe('PlansPage: generate, preview, accept', () => {
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Propozycje do przejrzenia' })).toBeNull(),
     )
-    expect(await screen.findByText('Zapisano plany: 8, 10, 12 miejsc.')).toBeInTheDocument()
+    expect(await screen.findByText('Zapisano plany: 9, 10, 11, 12 miejsc.')).toBeInTheDocument()
   })
 
   it('one 409 shows a toast for that plan while the others stay accepted', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     acceptHandlers({ 10: 409 })
     const { user, queryClient } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
 
     await user.click(await screen.findByRole('button', { name: 'Akceptuj wszystkie' }))
 
@@ -206,11 +207,11 @@ describe('PlansPage: generate, preview, accept', () => {
   })
 
   it('accepts one proposal alone', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const handlers = acceptHandlers()
     const { user, queryClient } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
     const preview = await screen.findByRole('region', { name: 'Propozycje do przejrzenia' })
 
     await user.click(
@@ -220,7 +221,7 @@ describe('PlansPage: generate, preview, accept', () => {
       ),
     )
 
-    await waitFor(() => expect(handlers[2]!.api.calls).toHaveLength(1))
+    await waitFor(() => expect(handlers[3]!.api.calls).toHaveLength(1))
     expect(handlers[0]!.api.calls).toHaveLength(0)
     await waitFor(() =>
       expect(
@@ -230,12 +231,12 @@ describe('PlansPage: generate, preview, accept', () => {
   })
 
   it('a proposal older than the stored plan is marked stale and cannot be accepted', async () => {
-    const scenarios = threeScenarios()
+    const scenarios = fourScenarios()
     scenarios[1] = makeScenario(10, evenPlan(3, 8), 8) // someone moved a chip after Generate
     serveScenarios(scenarios)
     const { queryClient } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    const proposals: Proposal[] = threeProposals()
+    const proposals: Proposal[] = fourProposals()
     queryClient.setQueryData(keys.proposals, proposals)
 
     const stale = await screen.findByRole('article', { name: 'Propozycja na 10 miejsc' })
@@ -262,7 +263,7 @@ const resetCall = (capacity: Capacity, respond?: () => Response | Promise<Respon
 
 describe('PlansPage: delete plans', () => {
   it('"Usuń plan" on a card asks first, says how many tables and guests are cleared, and Anuluj sends nothing', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const api = resetCall(10)
     const { user } = renderPage(<PlansPage />)
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -283,7 +284,7 @@ describe('PlansPage: delete plans', () => {
   })
 
   it('confirming deletes only that plan and the card shows the empty state', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const api = resetCall(10)
     const { user } = renderPage(<PlansPage />)
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -298,12 +299,12 @@ describe('PlansPage: delete plans', () => {
     expect(await screen.findByText('Usunięto plan na 10 miejsc.')).toBeInTheDocument()
     expect(api.calls).toEqual([null])
     // the other plans are untouched
-    expect(within(card('Plan na 8 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
+    expect(within(card('Plan na 9 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
     expect(within(card('Plan na 12 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
   })
 
   it('keeps the dialog open until the server answers', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     const hold = gate()
     resetCall(10, async () => {
       await hold.opened
@@ -330,7 +331,7 @@ describe('PlansPage: delete plans', () => {
   })
 
   it('a refused delete stays in the dialog with an inline message and a toast', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     resetCall(10, () => HttpResponse.json(failure('internal_error'), { status: 500 }))
     const { user } = renderPage(<PlansPage />)
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -346,7 +347,7 @@ describe('PlansPage: delete plans', () => {
   })
 
   it('"Usuń plan" is disabled, with the reason, on a plan with no tables', async () => {
-    serveScenarios(threeScenarios({ 10: makePlan([], []) }))
+    serveScenarios(fourScenarios({ 10: makePlan([], []) }))
     renderPage(<PlansPage />)
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
 
@@ -355,20 +356,25 @@ describe('PlansPage: delete plans', () => {
     expect(button).toBeDisabled()
     expect(button).toHaveAccessibleDescription('Ten plan nie ma stołów, nie ma co usuwać.')
     expect(
-      within(card('Plan na 8 miejsc')).getByRole('button', { name: /Usuń plan/ }),
+      within(card('Plan na 9 miejsc')).getByRole('button', { name: /Usuń plan/ }),
     ).toBeEnabled()
   })
 
-  it('"Usuń wszystkie plany" needs the acknowledgement checkbox, then sends three DELETEs (8, 10, 12)', async () => {
-    serveScenarios(threeScenarios())
+  it('"Usuń wszystkie plany" needs the acknowledgement checkbox, then sends four DELETEs (9, 10, 11, 12)', async () => {
+    serveScenarios(fourScenarios())
     const calls = CAPACITIES.map((capacity) => resetCall(capacity))
     const { user } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
 
     await user.click(screen.getByRole('button', { name: 'Usuń wszystkie plany' }))
-    const dialog = await screen.findByRole('alertdialog', { name: 'Usunąć wszystkie trzy plany?' })
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Usunąć wszystkie cztery plany?',
+    })
     expect(
-      within(dialog).getByText(/Plan 8-osobowy: 3 stoły i 24 osoby przy stołach/),
+      within(dialog).getByText(/Plan 9-osobowy: 3 stoły i 24 osoby przy stołach/),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(/Plan 11-osobowy: 2 stoły i 22 osoby przy stołach/),
     ).toBeInTheDocument()
     expect(
       within(dialog).getByText(/Plan 12-osobowy: 2 stoły i 24 osoby przy stołach/),
@@ -380,25 +386,26 @@ describe('PlansPage: delete plans', () => {
       within(dialog).getByRole('checkbox', { name: 'Rozumiem, że tego nie da się cofnąć' }),
     )
     expect(confirm).toBeEnabled()
-    expect(calls.map((c) => c.calls.length)).toEqual([0, 0, 0])
+    expect(calls.map((c) => c.calls.length)).toEqual([0, 0, 0, 0])
     await user.click(confirm)
 
     expect(await screen.findByText('Usunięto wszystkie plany.')).toBeInTheDocument()
-    expect(calls.map((c) => c.calls.length)).toEqual([1, 1, 1])
-    expect(screen.getAllByText('Brak stołów w tym planie.')).toHaveLength(3)
+    expect(calls.map((c) => c.calls.length)).toEqual([1, 1, 1, 1])
+    expect(screen.getAllByText('Brak stołów w tym planie.')).toHaveLength(4)
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
-  it('when one of the three fails, the toast names that plan and the others stay deleted', async () => {
-    // a server that remembers: plans 8 and 12 are empty once deleted, so the refetch agrees
-    let stored = threeScenarios()
+  it('when one of the four fails, the toast names that plan and the others stay deleted', async () => {
+    // a server that remembers: plans 9, 11 and 12 are empty once deleted, so the refetch agrees
+    let stored = fourScenarios()
     const empty = (capacity: Capacity) => () => {
       stored = stored.map((s) => (s.capacity === capacity ? emptied(capacity) : s))
       return HttpResponse.json(single(emptied(capacity)))
     }
     mockApi('get', '/scenarios', () => HttpResponse.json(list(stored)))
-    resetCall(8, empty(8))
+    resetCall(9, empty(9))
     resetCall(10, () => HttpResponse.json(failure('internal_error'), { status: 500 }))
+    resetCall(11, empty(11))
     resetCall(12, empty(12))
     const { user } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
@@ -414,7 +421,10 @@ describe('PlansPage: delete plans', () => {
     expect(await screen.findAllByText(/Nie udało się usunąć planu: 10/)).toHaveLength(2) // inline + toast
     await user.click(within(dialog).getByRole('button', { name: 'Anuluj' }))
     expect(
-      within(card('Plan na 8 miejsc')).getByText('Brak stołów w tym planie.'),
+      within(card('Plan na 9 miejsc')).getByText('Brak stołów w tym planie.'),
+    ).toBeInTheDocument()
+    expect(
+      within(card('Plan na 11 miejsc')).getByText('Brak stołów w tym planie.'),
     ).toBeInTheDocument()
     expect(
       within(card('Plan na 12 miejsc')).getByText('Brak stołów w tym planie.'),
@@ -422,19 +432,19 @@ describe('PlansPage: delete plans', () => {
     expect(within(card('Plan na 10 miejsc')).queryByText('Brak stołów w tym planie.')).toBeNull()
   })
 
-  it('"Usuń wszystkie plany" is disabled when all three plans are empty', async () => {
+  it('"Usuń wszystkie plany" is disabled when all four plans are empty', async () => {
     const none = makePlan([], [])
-    serveScenarios(threeScenarios({ 8: none, 10: none, 12: none }))
+    serveScenarios(fourScenarios({ 9: none, 10: none, 11: none, 12: none }))
     renderPage(<PlansPage />)
 
     expect(await screen.findByRole('button', { name: 'Usuń wszystkie plany' })).toBeDisabled()
   })
 
   it('a deleted plan leaves the preview, the other proposals stay', async () => {
-    serveScenarios(threeScenarios())
+    serveScenarios(fourScenarios())
     resetCall(10)
     const { user, queryClient } = renderPage(<PlansPage />)
-    queryClient.setQueryData(keys.proposals, threeProposals())
+    queryClient.setQueryData(keys.proposals, fourProposals())
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
 
     await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
@@ -442,6 +452,6 @@ describe('PlansPage: delete plans', () => {
 
     await screen.findByText('Usunięto plan na 10 miejsc.')
     expect(screen.queryByRole('article', { name: 'Propozycja na 10 miejsc' })).toBeNull()
-    expect(screen.getByRole('article', { name: 'Propozycja na 8 miejsc' })).toBeInTheDocument()
+    expect(screen.getByRole('article', { name: 'Propozycja na 9 miejsc' })).toBeInTheDocument()
   })
 })

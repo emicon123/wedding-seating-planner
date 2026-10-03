@@ -1,7 +1,7 @@
 import type { Capacity, ClusterOverview, ClusterPlacement, SeatingPlan } from '@/domain/types'
 
 /** Hard lower bound for every table (glossary "Floor"), waived when a plan needs just one table. */
-export const MIN_TABLE_FILL = 6
+export const MIN_TABLE_FILL = 8
 
 export type DropPreview = {
   /** Seats taken at the target table if dropped now (0 for the tray). */

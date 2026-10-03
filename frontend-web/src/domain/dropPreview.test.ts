@@ -41,14 +41,14 @@ describe('dropPreview', () => {
     expect(preview.overCapacity).toBe(true)
   })
 
-  it('flags the source table falling under the floor of 6', () => {
-    const preview = dropPreview(planWith(4), family, 2, 10, overview) // table 1: 7 - 3 = 4 < 6
+  it('flags the source table falling under the floor of 8', () => {
+    const preview = dropPreview(planWith(4), family, 2, 10, overview) // table 1: 7 - 3 = 4 < 8
     expect(preview.underFloorSource).toBe(true)
   })
 
   it('does not flag the source when it stays at or above the floor', () => {
     const roomy = makePlan([
-      { number: 1, clusters: [family, placement(50, [50, 51, 52, 53, 54, 55])] }, // 9 - 3 = 6
+      { number: 1, clusters: [family, placement(50, [50, 51, 52, 53, 54, 55, 56, 57])] }, // 11 - 3 = 8
       { number: 2, clusters: [] },
     ])
     expect(dropPreview(roomy, family, 2, 10, overview).underFloorSource).toBe(false)

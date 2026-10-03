@@ -45,7 +45,7 @@ export function PlanLegend() {
             <TriangleAlertIcon aria-hidden="true" className="size-4" /> Ostrzeżenie
           </dt>
           <dd className="text-muted-foreground">
-            Za dużo osób (czerwone, poza kołem miejsc) albo za mało (przerywany stół, minimum 6).
+            Za dużo osób (czerwone, poza kołem miejsc) albo za mało (przerywany stół, minimum 8).
             Plan można zapisać mimo to.
           </dd>
         </div>

@@ -153,9 +153,9 @@ export function clusterAfter(
   return { memberIds, seatedSize }
 }
 
-/** The same thresholds as the server's data warnings: > 8 (8-seat plan) and > 12 (no plan). */
+/** The same thresholds as the server's data warnings: > 9 (9-seat plan) and > 12 (no plan). */
 export function clusterSizeWarning(seatedSize: number): DataWarning['code'] | null {
   if (seatedSize > 12) return 'cluster_exceeds_12'
-  if (seatedSize > 8) return 'cluster_exceeds_8'
+  if (seatedSize > 9) return 'cluster_exceeds_9'
   return null
 }

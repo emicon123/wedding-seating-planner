@@ -9,12 +9,12 @@ type GenerateButtonProps = {
   label?: string
   variant?: 'default' | 'outline'
   size?: 'default' | 'lg'
-  /** Called once the three proposals are in the preview (the detail page uses it to go there). */
+  /** Called once the four proposals are in the preview (the detail page uses it to go there). */
   onGenerated?: () => void
 }
 
 /**
- * Generate always means all three plans (user requirement). The result is a preview that is
+ * Generate always means all four plans (user requirement). The result is a preview that is
  * only stored when accepted. Any "Generuj" button on the screen disables while one is running.
  */
 export function GenerateButton({

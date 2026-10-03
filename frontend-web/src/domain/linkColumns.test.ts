@@ -70,13 +70,13 @@ describe('warningsForGuest', () => {
   const overview = {
     clusters: MACIEK_FAMILY_OVERVIEW.clusters,
     warnings: [
-      { code: 'cluster_exceeds_8' as const, message: 'x', guestIds: [6, 7] },
+      { code: 'cluster_exceeds_9' as const, message: 'x', guestIds: [6, 7] },
       { code: 'conflicting_link_levels' as const, message: 'y', guestIds: [5] },
     ],
   }
 
   it('returns warnings touching the guest or their cluster-mates', () => {
     expect(warningsForGuest(4, overview).map((w) => w.code)).toEqual(['conflicting_link_levels'])
-    expect(warningsForGuest(6, overview).map((w) => w.code)).toEqual(['cluster_exceeds_8'])
+    expect(warningsForGuest(6, overview).map((w) => w.code)).toEqual(['cluster_exceeds_9'])
   })
 })

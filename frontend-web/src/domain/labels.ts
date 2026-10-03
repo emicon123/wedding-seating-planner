@@ -55,7 +55,7 @@ export function violationLabel(violation: Violation): string {
 
 export function warningLabel(warning: Pick<DataWarning, 'code'>): string {
   const labels: Record<DataWarning['code'], string> = {
-    cluster_exceeds_8: 'Ta paczka (grupa 0) jest za duża na stół 8-osobowy',
+    cluster_exceeds_9: 'Ta paczka (grupa 0) jest za duża na stół 9-osobowy',
     cluster_exceeds_12:
       'Ta paczka (grupa 0) jest za duża na stół 12-osobowy, nie zmieści się w żadnym planie',
     conflicting_link_levels: 'Te paczki są powiązane jednocześnie grupą 1 i 2, obowiązuje grupa 1',

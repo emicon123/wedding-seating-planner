@@ -27,18 +27,20 @@ export function evenPlan(count: number, fill: number): SeatingPlan {
   return withoutViolations(makePlan(tables))
 }
 
-export function threeScenarios(overrides: Partial<Record<Capacity, SeatingPlan>> = {}): Scenario[] {
+export function fourScenarios(overrides: Partial<Record<Capacity, SeatingPlan>> = {}): Scenario[] {
   return [
-    makeScenario(8, overrides[8] ?? evenPlan(3, 8), 4),
+    makeScenario(9, overrides[9] ?? evenPlan(3, 8), 4),
     makeScenario(10, overrides[10] ?? evenPlan(3, 8), 7),
+    makeScenario(11, overrides[11] ?? evenPlan(2, 11), 3),
     makeScenario(12, overrides[12] ?? evenPlan(2, 12), 2),
   ]
 }
 
-export function threeProposals(): Proposal[] {
+export function fourProposals(): Proposal[] {
   return [
-    { capacity: 8, basedOnVersion: 4, plan: evenPlan(3, 8) },
+    { capacity: 9, basedOnVersion: 4, plan: evenPlan(3, 8) },
     { capacity: 10, basedOnVersion: 7, plan: evenPlan(3, 8) },
+    { capacity: 11, basedOnVersion: 3, plan: evenPlan(2, 11) },
     { capacity: 12, basedOnVersion: 2, plan: evenPlan(2, 12) },
   ]
 }
@@ -97,7 +99,12 @@ export function serveDetail(scenario: Scenario = detailScenario()) {
   server.use(
     http.get(apiUrl('/scenarios'), () =>
       HttpResponse.json(
-        list([makeScenario(8, evenPlan(1, 6), 1), scenario, makeScenario(12, evenPlan(1, 6), 1)]),
+        list([
+          makeScenario(9, evenPlan(1, 6), 1),
+          scenario,
+          makeScenario(11, evenPlan(1, 6), 1),
+          makeScenario(12, evenPlan(1, 6), 1),
+        ]),
       ),
     ),
     http.get(apiUrl('/guests'), () => HttpResponse.json(list(DETAIL_GUESTS))),

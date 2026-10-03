@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DeletePlanDialog } from '@/features/plans/DeletePlanDialog'
-import { evenPlan, threeScenarios } from '@/features/plans/fixtures'
+import { evenPlan, fourScenarios } from '@/features/plans/fixtures'
 import { makePlan, makeScenario } from '@/test/builders'
 
 function setup(props: Partial<Parameters<typeof DeletePlanDialog>[0]> = {}) {
@@ -10,7 +10,7 @@ function setup(props: Partial<Parameters<typeof DeletePlanDialog>[0]> = {}) {
   const user = userEvent.setup()
   render(
     <DeletePlanDialog
-      scenarios={threeScenarios().slice(1, 2)}
+      scenarios={fourScenarios().slice(1, 2)}
       pending={false}
       onConfirm={onConfirm}
       onClose={onClose}
@@ -80,14 +80,14 @@ describe('DeletePlanDialog: one plan', () => {
 })
 
 describe('DeletePlanDialog: all plans', () => {
-  const all = () => threeScenarios({ 12: makePlan([], []) })
+  const all = () => fourScenarios({ 12: makePlan([], []) })
 
   it('lists every plan, naming the empty one', () => {
     setup({ scenarios: all() })
 
-    const dialog = screen.getByRole('alertdialog', { name: 'Usunąć wszystkie trzy plany?' })
+    const dialog = screen.getByRole('alertdialog', { name: 'Usunąć wszystkie cztery plany?' })
     expect(
-      within(dialog).getByText('Plan 8-osobowy: 3 stoły i 24 osoby przy stołach'),
+      within(dialog).getByText('Plan 9-osobowy: 3 stoły i 24 osoby przy stołach'),
     ).toBeInTheDocument()
     expect(within(dialog).getByText('Plan 12-osobowy: bez stołów')).toBeInTheDocument()
   })
@@ -109,15 +109,15 @@ describe('DeletePlanDialog: all plans', () => {
   })
 
   it('focus starts on Anuluj here too', () => {
-    setup({ scenarios: threeScenarios() })
+    setup({ scenarios: fourScenarios() })
 
     expect(screen.getByRole('button', { name: 'Anuluj' })).toHaveFocus()
   })
 
   it('a plan without tables still appears as a scenario of its own', () => {
-    const empty = makeScenario(8, evenPlan(0, 0), 1)
-    setup({ scenarios: [empty, ...threeScenarios().slice(1)] })
+    const empty = makeScenario(9, evenPlan(0, 0), 1)
+    setup({ scenarios: [empty, ...fourScenarios().slice(1)] })
 
-    expect(screen.getByText('Plan 8-osobowy: bez stołów')).toBeInTheDocument()
+    expect(screen.getByText('Plan 9-osobowy: bez stołów')).toBeInTheDocument()
   })
 })

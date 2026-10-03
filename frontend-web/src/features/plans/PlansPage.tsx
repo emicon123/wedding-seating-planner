@@ -14,8 +14,8 @@ import { ProposalPreview } from '@/features/plans/ProposalPreview'
 type DeleteTarget = { kind: 'one'; capacity: Capacity } | { kind: 'all' }
 
 /**
- * The three plans (8, 10, 12 seats) side by side: the answer to "how many tables, how happy, what
- * is wrong". Generate always computes all three; its result is a preview until accepted. This
+ * The four plans (9, 10, 11, 12 seats) side by side: the answer to "how many tables, how happy, what
+ * is wrong". Generate always computes all four; its result is a preview until accepted. This
  * page also owns "Usuń plan" / "Usuń wszystkie plany" (task 005): the cards only report the
  * intent, the dialog confirms, and one reset call per plan empties it on the server.
  */
@@ -84,8 +84,8 @@ export function PlansPage() {
         <div className="max-w-prose space-y-2">
           <h1 className="text-4xl font-semibold">Plany</h1>
           <p className="text-muted-foreground">
-            Trzy plany naraz: stoły 8-, 10- i 12-osobowe. Porównaj liczbę stołów, zadowolenie gości
-            i naruszenia, a potem otwórz plan, żeby zobaczyć salę.
+            Cztery plany naraz: stoły 9-, 10-, 11- i 12-osobowe. Porównaj liczbę stołów, zadowolenie
+            gości i naruszenia, a potem otwórz plan, żeby zobaczyć salę.
           </p>
         </div>
         <GenerateButton size="lg" />
@@ -122,7 +122,7 @@ export function PlansPage() {
               Usuń wszystkie plany
             </Button>
           </div>
-          <ul className="grid gap-4 md:grid-cols-3">
+          <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {scenarios.data.map((scenario) => (
               <li key={scenario.capacity}>
                 <PlanCard

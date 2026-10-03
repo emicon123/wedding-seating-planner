@@ -48,9 +48,9 @@ describe('buildPrintTables', () => {
       [2, 'under'],
     ])
     const crowded = withoutViolations(
-      makePlan([{ number: 1, clusters: Array.from({ length: 9 }, (_, i) => placement(i, [i])) }]),
+      makePlan([{ number: 1, clusters: Array.from({ length: 10 }, (_, i) => placement(i, [i])) }]),
     )
-    expect(buildPrintTables(crowded, 8, index).tables[0]?.status).toBe('over')
+    expect(buildPrintTables(crowded, 9, index).tables[0]?.status).toBe('over')
   })
 
   it('keeps the unseated paczki apart', () => {

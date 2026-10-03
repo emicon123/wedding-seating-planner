@@ -27,7 +27,7 @@ const VIOLATION_CODES: Record<Violation['code'], true> = {
   oversized_cluster: true,
 }
 const WARNING_CODES: Record<DataWarning['code'], true> = {
-  cluster_exceeds_8: true,
+  cluster_exceeds_9: true,
   cluster_exceeds_12: true,
   conflicting_link_levels: true,
 }
@@ -81,7 +81,7 @@ describe('Polish labels', () => {
 
   it('names the table in table violations', () => {
     expect(violationLabel(violation('over_capacity'))).toBe('Stół 3 jest przepełniony')
-    expect(violationLabel(violation('under_floor'))).toBe('Stół 3 ma za mało osób (minimum 6)')
+    expect(violationLabel(violation('under_floor'))).toBe('Stół 3 ma za mało osób (minimum 8)')
   })
 
   it.each([
@@ -152,7 +152,7 @@ describe('plan labels', () => {
 
   it('words a fill that breaks a rule, and stays silent when it is fine', () => {
     expect(fillStatusLabel('over', 11, 10)).toBe('Za dużo osób: 11/10')
-    expect(fillStatusLabel('under', 4, 10)).toBe('Za mało osób (minimum 6)')
+    expect(fillStatusLabel('under', 4, 10)).toBe('Za mało osób (minimum 8)')
     expect(fillStatusLabel('ok', 8, 10)).toBeNull()
   })
 

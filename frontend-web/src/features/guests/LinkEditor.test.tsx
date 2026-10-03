@@ -145,11 +145,11 @@ describe('relationships panel', () => {
     await waitFor(() => expect(api.calls).toHaveLength(1))
   })
 
-  it('shows cluster_exceeds_8 and conflicting_link_levels next to the guests involved', async () => {
+  it('shows cluster_exceeds_9 and conflicting_link_levels next to the guests involved', async () => {
     const overview: ClusterOverview = {
       clusters: MACIEK_FAMILY_OVERVIEW.clusters,
       warnings: [
-        { code: 'cluster_exceeds_8', message: 'English', guestIds: [6, 7] },
+        { code: 'cluster_exceeds_9', message: 'English', guestIds: [6, 7] },
         { code: 'conflicting_link_levels', message: 'English', guestIds: [4, 5] },
       ],
     }
@@ -158,7 +158,7 @@ describe('relationships panel', () => {
 
     // page level: a banner, and a flag on the row of every guest involved
     const banner = (await screen.findByText(/Uwagi do danych \(2\)/)).closest('details')!
-    expect(within(banner).getByText(/za duża na stół 8-osobowy/)).toBeInTheDocument()
+    expect(within(banner).getByText(/za duża na stół 9-osobowy/)).toBeInTheDocument()
     expect(within(banner).getByText(/jednocześnie grupą 1 i 2/)).toBeInTheDocument()
     const flagged = screen.getByRole('switch', { name: 'Uwzględniony: Michał' }).closest('li')!
     expect(within(flagged).getByText('Uwaga do danych')).toBeInTheDocument()
@@ -167,13 +167,13 @@ describe('relationships panel', () => {
     const dialog = await openEditor(user, 'Maciek')
     const warnings = await within(dialog).findByRole('list', { name: 'Uwagi do danych' })
     expect(within(warnings).getByText(/jednocześnie grupą 1 i 2/)).toBeInTheDocument()
-    expect(within(warnings).queryByText(/8-osobowy/)).not.toBeInTheDocument()
+    expect(within(warnings).queryByText(/9-osobowy/)).not.toBeInTheDocument()
   })
 
   it("a banner name opens that guest's panel", async () => {
     const overview: ClusterOverview = {
       clusters: MACIEK_FAMILY_OVERVIEW.clusters,
-      warnings: [{ code: 'cluster_exceeds_8', message: 'English', guestIds: [6, 7] }],
+      warnings: [{ code: 'cluster_exceeds_9', message: 'English', guestIds: [6, 7] }],
     }
     serveGuests(FAMILIES, overview)
     const { user } = renderPage(<GuestsPage />, '/goscie')
@@ -377,7 +377,7 @@ describe('group checklist (picker)', () => {
     expect(within(cezary.closest('li')!).getByText(/już w paczce/)).toBeInTheDocument()
   })
 
-  it('group 0: previews the merged cluster and warns (without blocking) above 8', async () => {
+  it('group 0: previews the merged cluster and warns (without blocking) above 9', async () => {
     const big = Array.from({ length: 8 }, (_, i) =>
       makeGuest({
         id: 20 + i,
@@ -398,7 +398,7 @@ describe('group checklist (picker)', () => {
 
     const preview = within(picker).getByRole('region', { name: 'Kto dołączy automatycznie' })
     expect(within(preview).getByText(/Paczka po zapisie: 10 osób/)).toBeInTheDocument()
-    expect(within(preview).getByText(/za duża na stół 8-osobowy/)).toBeInTheDocument()
+    expect(within(preview).getByText(/za duża na stół 9-osobowy/)).toBeInTheDocument()
     expect(within(picker).getByRole('button', { name: 'Zapisz' })).toBeEnabled()
   })
 
@@ -597,13 +597,9 @@ describe('group 1 works on whole clusters', () => {
       within(group1).queryByRole('button', { name: 'Usuń powiązanie: Ola' }),
     ).not.toBeInTheDocument()
 
-    await user.click(
-      within(group1).getByRole('button', { name: 'Usuń rodzinę: Michał, Ola' }),
-    )
+    await user.click(within(group1).getByRole('button', { name: 'Usuń rodzinę: Michał, Ola' }))
 
     await waitFor(() => expect(api.calls).toHaveLength(1))
-    await waitFor(() =>
-      expect(within(block(dialog, 1)).getByText('brak')).toBeInTheDocument(),
-    )
+    await waitFor(() => expect(within(block(dialog, 1)).getByText('brak')).toBeInTheDocument())
   })
 })

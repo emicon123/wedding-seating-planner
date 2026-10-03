@@ -32,7 +32,7 @@ function replaceScenario(queryClient: QueryClient, scenario: Scenario): void {
 /** Lets every "Generuj" button know that one of them is running (`useIsMutating`). */
 export const CALCULATE_MUTATION_KEY = ['calculateProposals'] as const
 
-/** Generates all three proposals (pure server computation) and parks them in the cache. */
+/** Generates all four proposals (pure server computation) and parks them in the cache. */
 export function useCalculateProposals() {
   const queryClient = useQueryClient()
   return useMutation({

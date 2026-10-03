@@ -60,7 +60,7 @@ export function DeletePlanDialog({
       <AlertDialog open onOpenChange={(open) => !open && close()}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Usunąć wszystkie trzy plany?</AlertDialogTitle>
+            <AlertDialogTitle>Usunąć wszystkie cztery plany?</AlertDialogTitle>
             <AlertDialogDescription>
               {scenarios.map((scenario) => (
                 <span key={scenario.capacity} className="block">

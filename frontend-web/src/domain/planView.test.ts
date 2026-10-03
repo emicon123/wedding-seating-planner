@@ -14,10 +14,10 @@ describe('fillStatus', () => {
   it.each([
     [10, 10, 3, 'ok'],
     [11, 10, 3, 'over'],
-    [6, 10, 3, 'ok'],
-    [5, 10, 3, 'under'],
+    [8, 10, 3, 'ok'],
+    [7, 10, 3, 'under'],
     [0, 10, 3, 'under'],
-    [4, 10, 1, 'ok'], // the floor is waived when the plan needs a single table
+    [5, 10, 1, 'ok'], // the floor is waived when the plan needs a single table
   ] as const)('fill %i of %i with %i tables is %s', (fill, capacity, tables, expected) => {
     expect(fillStatus(fill, capacity, tables)).toBe(expected)
   })
@@ -38,7 +38,7 @@ describe('toAcceptTables', () => {
 })
 
 describe('proposals vs. the stored plan', () => {
-  const proposal = (capacity: 8 | 10 | 12, basedOnVersion: number): Proposal => ({
+  const proposal = (capacity: 9 | 10 | 11 | 12, basedOnVersion: number): Proposal => ({
     capacity,
     basedOnVersion,
     plan: makePlan([]),
@@ -52,8 +52,8 @@ describe('proposals vs. the stored plan', () => {
   })
 
   it('removes one proposal and keeps the others', () => {
-    const all = [proposal(8, 1), proposal(10, 1), proposal(12, 1)]
-    expect(withoutProposal(all, 10).map((p) => p.capacity)).toEqual([8, 12])
+    const all = [proposal(9, 1), proposal(10, 1), proposal(11, 1), proposal(12, 1)]
+    expect(withoutProposal(all, 10).map((p) => p.capacity)).toEqual([9, 11, 12])
   })
 })
 

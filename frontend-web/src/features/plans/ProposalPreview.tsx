@@ -15,7 +15,7 @@ type ProposalPreviewProps = {
 }
 
 /**
- * The preview of Generate (state machine §2 "Previewing"): three proposals side by side with the
+ * The preview of Generate (state machine §2 "Previewing"): four proposals side by side with the
  * figures of today's plans. Nothing is stored until a proposal is accepted; each accept is its own
  * version-checked PUT, so a conflict hits only that plan and the others stay accepted.
  */
@@ -97,7 +97,7 @@ export function ProposalPreview({ proposals, scenarios }: ProposalPreviewProps) 
           </Button>
         </div>
       </header>
-      <ul className="grid gap-4 md:grid-cols-3">
+      <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {proposals.map((proposal) => (
           <li key={proposal.capacity}>
             <ProposalCard

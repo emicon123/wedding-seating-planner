@@ -14,7 +14,7 @@ type FillBarsProps = { plan: SeatingPlan; capacity: Capacity }
 /**
  * One bar per table, as tall as the table is full. Rule breaks are drawn, not just coloured:
  * an over-full table gets a hatched, full bar with a "!" above it; an under-floor table a
- * dashed outline. The dashed line across is the floor (6 guests). The numbers are the fills.
+ * dashed outline. The dashed line across is the floor (8 guests). The numbers are the fills.
  */
 export function FillBars({ plan, capacity }: FillBarsProps) {
   const hatchId = useId()

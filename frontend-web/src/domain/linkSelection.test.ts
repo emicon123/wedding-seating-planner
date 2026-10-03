@@ -144,9 +144,9 @@ describe('clusterAfter (group 0 picker preview)', () => {
 
 describe('clusterSizeWarning', () => {
   it.each([
-    [8, null],
-    [9, 'cluster_exceeds_8'],
-    [12, 'cluster_exceeds_8'],
+    [9, null],
+    [10, 'cluster_exceeds_9'],
+    [12, 'cluster_exceeds_9'],
     [13, 'cluster_exceeds_12'],
   ] as const)('%i seats -> %s', (size, code) => {
     expect(clusterSizeWarning(size)).toBe(code)
