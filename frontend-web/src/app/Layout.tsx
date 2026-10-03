@@ -1,5 +1,8 @@
+import { LogOutIcon } from 'lucide-react'
 import { Link, Outlet, useMatch } from 'react-router'
+import { useLogout, useSession } from '@/api/session'
 import { TableGlyph } from '@/components/TableGlyph'
+import { Button } from '@/components/ui/button'
 import { Toaster } from '@/components/ui/sonner'
 import { cn } from '@/lib/utils'
 
@@ -26,6 +29,26 @@ function NavTab({ to, active, children }: NavTabProps) {
   )
 }
 
+/** Shown only when the access gate is on; with the gate off there is nothing to leave. */
+function LogoutButton() {
+  const session = useSession()
+  const logout = useLogout()
+  if (session.data?.status !== 'open' || !session.data.pinRequired) return null
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="text-white/70 hover:bg-white/10 hover:text-white"
+      disabled={logout.isPending}
+      onClick={() => logout.mutate()}
+    >
+      <LogOutIcon aria-hidden="true" />
+      <span className="sr-only sm:not-sr-only">Wyloguj</span>
+    </Button>
+  )
+}
+
 export function Layout() {
   const onRoot = useMatch('/') !== null
   const onPlan = useMatch('/plany/*') !== null
@@ -48,14 +71,17 @@ export function Layout() {
             <TableGlyph seats={8} className="size-9 text-white" />
             <span className="font-display text-xl font-semibold tracking-tight">Stoliki</span>
           </Link>
-          <nav aria-label="Główna nawigacja" className="flex items-center gap-1">
-            <NavTab to="/" active={onRoot || onPlan}>
-              Plany
-            </NavTab>
-            <NavTab to="/goscie" active={onGuests}>
-              Goście
-            </NavTab>
-          </nav>
+          <div className="flex items-center gap-1">
+            <nav aria-label="Główna nawigacja" className="flex items-center gap-1">
+              <NavTab to="/" active={onRoot || onPlan}>
+                Plany
+              </NavTab>
+              <NavTab to="/goscie" active={onGuests}>
+                Goście
+              </NavTab>
+            </nav>
+            <LogoutButton />
+          </div>
         </div>
       </header>
       <main id="tresc" className="mx-auto max-w-7xl px-4 py-8 sm:py-10">

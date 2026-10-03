@@ -82,7 +82,8 @@ describe('GuestsPage: list and counters', () => {
     expect(within(justynka).getByText('os. tow.')).toBeInTheDocument()
   })
 
-  it('shows at most three partner names and "+N" for the rest', async () => {    const family = ['A', 'B', 'C', 'D', 'E'].map((firstName, i) =>
+  it('shows at most three partner names and "+N" for the rest', async () => {
+    const family = ['A', 'B', 'C', 'D', 'E'].map((firstName, i) =>
       makeGuest({
         id: i + 1,
         firstName,

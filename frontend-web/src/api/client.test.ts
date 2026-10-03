@@ -1,6 +1,7 @@
 import { ApiError } from '@/api/errors'
 import { client, unwrap, unwrapEmpty } from '@/api/client'
-import { failure, HttpResponse, mockApi, single } from '@/test/server'
+import { apiUrl, failure, HttpResponse, mockApi, server, single } from '@/test/server'
+import { http } from 'msw'
 import { MACIEK } from '@/test/builders'
 
 async function guestsRequest() {
@@ -86,5 +87,37 @@ describe('API client', () => {
 
   it('keeps single() envelopes honest (sanity of the test helper)', () => {
     expect(single(1)).toEqual({ data: 1, meta: { requestId: '01JB8Z6Q0K3N' } })
+  })
+
+  it('sends the CSRF header on every request, reads and writes alike', async () => {
+    const seen: (string | null)[] = []
+    server.use(
+      http.get(apiUrl('/guests'), ({ request }) => {
+        seen.push(request.headers.get('X-Stoliki-Request'))
+        return HttpResponse.json({ data: [], meta: { requestId: 'r' }, page: { total: 0 } })
+      }),
+      http.delete(apiUrl('/guests/4'), ({ request }) => {
+        seen.push(request.headers.get('X-Stoliki-Request'))
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    await guestsRequest()
+    await unwrapEmpty(client.DELETE('/guests/{guestId}', { params: { path: { guestId: 4 } } }))
+
+    expect(seen).toEqual(['1', '1'])
+  })
+
+  it('carries Retry-After of a 429 on the ApiError', async () => {
+    mockApi('get', '/guests', () =>
+      HttpResponse.json(failure('too_many_attempts'), {
+        status: 429,
+        headers: { 'Retry-After': '45' },
+      }),
+    )
+
+    const error = await guestsRequest().catch((e: unknown) => e)
+
+    expect(error).toMatchObject({ status: 429, retryAfterSeconds: 45 })
   })
 })

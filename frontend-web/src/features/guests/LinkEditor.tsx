@@ -68,7 +68,9 @@ export function LinkEditor({ guestId, guests, overview, onClose, onShowInList }:
 
   /** One click removes the whole family: every direct link of this guest to its members. */
   async function removeFamily(family: Family) {
-    const directIds = family.members.filter((member) => member.direct).map((member) => member.guestId)
+    const directIds = family.members
+      .filter((member) => member.direct)
+      .map((member) => member.guestId)
     if (directIds.length === 0) return
     const failed = await apply.mutateAsync({
       guestId: currentId,

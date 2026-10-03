@@ -266,10 +266,7 @@ export function LinkPicker({
   const joiningVia = useMemo(() => {
     if (level === 0 || !overview) return new Map<number, number>()
     return new Map(
-      joiningViaCluster(guest.id, selected, overview).map(({ guestId, viaId }) => [
-        guestId,
-        viaId,
-      ]),
+      joiningViaCluster(guest.id, selected, overview).map(({ guestId, viaId }) => [guestId, viaId]),
     )
   }, [level, guest.id, selected, overview])
 
@@ -378,10 +375,7 @@ export function LinkPicker({
             {visible.map((row) => {
               const ticked = selected.has(row.guest.id)
               const reached0 =
-                level === 0 &&
-                row.viaCluster &&
-                !ticked &&
-                clusterIds?.has(row.guest.id) === true
+                level === 0 && row.viaCluster && !ticked && clusterIds?.has(row.guest.id) === true
               const via12 = level === 0 ? undefined : joiningVia.get(row.guest.id)
               const reached = reached0 || (level !== 0 && via12 !== undefined && !ticked)
               return (

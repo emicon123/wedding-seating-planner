@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query'
 // One key per resource (003-frontend-design §2). Hooks and invalidation rules are the only
 // consumers, so a key is spelled in exactly one place.
 export const keys = {
+  session: ['session'],
   guests: ['guests'],
   clusters: ['clusters'],
   scenarios: ['scenarios'],

@@ -300,6 +300,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Am I logged in? (gate state for the SPA shell)
+         * @description Behind the gate like every protected operation: with no valid cookie the gate answers 401
+         *     before the handler runs. With the gate off it always answers 200 with `pinRequired: false`.
+         *     The SPA calls it once at start to decide whether to show "Wyloguj".
+         */
+        get: operations["getSession"];
+        put?: never;
+        /**
+         * Log in with the shared PIN
+         * @description Public (no cookie needed). Correct PIN → 200 and `Set-Cookie: stoliki_session=…; Path=/wesele;
+         *     HttpOnly; SameSite=Lax; Max-Age=2592000` (+ `Secure` when the request came over HTTPS).
+         *     Wrong PIN → 401 `invalid_pin`. Throttled → 429 `too_many_attempts` without evaluating the PIN.
+         *     Requires the CSRF header like every state-changing request. Gate off → 200 with
+         *     `pinRequired: false`, no cookie, the body is ignored.
+         */
+        post: operations["createSession"];
+        /**
+         * Log out ("Wyloguj")
+         * @description Public and idempotent: always clears the cookie (`Set-Cookie: stoliki_session=; Path=/wesele;
+         *     Max-Age=0`), valid session or not. Stateless sessions: this logs out this browser only;
+         *     logging out every device = change `STOLIKI_PIN` (or delete the session key file) and restart.
+         */
+        delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -307,7 +343,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Liveness check (DB reachable) */
+        /**
+         * Liveness check (DB reachable)
+         * @description Always public (compose healthcheck), also while the access gate is on.
+         */
         get: operations["getHealth"];
         put?: never;
         post?: never;
@@ -395,7 +434,7 @@ export interface components {
             page: components["schemas"]["Page"];
         };
         /** @enum {string} */
-        ErrorCode: "bad_request" | "validation_failed" | "duplicate_name" | "not_found" | "version_conflict" | "import_invalid" | "payload_too_large" | "internal_error";
+        ErrorCode: "bad_request" | "validation_failed" | "duplicate_name" | "not_found" | "version_conflict" | "import_invalid" | "payload_too_large" | "internal_error" | "unauthenticated" | "invalid_pin" | "too_many_attempts" | "csrf_header_missing";
         ErrorItem: {
             code: components["schemas"]["ErrorCode"];
             /**
@@ -785,6 +824,29 @@ export interface components {
             data: components["schemas"]["Scenario"];
             meta: components["schemas"]["Meta"];
         };
+        /**
+         * @description The caller's own session. `pinRequired` says whether the access gate is on (the SPA shows
+         *     "Wyloguj" only then). `expiresAt` is when the current cookie stops working (sliding: renewed
+         *     on use); null when the gate is off.
+         */
+        Session: {
+            /** @example true */
+            readonly pinRequired: boolean;
+            /**
+             * Format: date-time
+             * @example 2026-11-02T10:00:00Z
+             */
+            readonly expiresAt: string | null;
+        };
+        SessionResponse: {
+            data: components["schemas"]["Session"];
+            meta: components["schemas"]["Meta"];
+        };
+        /** @description The shared PIN, as typed. Any length/charset is accepted by the contract; the server compares in constant time. */
+        SessionCreate: {
+            /** @example <PIN> */
+            pin: string;
+        };
         HealthStatus: {
             /**
              * @example ok
@@ -821,6 +883,33 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /**
+         * @description The access gate is on (`STOLIKI_PIN` configured) and the request carries no valid session cookie
+         *     (missing, expired, tampered, or signed with an old key). The SPA shows the PIN screen.
+         *     Never returned while the gate is off.
+         */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "errors": [
+                 *         {
+                 *           "code": "unauthenticated",
+                 *           "field": null,
+                 *           "message": "PIN required."
+                 *         }
+                 *       ],
+                 *       "meta": {
+                 *         "requestId": "01JB8Z6Q0K3N"
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Unexpected server error. */
         InternalError: {
             headers: {
@@ -834,6 +923,32 @@ export interface components {
                  *           "code": "internal_error",
                  *           "field": null,
                  *           "message": "Unexpected error; see server logs (request 01JB8Z6Q0K3N)."
+                 *         }
+                 *       ],
+                 *       "meta": {
+                 *         "requestId": "01JB8Z6Q0K3N"
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /**
+         * @description CSRF guard (gate on only): a state-changing request (POST, PUT, PATCH, DELETE) without the header
+         *     `X-Stoliki-Request: 1`. The SPA's API client always sends it; cross-site forms cannot.
+         */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "errors": [
+                 *         {
+                 *           "code": "csrf_header_missing",
+                 *           "field": null,
+                 *           "message": "Missing X-Stoliki-Request header."
                  *         }
                  *       ],
                  *       "meta": {
@@ -936,6 +1051,64 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /**
+         * @description The PIN is wrong. The response is the same for every wrong value (no hint about length,
+         *     digits or remaining attempts). Counts towards the attempt throttle.
+         */
+        InvalidPin: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "errors": [
+                 *         {
+                 *           "code": "invalid_pin",
+                 *           "field": "pin",
+                 *           "message": "Wrong PIN."
+                 *         }
+                 *       ],
+                 *       "meta": {
+                 *         "requestId": "01JB8Z6Q0K3N"
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /**
+         * @description Attempt throttle engaged (this client, or all clients together). The submitted PIN was **not**
+         *     evaluated, so the response is identical whether it was right or wrong. Retry after the
+         *     number of seconds in `Retry-After`.
+         */
+        TooManyAttempts: {
+            headers: {
+                /**
+                 * @description Seconds until the next attempt is accepted.
+                 * @example 60
+                 */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "errors": [
+                 *         {
+                 *           "code": "too_many_attempts",
+                 *           "field": null,
+                 *           "message": "Too many attempts; try again later."
+                 *         }
+                 *       ],
+                 *       "meta": {
+                 *         "requestId": "01JB8Z6Q0K3N"
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /**
@@ -991,6 +1164,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1023,6 +1197,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
         };
@@ -1060,6 +1236,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1086,6 +1264,8 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1125,6 +1305,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["UnprocessableEntity"];
@@ -1181,6 +1363,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
@@ -1210,6 +1394,8 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1290,6 +1476,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1356,6 +1543,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
@@ -1429,6 +1618,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1606,6 +1796,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /**
              * @description At least one plan was changed after the client read it (move, pin, table added or
              *     removed, plan deleted, another Generate). Nothing was written. For "Cofnij" it means the
@@ -1739,6 +1931,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1782,6 +1976,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
@@ -1817,6 +2013,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1846,6 +2044,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1878,6 +2078,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1912,7 +2114,107 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session is valid (or the gate is off). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "pin": "<PIN>"
+                 *     }
+                 */
+                "application/json": components["schemas"]["SessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Logged in; the session cookie is set. */
+            200: {
+                headers: {
+                    /**
+                     * @description The signed session cookie (see docs/architecture/05-access-gate.md § Session cookie).
+                     * @example stoliki_session=<token>; Path=/wesele; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax
+                     */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": {
+                     *         "pinRequired": true,
+                     *         "expiresAt": "2026-11-02T10:00:00Z"
+                     *       },
+                     *       "meta": {
+                     *         "requestId": "01JB8Z6Q0K3N"
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["InvalidPin"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["UnprocessableEntity"];
+            429: components["responses"]["TooManyAttempts"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cookie cleared. */
+            204: {
+                headers: {
+                    /**
+                     * @description Expires the session cookie.
+                     * @example stoliki_session=; Path=/wesele; Max-Age=0; HttpOnly; SameSite=Lax
+                     */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };

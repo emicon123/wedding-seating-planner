@@ -73,6 +73,10 @@ export function errorLabel(error: ErrorItem): string {
     import_invalid: 'Plik zawiera błędy. Popraw go i wybierz ponownie.',
     payload_too_large: 'Plik jest za duży.',
     internal_error: 'Coś poszło nie tak po stronie serwera. Spróbuj ponownie za chwilę.',
+    unauthenticated: 'Podaj PIN',
+    invalid_pin: 'Zły PIN',
+    too_many_attempts: 'Za dużo prób — spróbuj za chwilę',
+    csrf_header_missing: 'Nie udało się wysłać tego żądania. Odśwież stronę i spróbuj ponownie.',
   }
   return labels[error.code]
 }
@@ -181,3 +185,10 @@ export const UNDO_REFUSED_MESSAGE = 'Nie można cofnąć — plany zmieniono po 
 /** A satisfaction score the way the server computed it: 301 or 318,5 (never rounded further). */
 export const scoreLabel = (score: number) =>
   score.toLocaleString('pl-PL', { maximumFractionDigits: 1 })
+
+/** "30 s", "5 min", "2 godz." — the wait shown under the PIN field, rounded up so it never lies short. */
+export function waitLabel(seconds: number): string {
+  if (seconds < 60) return `${seconds} s`
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`
+  return `${Math.ceil(seconds / 3600)} godz.`
+}

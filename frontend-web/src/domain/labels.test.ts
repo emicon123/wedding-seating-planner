@@ -40,6 +40,10 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   import_invalid: true,
   payload_too_large: true,
   internal_error: true,
+  unauthenticated: true,
+  invalid_pin: true,
+  too_many_attempts: true,
+  csrf_header_missing: true,
 }
 
 const violation = (code: Violation['code'], overrides: Partial<Violation> = {}): Violation => ({

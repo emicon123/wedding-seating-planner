@@ -4,19 +4,21 @@ import { serveGuests } from '@/features/guests/fixtures'
 import { serveScenarios, fourScenarios } from '@/features/plans/fixtures'
 import type { Scenario } from '@/domain/types'
 import { renderPage } from '@/test/renderPage'
+import { serveOpenSession } from '@/test/session'
 
 // The Guests tab loads data, so every test serves an (empty) guest list.
 // Scenarios are served before the first render, so a cached lazy route cannot fetch too early.
 function renderAt(path: string, scenarios: Scenario[] = []) {
+  serveOpenSession()
   serveGuests([])
   serveScenarios(scenarios)
   return renderPage(<App />, path)
 }
 
 describe('App shell under /wesele', () => {
-  it('renders the Plans tab at the root', () => {
+  it('renders the Plans tab at the root', async () => {
     renderAt('/')
-    expect(screen.getByRole('heading', { level: 1, name: 'Plany' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Plany' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Plany' })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -37,9 +39,9 @@ describe('App shell under /wesele', () => {
 
   it.each(['/nie-ma-takiej-strony', '/plany/7', '/plany/abc', '/druk/13'])(
     'redirects unknown route %s to Plans',
-    (path) => {
+    async (path) => {
       renderAt(path)
-      expect(screen.getByRole('heading', { level: 1, name: 'Plany' })).toBeInTheDocument()
+      expect(await screen.findByRole('heading', { level: 1, name: 'Plany' })).toBeInTheDocument()
     },
   )
 

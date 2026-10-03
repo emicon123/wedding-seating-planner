@@ -25,9 +25,8 @@ export function sortByCluster(guests: Guest[], overview: ClusterOverview | undef
   const firstOf = new Map<number, string>()
   for (const cluster of overview.clusters) {
     const first =
-      cluster.guestIds
-        .map((id) => names.get(id) ?? '')
-        .sort((a, b) => polish.compare(a, b))[0] ?? ''
+      cluster.guestIds.map((id) => names.get(id) ?? '').sort((a, b) => polish.compare(a, b))[0] ??
+      ''
     for (const id of cluster.guestIds) firstOf.set(id, first)
   }
   return [...guests].sort(
