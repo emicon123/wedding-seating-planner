@@ -83,14 +83,18 @@ func (e DataWarningCode) Valid() bool {
 
 // Defines values for ErrorCode.
 const (
-	ErrorCodeBadRequest       ErrorCode = "bad_request"
-	ErrorCodeDuplicateName    ErrorCode = "duplicate_name"
-	ErrorCodeImportInvalid    ErrorCode = "import_invalid"
-	ErrorCodeInternalError    ErrorCode = "internal_error"
-	ErrorCodeNotFound         ErrorCode = "not_found"
-	ErrorCodePayloadTooLarge  ErrorCode = "payload_too_large"
-	ErrorCodeValidationFailed ErrorCode = "validation_failed"
-	ErrorCodeVersionConflict  ErrorCode = "version_conflict"
+	ErrorCodeBadRequest        ErrorCode = "bad_request"
+	ErrorCodeCsrfHeaderMissing ErrorCode = "csrf_header_missing"
+	ErrorCodeDuplicateName     ErrorCode = "duplicate_name"
+	ErrorCodeImportInvalid     ErrorCode = "import_invalid"
+	ErrorCodeInternalError     ErrorCode = "internal_error"
+	ErrorCodeInvalidPin        ErrorCode = "invalid_pin"
+	ErrorCodeNotFound          ErrorCode = "not_found"
+	ErrorCodePayloadTooLarge   ErrorCode = "payload_too_large"
+	ErrorCodeTooManyAttempts   ErrorCode = "too_many_attempts"
+	ErrorCodeUnauthenticated   ErrorCode = "unauthenticated"
+	ErrorCodeValidationFailed  ErrorCode = "validation_failed"
+	ErrorCodeVersionConflict   ErrorCode = "version_conflict"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
@@ -98,15 +102,23 @@ func (e ErrorCode) Valid() bool {
 	switch e {
 	case ErrorCodeBadRequest:
 		return true
+	case ErrorCodeCsrfHeaderMissing:
+		return true
 	case ErrorCodeDuplicateName:
 		return true
 	case ErrorCodeImportInvalid:
 		return true
 	case ErrorCodeInternalError:
 		return true
+	case ErrorCodeInvalidPin:
+		return true
 	case ErrorCodeNotFound:
 		return true
 	case ErrorCodePayloadTooLarge:
+		return true
+	case ErrorCodeTooManyAttempts:
+		return true
+	case ErrorCodeUnauthenticated:
 		return true
 	case ErrorCodeValidationFailed:
 		return true
@@ -629,6 +641,30 @@ type SeatingPlan struct {
 	Violations []Violation        `json:"violations"`
 }
 
+// Session The caller's own session. `pinRequired` says whether the access gate is on (the SPA shows
+// "Wyloguj" only then). `expiresAt` is when the current cookie stops working (sliding: renewed
+// on use); null when the gate is off.
+type Session struct {
+	ExpiresAt   nullable.Nullable[time.Time] `json:"expiresAt,omitempty"`
+	PinRequired *bool                        `json:"pinRequired,omitempty"`
+}
+
+// SessionCreate The shared PIN, as typed. Any length/charset is accepted by the contract; the server compares in constant time.
+type SessionCreate struct {
+	Pin *string `json:"pin,omitempty"`
+}
+
+// SessionResponse defines model for SessionResponse.
+type SessionResponse struct {
+	// Data The caller's own session. `pinRequired` says whether the access gate is on (the SPA shows
+	// "Wyloguj" only then). `expiresAt` is when the current cookie stops working (sliding: renewed
+	// on use); null when the gate is off.
+	Data Session `json:"data"`
+
+	// Meta Response metadata.
+	Meta Meta `json:"meta"`
+}
+
 // TableLayout One table of a plan to store. Mapped 1:1 from a `PlanTable` (its clusters' `guestIds`, and those of its `pinned` clusters).
 type TableLayout struct {
 	// GuestIds Guests at this table (enabled ones; disabled cluster members are added by the server). May be empty.
@@ -668,14 +704,26 @@ type BadRequest = ErrorResponse
 // Conflict defines model for Conflict.
 type Conflict = ErrorResponse
 
+// Forbidden defines model for Forbidden.
+type Forbidden = ErrorResponse
+
 // InternalError defines model for InternalError.
 type InternalError = ErrorResponse
+
+// InvalidPin defines model for InvalidPin.
+type InvalidPin = ErrorResponse
 
 // NotFound defines model for NotFound.
 type NotFound = ErrorResponse
 
 // PayloadTooLarge defines model for PayloadTooLarge.
 type PayloadTooLarge = ErrorResponse
+
+// TooManyAttempts defines model for TooManyAttempts.
+type TooManyAttempts = ErrorResponse
+
+// Unauthorized defines model for Unauthorized.
+type Unauthorized = ErrorResponse
 
 // UnprocessableEntity defines model for UnprocessableEntity.
 type UnprocessableEntity = ErrorResponse
@@ -704,6 +752,9 @@ type ReplaceScenariosJSONRequestBody = ScenariosReplace
 
 // SetAssignmentJSONRequestBody defines body for SetAssignment for application/json ContentType.
 type SetAssignmentJSONRequestBody = AssignmentSet
+
+// CreateSessionJSONRequestBody defines body for CreateSession for application/json ContentType.
+type CreateSessionJSONRequestBody = SessionCreate
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -761,6 +812,15 @@ type ServerInterface interface {
 	// DeleteTable Remove a table from a plan (UC-13)
 	// (DELETE /scenarios/{capacity}/tables/{tableNumber})
 	DeleteTable(w http.ResponseWriter, r *http.Request, capacity Capacity, tableNumber TableNumber)
+	// DeleteSession Log out ("Wyloguj")
+	// (DELETE /session)
+	DeleteSession(w http.ResponseWriter, r *http.Request)
+	// GetSession Am I logged in? (gate state for the SPA shell)
+	// (GET /session)
+	GetSession(w http.ResponseWriter, r *http.Request)
+	// CreateSession Log in with the shared PIN
+	// (POST /session)
+	CreateSession(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -872,6 +932,24 @@ func (_ Unimplemented) AddTable(w http.ResponseWriter, r *http.Request, capacity
 // DeleteTable Remove a table from a plan (UC-13)
 // (DELETE /scenarios/{capacity}/tables/{tableNumber})
 func (_ Unimplemented) DeleteTable(w http.ResponseWriter, r *http.Request, capacity Capacity, tableNumber TableNumber) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteSession Log out ("Wyloguj")
+// (DELETE /session)
+func (_ Unimplemented) DeleteSession(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetSession Am I logged in? (gate state for the SPA shell)
+// (GET /session)
+func (_ Unimplemented) GetSession(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreateSession Log in with the shared PIN
+// (POST /session)
+func (_ Unimplemented) CreateSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1290,6 +1368,48 @@ func (siw *ServerInterfaceWrapper) DeleteTable(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteSession operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSession operation middleware
+func (siw *ServerInterfaceWrapper) GetSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSession operation middleware
+func (siw *ServerInterfaceWrapper) CreateSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1455,6 +1575,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Delete(options.BaseURL+"/scenarios/{capacity}/tables/{tableNumber}", wrapper.DeleteTable)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/session", wrapper.DeleteSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/session", wrapper.GetSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/session", wrapper.CreateSession)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/health", wrapper.GetHealth)
 	})
 
@@ -1465,11 +1594,26 @@ type BadRequestJSONResponse ErrorResponse
 
 type ConflictJSONResponse ErrorResponse
 
+type ForbiddenJSONResponse ErrorResponse
+
 type InternalErrorJSONResponse ErrorResponse
+
+type InvalidPinJSONResponse ErrorResponse
 
 type NotFoundJSONResponse ErrorResponse
 
 type PayloadTooLargeJSONResponse ErrorResponse
+
+type TooManyAttemptsResponseHeaders struct {
+	RetryAfter *int
+}
+type TooManyAttemptsJSONResponse struct {
+	Body ErrorResponse
+
+	Headers TooManyAttemptsResponseHeaders
+}
+
+type UnauthorizedJSONResponse ErrorResponse
 
 type UnprocessableEntityJSONResponse ErrorResponse
 
@@ -1504,6 +1648,20 @@ func (response GetClusterOverview400JSONResponse) VisitGetClusterOverviewRespons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetClusterOverview401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetClusterOverview401JSONResponse) VisitGetClusterOverviewResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1555,6 +1713,34 @@ func (response ImportGuests400JSONResponse) VisitImportGuestsResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportGuests401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ImportGuests401JSONResponse) VisitImportGuestsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportGuests403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ImportGuests403JSONResponse) VisitImportGuestsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1633,6 +1819,34 @@ func (response DeleteGuestLink400JSONResponse) VisitDeleteGuestLinkResponse(w ht
 	return err
 }
 
+type DeleteGuestLink401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteGuestLink401JSONResponse) VisitDeleteGuestLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteGuestLink403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteGuestLink403JSONResponse) VisitDeleteGuestLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DeleteGuestLink404JSONResponse struct{ NotFoundJSONResponse }
 
 func (response DeleteGuestLink404JSONResponse) VisitDeleteGuestLinkResponse(w http.ResponseWriter) error {
@@ -1694,6 +1908,34 @@ func (response UpsertGuestLink400JSONResponse) VisitUpsertGuestLinkResponse(w ht
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpsertGuestLink401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpsertGuestLink401JSONResponse) VisitUpsertGuestLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpsertGuestLink403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpsertGuestLink403JSONResponse) VisitUpsertGuestLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1777,6 +2019,20 @@ func (response ListGuests400JSONResponse) VisitListGuestsResponse(w http.Respons
 	return err
 }
 
+type ListGuests401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListGuests401JSONResponse) VisitListGuestsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListGuests500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response ListGuests500JSONResponse) VisitListGuestsResponse(w http.ResponseWriter) error {
@@ -1823,6 +2079,34 @@ func (response ToggleGuests400JSONResponse) VisitToggleGuestsResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ToggleGuests401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ToggleGuests401JSONResponse) VisitToggleGuestsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ToggleGuests403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ToggleGuests403JSONResponse) VisitToggleGuestsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1891,6 +2175,34 @@ func (response CreateGuest400JSONResponse) VisitCreateGuestResponse(w http.Respo
 	return err
 }
 
+type CreateGuest401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateGuest401JSONResponse) VisitCreateGuestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGuest403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateGuest403JSONResponse) VisitCreateGuestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateGuest422JSONResponse struct {
 	UnprocessableEntityJSONResponse
 }
@@ -1935,6 +2247,34 @@ type DeleteGuest204Response struct {
 func (response DeleteGuest204Response) VisitDeleteGuestResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
+}
+
+type DeleteGuest401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteGuest401JSONResponse) VisitDeleteGuestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteGuest403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteGuest403JSONResponse) VisitDeleteGuestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 type DeleteGuest404JSONResponse struct{ NotFoundJSONResponse }
@@ -1998,6 +2338,34 @@ func (response UpdateGuest400JSONResponse) VisitUpdateGuestResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateGuest401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateGuest401JSONResponse) VisitUpdateGuestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateGuest403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateGuest403JSONResponse) VisitUpdateGuestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2144,6 +2512,20 @@ func (response ListScenarios400JSONResponse) VisitListScenariosResponse(w http.R
 	return err
 }
 
+type ListScenarios401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListScenarios401JSONResponse) VisitListScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListScenarios500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response ListScenarios500JSONResponse) VisitListScenariosResponse(w http.ResponseWriter) error {
@@ -2190,6 +2572,34 @@ func (response ReplaceScenarios400JSONResponse) VisitReplaceScenariosResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ReplaceScenarios401JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ReplaceScenarios403JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2285,6 +2695,34 @@ func (response CalculateProposals400JSONResponse) VisitCalculateProposalsRespons
 	return err
 }
 
+type CalculateProposals401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CalculateProposals401JSONResponse) VisitCalculateProposalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CalculateProposals403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CalculateProposals403JSONResponse) VisitCalculateProposalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CalculateProposals500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response CalculateProposals500JSONResponse) VisitCalculateProposalsResponse(w http.ResponseWriter) error {
@@ -2332,6 +2770,34 @@ func (response DeleteAssignment400JSONResponse) VisitDeleteAssignmentResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAssignment401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteAssignment401JSONResponse) VisitDeleteAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAssignment403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteAssignment403JSONResponse) VisitDeleteAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2398,6 +2864,34 @@ func (response SetAssignment400JSONResponse) VisitSetAssignmentResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetAssignment401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetAssignment401JSONResponse) VisitSetAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetAssignment403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetAssignment403JSONResponse) VisitSetAssignmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2482,6 +2976,34 @@ func (response ResetPlan400JSONResponse) VisitResetPlanResponse(w http.ResponseW
 	return err
 }
 
+type ResetPlan401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ResetPlan401JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetPlan403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ResetPlan403JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ResetPlan404JSONResponse struct{ NotFoundJSONResponse }
 
 func (response ResetPlan404JSONResponse) VisitResetPlanResponse(w http.ResponseWriter) error {
@@ -2542,6 +3064,34 @@ func (response AddTable400JSONResponse) VisitAddTableResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddTable401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AddTable401JSONResponse) VisitAddTableResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddTable403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AddTable403JSONResponse) VisitAddTableResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2611,6 +3161,34 @@ func (response DeleteTable400JSONResponse) VisitDeleteTableResponse(w http.Respo
 	return err
 }
 
+type DeleteTable401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteTable401JSONResponse) VisitDeleteTableResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTable403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteTable403JSONResponse) VisitDeleteTableResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DeleteTable404JSONResponse struct{ NotFoundJSONResponse }
 
 func (response DeleteTable404JSONResponse) VisitDeleteTableResponse(w http.ResponseWriter) error {
@@ -2628,6 +3206,227 @@ func (response DeleteTable404JSONResponse) VisitDeleteTableResponse(w http.Respo
 type DeleteTable500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response DeleteTable500JSONResponse) VisitDeleteTableResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSessionRequestObject struct {
+}
+
+type DeleteSessionResponseObject interface {
+	VisitDeleteSessionResponse(w http.ResponseWriter) error
+}
+
+type DeleteSession204ResponseHeaders struct {
+	SetCookie *string
+}
+
+type DeleteSession204Response struct {
+	Headers DeleteSession204ResponseHeaders
+}
+
+func (response DeleteSession204Response) VisitDeleteSessionResponse(w http.ResponseWriter) error {
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSession403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteSession403JSONResponse) VisitDeleteSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSession500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteSession500JSONResponse) VisitDeleteSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSessionRequestObject struct {
+}
+
+type GetSessionResponseObject interface {
+	VisitGetSessionResponse(w http.ResponseWriter) error
+}
+
+type GetSession200JSONResponse SessionResponse
+
+func (response GetSession200JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSession401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSession401JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSession500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetSession500JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSessionRequestObject struct {
+	Body *CreateSessionJSONRequestBody
+}
+
+type CreateSessionResponseObject interface {
+	VisitCreateSessionResponse(w http.ResponseWriter) error
+}
+
+type CreateSession200ResponseHeaders struct {
+	SetCookie *string
+}
+
+type CreateSession200JSONResponse struct {
+	Body    SessionResponse
+	Headers CreateSession200ResponseHeaders
+}
+
+func (response CreateSession200JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateSession400JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession401JSONResponse struct{ InvalidPinJSONResponse }
+
+func (response CreateSession401JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateSession403JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession422JSONResponse struct {
+	UnprocessableEntityJSONResponse
+}
+
+func (response CreateSession422JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response CreateSession429JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateSession500JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -2695,6 +3494,15 @@ type StrictServerInterface interface {
 	// DeleteTable Remove a table from a plan (UC-13)
 	// (DELETE /scenarios/{capacity}/tables/{tableNumber})
 	DeleteTable(ctx context.Context, request DeleteTableRequestObject) (DeleteTableResponseObject, error)
+	// DeleteSession Log out ("Wyloguj")
+	// (DELETE /session)
+	DeleteSession(ctx context.Context, request DeleteSessionRequestObject) (DeleteSessionResponseObject, error)
+	// GetSession Am I logged in? (gate state for the SPA shell)
+	// (GET /session)
+	GetSession(ctx context.Context, request GetSessionRequestObject) (GetSessionResponseObject, error)
+	// CreateSession Log in with the shared PIN
+	// (POST /session)
+	CreateSession(ctx context.Context, request CreateSessionRequestObject) (CreateSessionResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3228,6 +4036,85 @@ func (sh *strictHandler) DeleteTable(w http.ResponseWriter, r *http.Request, cap
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DeleteTableResponseObject); ok {
 		if err := validResponse.VisitDeleteTableResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSession operation middleware
+func (sh *strictHandler) DeleteSession(w http.ResponseWriter, r *http.Request) {
+	var request DeleteSessionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSession(ctx, request.(DeleteSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSessionResponseObject); ok {
+		if err := validResponse.VisitDeleteSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSession operation middleware
+func (sh *strictHandler) GetSession(w http.ResponseWriter, r *http.Request) {
+	var request GetSessionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSession(ctx, request.(GetSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSessionResponseObject); ok {
+		if err := validResponse.VisitGetSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSession operation middleware
+func (sh *strictHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
+	var request CreateSessionRequestObject
+
+	var body CreateSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSession(ctx, request.(CreateSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSessionResponseObject); ok {
+		if err := validResponse.VisitCreateSessionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

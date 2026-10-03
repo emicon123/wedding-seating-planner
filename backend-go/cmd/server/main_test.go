@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -49,8 +50,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if got != want {
 		t.Errorf("defaults = %+v, want %+v", got, want)
 	}
-	got = loadConfig(envMap(map[string]string{"BASE_PATH": "/x", "PORT": "9", "DB_PATH": "d", "WEB_ROOT": "w"}))
-	if want := (config{BasePath: "/x", Port: "9", DBPath: "d", WebRoot: "w"}); got != want {
+	got = loadConfig(envMap(map[string]string{"BASE_PATH": "/x", "PORT": "9", "DB_PATH": "d", "WEB_ROOT": "w", "STOLIKI_PIN": "test-pin-7391"}))
+	if want := (config{BasePath: "/x", Port: "9", DBPath: "d", WebRoot: "w", PIN: "test-pin-7391"}); got != want {
 		t.Errorf("from env = %+v, want %+v", got, want)
 	}
 }
@@ -150,6 +151,113 @@ func TestServeEndToEnd(t *testing.T) {
 	case err := <-done:
 		if err != nil {
 			t.Errorf("serve returned %v after shutdown, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("server did not shut down")
+	}
+}
+
+// STOLIKI_PIN empty = gate off with exactly one WARN; set = gate on and session.key next to the DB.
+func TestNewGate(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(prev)
+
+	dir := t.TempDir()
+	gate, err := newGate(config{DBPath: filepath.Join(dir, "stoliki.db"), BasePath: "/wesele"})
+	if err != nil || gate != nil {
+		t.Fatalf("gate off: gate=%v err=%v", gate, err)
+	}
+	if n := strings.Count(logs.String(), "access gate off"); n != 1 {
+		t.Errorf("WARN lines = %d, want 1: %s", n, logs.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "session.key")); err == nil {
+		t.Error("session.key created with the gate off")
+	}
+
+	gate, err = newGate(config{DBPath: filepath.Join(dir, "stoliki.db"), BasePath: "/wesele", PIN: "test-pin-7391"})
+	if err != nil || gate == nil {
+		t.Fatalf("gate on: gate=%v err=%v", gate, err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "session.key"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("session.key: %v %v", info, err)
+	}
+	if strings.Contains(logs.String(), "test-pin-7391") {
+		t.Error("PIN in the logs")
+	}
+}
+
+// With STOLIKI_PIN set the real binary path answers 401 to data requests, keeps health and the
+// SPA open and logs in with the right PIN.
+func TestServeWithPIN(t *testing.T) {
+	dir := t.TempDir()
+	webRoot := filepath.Join(dir, "web")
+	if err := os.Mkdir(webRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte("<title>spa</title>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	port := freePort(t)
+	env := envMap(map[string]string{
+		"PORT": port, "BASE_PATH": "/wesele", "WEB_ROOT": webRoot, "DB_PATH": filepath.Join(dir, "stoliki.db"),
+		"STOLIKI_PIN": "test-pin-7391",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, nil, env, io.Discard) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for run(context.Background(), []string{"healthcheck"}, env, io.Discard) != nil { // health is open
+		select {
+		case err := <-done:
+			t.Fatalf("server exited early: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("server never became healthy")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	base := "http://127.0.0.1:" + port + "/wesele"
+	get := func(path string) int {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := get("/api/guests"); got != http.StatusUnauthorized {
+		t.Errorf("guests without cookie = %d, want 401", got)
+	}
+	if got := get("/plany/10"); got != http.StatusOK {
+		t.Errorf("SPA = %d, want 200", got)
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/session", strings.NewReader(`{"pin":"test-pin-7391"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Stoliki-Request", "1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(resp.Cookies()) != 1 {
+		t.Errorf("login = %d, cookies %v", resp.StatusCode, resp.Cookies())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "session.key")); err != nil {
+		t.Errorf("session.key: %v", err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("serve returned %v after shutdown", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("server did not shut down")

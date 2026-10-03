@@ -69,7 +69,7 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) oapi.ErrorRespons
 
 func TestRouterUnderBasePath(t *testing.T) {
 	root := newWebRoot(t)
-	h := NewRouter("/wesele", root, NewServer(healthyDB, nil, nil))
+	h := NewRouter("/wesele", root, NewServer(healthyDB, nil, nil, nil), nil)
 
 	t.Run("health returns the ok envelope", func(t *testing.T) {
 		rec := do(h, http.MethodGet, "/wesele/api/health", "")
@@ -94,7 +94,7 @@ func TestRouterUnderBasePath(t *testing.T) {
 	t.Run("health reports a failing database as 500 without leaking the cause", func(t *testing.T) {
 		down := NewRouter("/wesele", root, NewServer(pingFunc(func(context.Context) error {
 			return errors.New("secret dsn /data/stoliki.db")
-		}), nil, nil))
+		}), nil, nil, nil), nil)
 		rec := do(down, http.MethodGet, "/wesele/api/health", "")
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, want 500", rec.Code)
@@ -214,7 +214,7 @@ func TestRouterUnderBasePath(t *testing.T) {
 }
 
 func TestRouterWithoutBasePath(t *testing.T) {
-	h := NewRouter("", newWebRoot(t), NewServer(healthyDB, nil, nil))
+	h := NewRouter("", newWebRoot(t), NewServer(healthyDB, nil, nil, nil), nil)
 	if rec := do(h, http.MethodGet, "/api/health", ""); rec.Code != http.StatusOK {
 		t.Errorf("health = %d, want 200", rec.Code)
 	}
@@ -224,14 +224,14 @@ func TestRouterWithoutBasePath(t *testing.T) {
 }
 
 func TestRouterNormalisesBasePath(t *testing.T) {
-	h := NewRouter("wesele/", newWebRoot(t), NewServer(healthyDB, nil, nil))
+	h := NewRouter("wesele/", newWebRoot(t), NewServer(healthyDB, nil, nil, nil), nil)
 	if rec := do(h, http.MethodGet, "/wesele/api/health", ""); rec.Code != http.StatusOK {
 		t.Errorf("health = %d, want 200", rec.Code)
 	}
 }
 
 func TestRouterServesAPIWithEmptyWebRoot(t *testing.T) {
-	h := NewRouter("/wesele", t.TempDir(), NewServer(healthyDB, nil, nil)) // "empty SPA dir"
+	h := NewRouter("/wesele", t.TempDir(), NewServer(healthyDB, nil, nil, nil), nil) // "empty SPA dir"
 	if rec := do(h, http.MethodGet, "/wesele/api/health", ""); rec.Code != http.StatusOK {
 		t.Errorf("health = %d, want 200", rec.Code)
 	}

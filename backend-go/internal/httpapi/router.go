@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/wojtekrpi/stoliki/backend-go/internal/accessgate"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/httpapi/oapi"
 )
@@ -28,13 +29,16 @@ const maxBodyBytes = 1 << 20
 //	basePath + "/api/*"  the oapi-codegen strict server (error envelope for every failure)
 //	basePath + "/*"      static SPA files from webRoot, index.html for unknown extensionless paths
 //	basePath             301 -> basePath + "/"
-func NewRouter(basePath, webRoot string, api oapi.StrictServerInterface) http.Handler {
+//
+// gate (nil = off) guards the API sub-router only; the static SPA shell holds no personal data
+// and stays open (docs/architecture/05-access-gate.md § 1).
+func NewRouter(basePath, webRoot string, api oapi.StrictServerInterface, gate *accessgate.Gate) http.Handler {
 	base := NormaliseBasePath(basePath)
 
 	root := chi.NewRouter()
 	root.Use(noIndex)
 	root.Use(middleware.Compress(5, "text/html", "text/css", "text/javascript", "application/javascript", "application/json", "image/svg+xml"))
-	root.Mount(base+"/api", apiRouter(api))
+	root.Mount(base+"/api", apiRouter(api, gate))
 	if base != "" {
 		root.Get(base, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, base+"/", http.StatusMovedPermanently)
@@ -58,10 +62,15 @@ func NormaliseBasePath(p string) string {
 }
 
 // apiRouter serves the generated routes (relative to the mount point) with the API middleware:
-// request id, panic recovery into the error envelope, request log without bodies, body limit.
-func apiRouter(api oapi.StrictServerInterface) http.Handler {
+// request id, panic recovery into the error envelope, request log without bodies, the access
+// gate (only when configured) and the body limit.
+func apiRouter(api oapi.StrictServerInterface, gate *accessgate.Gate) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, recoverer, requestLog, bodyLimit)
+	r.Use(middleware.RequestID, recoverer, requestLog)
+	if gate != nil {
+		r.Use(gate.Middleware(writeError))
+	}
+	r.Use(withClient, bodyLimit)
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) { writeError(w, r, apperr.ErrNotFound) })
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, errMethodNotAllowed)

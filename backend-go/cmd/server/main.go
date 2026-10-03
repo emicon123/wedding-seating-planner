@@ -16,9 +16,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/wojtekrpi/stoliki/backend-go/internal/accessgate"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/guests"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/httpapi"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/scenarios"
@@ -26,12 +28,13 @@ import (
 )
 
 // config comes from the environment; defaults per docs/architecture/02-system-context.md.
-// There are no secrets (tailnet-only, no app auth).
+// The only secret is the shared PIN (STOLIKI_PIN); never log or print a config value.
 type config struct {
 	BasePath string // BASE_PATH, URL prefix kept end-to-end ("/wesele")
 	Port     string // PORT, listen port
 	DBPath   string // DB_PATH, SQLite file
 	WebRoot  string // WEB_ROOT, built SPA directory
+	PIN      string // STOLIKI_PIN, shared PIN of the access gate; empty = gate off
 }
 
 func loadConfig(getenv func(string) string) config {
@@ -46,6 +49,7 @@ func loadConfig(getenv func(string) string) config {
 		Port:     get("PORT", "8080"),
 		DBPath:   get("DB_PATH", "/data/stoliki.db"),
 		WebRoot:  get("WEB_ROOT", "/app/web"),
+		PIN:      get("STOLIKI_PIN", ""),
 	}
 }
 
@@ -90,13 +94,18 @@ func serve(ctx context.Context, cfg config) error {
 		return err
 	}
 
+	gate, err := newGate(cfg)
+	if err != nil {
+		return err
+	}
+
 	// Explicit wiring: DB -> store -> services -> HTTP adapter -> router.
 	guestStore := store.NewGuests(db)
 	guestSvc := guests.NewService(guestStore)
 	planSvc := scenarios.NewService(store.NewScenarios(db), guestStore)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(cfg.BasePath, cfg.WebRoot, httpapi.NewServer(db, guestSvc, planSvc)),
+		Handler:           httpapi.NewRouter(cfg.BasePath, cfg.WebRoot, httpapi.NewServer(db, guestSvc, planSvc, gate), gate),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -118,6 +127,21 @@ func serve(ctx context.Context, cfg config) error {
 	}
 	slog.Info("stopped")
 	return nil
+}
+
+// newGate builds the PIN gate, or returns nil (gate off, today's open behaviour) when STOLIKI_PIN
+// is unset or empty. The session secret lives next to the database file (0600, created once).
+func newGate(cfg config) (*accessgate.Gate, error) {
+	if cfg.PIN == "" {
+		slog.Warn("access gate off (STOLIKI_PIN not set)")
+		return nil, nil
+	}
+	secret, err := accessgate.LoadOrCreateSecret(filepath.Join(filepath.Dir(cfg.DBPath), "session.key"))
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("access gate on")
+	return accessgate.New(cfg.PIN, secret, cfg.BasePath, time.Now), nil
 }
 
 // healthcheck is the container probe (distroless has no shell or wget).

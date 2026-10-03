@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/oapi-codegen/nullable"
 
+	"github.com/wojtekrpi/stoliki/backend-go/internal/accessgate"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/httpapi/oapi"
 )
@@ -34,6 +37,7 @@ func errorResponse(err error) (status int, body oapi.ErrorResponse) {
 		stale      apperr.StaleVersion
 		badReq     badRequestError
 		tooLarge   *http.MaxBytesError
+		throttled  *accessgate.ThrottledError
 	)
 	status, code, field, message := http.StatusInternalServerError, oapi.ErrorCodeInternalError, "", "Unexpected error; see server logs."
 	switch {
@@ -54,6 +58,14 @@ func errorResponse(err error) (status int, body oapi.ErrorResponse) {
 		status, code, field, message = http.StatusBadRequest, oapi.ErrorCodeBadRequest, badReq.field, badReq.message
 	case errors.As(err, &tooLarge):
 		status, code, message = http.StatusRequestEntityTooLarge, oapi.ErrorCodePayloadTooLarge, "The request body is too large."
+	case errors.Is(err, accessgate.ErrUnauthenticated):
+		status, code, message = http.StatusUnauthorized, oapi.ErrorCodeUnauthenticated, "PIN required."
+	case errors.Is(err, accessgate.ErrInvalidPIN):
+		status, code, field, message = http.StatusUnauthorized, oapi.ErrorCodeInvalidPin, "pin", "Wrong PIN."
+	case errors.As(err, &throttled):
+		status, code, message = http.StatusTooManyRequests, oapi.ErrorCodeTooManyAttempts, "Too many attempts; try again later."
+	case errors.Is(err, accessgate.ErrCSRF):
+		status, code, message = http.StatusForbidden, oapi.ErrorCodeCsrfHeaderMissing, "Missing X-Stoliki-Request header."
 	case errors.Is(err, errMethodNotAllowed):
 		status, code, message = http.StatusMethodNotAllowed, oapi.ErrorCodeBadRequest, "Method not allowed for this path."
 	case errors.Is(err, errNotImplemented):
@@ -75,6 +87,10 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	body.Meta = oapi.Meta{RequestId: &id}
 	if status >= http.StatusInternalServerError {
 		slog.Error("request failed", "requestId", id, "status", status, "err", err)
+	}
+	var throttled *accessgate.ThrottledError
+	if errors.As(err, &throttled) {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(throttled.RetryAfter)))
 	}
 	writeJSON(w, status, body)
 }
@@ -122,3 +138,8 @@ func paramErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 
 // errMethodNotAllowed: a known /api path called with the wrong method (405, bad_request).
 var errMethodNotAllowed = errors.New("method not allowed")
+
+// retryAfterSeconds rounds a lock duration up to whole seconds, at least 1 (Retry-After header).
+func retryAfterSeconds(d time.Duration) int {
+	return max(1, int((d+time.Second-1)/time.Second))
+}

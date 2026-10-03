@@ -30,7 +30,7 @@ func newAPI(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	gs := store.NewGuests(db)
-	return NewRouter("/wesele", "", NewServer(db, guests.NewService(gs), scenarios.NewService(store.NewScenarios(db), gs)))
+	return NewRouter("/wesele", "", NewServer(db, guests.NewService(gs), scenarios.NewService(store.NewScenarios(db), gs), nil), nil)
 }
 
 func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {

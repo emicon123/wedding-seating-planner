@@ -60,6 +60,7 @@ var bodyOps = map[string]bodyShape{
 	"PATCH /guests":              shapeOf(reflect.TypeFor[oapi.GuestBulkToggle]()),
 	"PATCH /guests/{guestId}":    shapeOf(reflect.TypeFor[oapi.GuestUpdate]()),
 	"PUT /guest-links/{linkKey}": shapeOf(reflect.TypeFor[oapi.GuestLinkUpsert]()),
+	"POST /session":              shapeOf(reflect.TypeFor[oapi.SessionCreate]()),
 	"PUT /scenarios":             shapeOf(reflect.TypeFor[oapi.ScenariosReplace]()),
 	"PUT /scenarios/{capacity}/assignments/{guestId}": shapeOf(reflect.TypeFor[oapi.AssignmentSet]()),
 }
