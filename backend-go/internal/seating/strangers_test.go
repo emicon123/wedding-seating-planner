@@ -310,7 +310,7 @@ func bruteBest(it items, k int) (best objective, ok bool) {
 					return
 				}
 			}
-			if o := l.objective(); !ok || it.order.better(o, best) {
+			if o := l.objective(); !ok || o.better(best) {
 				best, ok = o, true
 			}
 			return

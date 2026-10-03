@@ -697,7 +697,7 @@ export function fillStatus(fill: number, capacity: number, tableCount: number, f
 
 | Place | Change |
 |---|---|
-| `PlanCard` (mixed) | Remove `extraTableNote` and `EXTRA_TABLE_NOTE`. Subline under "Mieszany": **"Stoły 9–12-osobowe, liczba stołów dobrana pod najlepszy bilans"**. `TablesNeededLine` stays (e.g. "Potrzebne stoły: 1 × 12, 1 × 10, 1 × 9 (31 miejsc)"). Bilans line emphasised (§15.2). |
+| `PlanCard` (mixed) | Remove `extraTableNote` and `EXTRA_TABLE_NOTE`. Subline under "Mieszany": **"Stoły 9–12-osobowe, liczba stołów dobrana tak, by przy stole było jak najmniej obcych"**. `TablesNeededLine` stays (e.g. "Potrzebne stoły: 1 × 12, 1 × 10, 1 × 9 (31 miejsc)"). Bilans line emphasised (§15.2). |
 | `PlansPage` header copy | "Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany" (unchanged). |
 | `PlanDetailPage` (mixed) | Header shows the bilans pair after "Pary obcych". No other change. |
 | `GenerateButton` running label | "Liczę i zapisuję plany…" unchanged; the wait is now ≈ 7 s: add a muted hint under the button while running, **"To może potrwać kilka sekund."** |

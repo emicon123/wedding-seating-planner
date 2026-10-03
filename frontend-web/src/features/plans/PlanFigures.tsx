@@ -47,7 +47,7 @@ type PlanFiguresProps = {
   strangerPairs?: number
   /** Score minus 2 per stranger pair (derived), comparable across the five plans. */
   bilans?: number
-  /** The mixed plan maximises the bilans, so its line stands out. */
+  /** The mixed plan weighs satisfaction against strangers freely over the table count, so its line stands out. */
   bilansEmphasised?: boolean
 }
 

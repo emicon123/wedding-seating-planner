@@ -1206,25 +1206,9 @@ func FloorOf(p Plan) int { if p.Mixed { return MixedFloor }; return Floor }
 - `Evaluate`: `case k > 1 && te.Fill < FloorOf(p)` → `under_floor`; message "(minimum 9)" for the mixed plan.
 - `items` gets `floor int` (set from `FloorOf`), and every use of the constant `Floor` in `propose.go` / `anneal.go` / `packexact.go` reads `l.it.floor` / `it.floor` instead (`repairFloor`, `liftByMove`, `liftBySwap`, `improve`, `layout.floor()`, `packExact`'s `s.floor`, `solve`'s `(k+1)·floor > total`). Uniform plans: `floor = 8`, behaviour identical.
 
-### 12.2 One order field, two orders
+### 12.2 One objective, one order (task 016)
 
-```go
-type order uint8
-const (lexOrder order = iota /* uniform: (iso ↑, str ↑, score ↓), §11 */; netOrder /* mixed: (iso ↑, bilans ↓), task 016 */)
-type items struct { /* … */ floor int; order order }
-
-func (o objective) net() int { return o.score - 2*StrangerPenalty*o.str }  // the bilans
-func (d delta) net() int     { return d.score - 2*StrangerPenalty*d.str }
-
-// the comparison sites call these instead of objective.better / delta.improves / …:
-func (r order) better(a, b objective) bool   // lex: §11.3; net: a.iso < b.iso || (equal && a.net() > b.net())
-func (r order) improves(d delta) bool        // lex: §11.3; net: d.iso < 0 || (d.iso == 0 && d.net() > 0)
-func (r order) notWorse(d delta) bool        // lex: §11.3; net: d.iso < 0 || (d.iso == 0 && d.net() >= 0)
-func (r order) stepBetter(d, e delta) bool   // repairFloor's candidate choice; net: d.iso < e.iso || (equal && d.net() > e.net())
-func (r order) energy(d delta) float64       // anneal's exponent numerator for a worse step:
-                                              //   lex: d.score − annealIsoWeight·d.iso − annealStrangerWeight·d.str
-                                              //   net: float64(d.net()) − annealIsoWeight·d.iso
-```
+Task 015 introduced an `order` field (lex vs. the bilans scalar). Task 016 removed it: the mixed plan ranks layouts with the same lexicographic triple as the uniform plans (`objective.better`, `delta.improves/notWorse/better`, `delta.energy`), and `items.mixed` only selects floor 9 and the free k. `net()` remains as the displayed bilans. `proposeMixed` compares the layouts of the different k by `objective.better` (strict, ascending k, so ties keep the smaller k).
 
 Deltas (`moveDelta`, `swapDelta`) are **unchanged** and still return the full `(iso, str, score)`; the bilans of a step is `d.net()`. Integer throughout (λ integer).
 

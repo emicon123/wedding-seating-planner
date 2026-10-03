@@ -50,7 +50,7 @@ describe('PlansPage: the mixed card chooses its own table count (task 015)', () 
 
     expect(
       within(card('Plan mieszany')).getByText(
-        'Stoły 9–12-osobowe, liczba stołów dobrana pod najlepszy bilans',
+        'Stoły 9–12-osobowe, liczba stołów dobrana tak, by przy stole było jak najmniej obcych',
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText(/stół więcej/)).toBeNull()

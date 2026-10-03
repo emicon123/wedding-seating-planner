@@ -27,7 +27,7 @@ const (
 	// nothing against 0.
 	annealIsoWeight float64 = 1
 	// annealStrangerWeight: the same kind of walk-only knob for one added stranger pair
-	// (task 015), lexicographic order only; the mixed plan's walk uses the true bilans. Measured
+	// (task 015); the mixed plan walks the same objective (task 016). Measured
 	// with TestTuneStrangerWeight on 30 stranger-free-partition instances, 12 random child
 	// instances and annealFixture / tightFixture(4) / tightFixture(5) at capacities 9-12 (total
 	// stranger pairs left, isolated adults equal throughout: 78): w=0: 2056, 1: 2023, 2: 2017,
@@ -114,7 +114,7 @@ func anneal(l *layout, iters int, r *prng) {
 		return
 	}
 	floor, capacity := l.floor(), l.it.capacity
-	cur, ord := l.objective(), l.it.order
+	cur := l.objective()
 	best, bestAssign := cur, append([]int(nil), l.assign...)
 	temp := annealTempHigh
 	cool := math.Pow(annealTempLow/annealTempHigh, 1/float64(iters))
@@ -147,7 +147,7 @@ func anneal(l *layout, iters int, r *prng) {
 			}
 			d = l.swapDelta(a, b)
 		}
-		if !ord.notWorse(d) && r.float() >= math.Exp(ord.energy(d)/temp) {
+		if !d.notWorse() && r.float() >= math.Exp(d.energy()/temp) {
 			continue
 		}
 		if b < 0 {
@@ -159,7 +159,7 @@ func anneal(l *layout, iters int, r *prng) {
 		cur.iso += d.iso
 		cur.str += d.str
 		cur.score += d.score
-		if ord.better(cur, best) {
+		if cur.better(best) {
 			best = cur
 			copy(bestAssign, l.assign)
 		}
@@ -230,7 +230,7 @@ func optimiseWith(l *layout, restarts, iters, seedBase int) {
 		bestObj := l.objective()
 		var winner *layout
 		for _, c := range results {
-			if o := c.objective(); l.it.order.better(o, bestObj) {
+			if o := c.objective(); o.better(bestObj) {
 				bestObj, winner = o, c
 			}
 		}

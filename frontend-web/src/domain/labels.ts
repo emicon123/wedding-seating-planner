@@ -209,7 +209,7 @@ export const BILANS_LABEL = 'Bilans'
 export const BILANS_HINT = 'Zadowolenie minus 2 za każdą parę obcych (każda z dwóch osób traci 1)'
 
 /** The line under "Mieszany" on its plan card: the table count is the algorithm's choice. */
-export const MIXED_PLAN_SUBLINE = 'Stoły 9–12-osobowe, liczba stołów dobrana pod najlepszy bilans'
+export const MIXED_PLAN_SUBLINE = 'Stoły 9–12-osobowe, liczba stołów dobrana tak, by przy stole było jak najmniej obcych'
 
 /** Generate now takes several seconds (the mixed plan tries every table count). */
 export const GENERATE_WAIT_HINT = 'To może potrwać kilka sekund.'

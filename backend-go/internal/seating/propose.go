@@ -12,7 +12,7 @@ const maxPasses = 100
 type items struct {
 	capacity int
 	floor    int         // minimum fill per table when k > 1 (FloorOf: 8, or 9 in the mixed plan)
-	order    order       // how layouts are compared: lexicographic triple, or the bilans (mixed plan)
+	mixed    bool        // the mixed plan: floor 9 and a free table count (same objective as the uniform plans)
 	keys     []GuestID   // cluster key per item
 	members  [][]GuestID // enabled members per item
 	size     []int       // seats: fill, capacity, floor, pack order
@@ -29,23 +29,9 @@ type items struct {
 	know [][]int
 }
 
-// order is how the optimiser ranks layouts (task 015, design 003-backend-design §12.2).
-type order uint8
-
-const (
-	// lexOrder: (isolated adults, stranger pairs) lower first, then a higher score: the four uniform plans.
-	lexOrder order = iota
-	// netOrder: fewer isolated adults first (a table where a family sits with none of its
-	// acquaintances is avoided whenever any layout avoids it), then a higher bilans =
-	// score - 2*StrangerPenalty*stranger pairs: the mixed plan.
-	netOrder
-)
-
 func newItems(g Graph, capacity int, mixed bool) items {
 	it := items{capacity: capacity, floor: FloorOf(Plan{Mixed: mixed}), idx: map[GuestID]int{}}
-	if mixed {
-		it.order = netOrder
-	}
+	it.mixed = mixed
 	for _, c := range g.clusters {
 		if c.SeatedSize() == 0 || c.SeatedSize() > capacity {
 			continue
@@ -166,7 +152,7 @@ type objective struct {
 	score int // displayed scenario score, isolation penalty included (= Evaluate Summary.Score)
 }
 
-// net is the bilans of the mixed plan: score - 2*StrangerPenalty*stranger pairs.
+// net is the bilans, a display figure only (task 016: no longer an objective): score - 2*StrangerPenalty*stranger pairs.
 func (o objective) net() int { return o.score - 2*StrangerPenalty*o.str }
 
 // better is the lexicographic order of the uniform plans: fewer isolated adults, then fewer
@@ -196,49 +182,9 @@ func (d delta) better(e delta) bool {
 	return d.iso < e.iso || (d.iso == e.iso && (d.str < e.str || (d.str == e.str && d.score > e.score)))
 }
 
-// The comparison sites call these instead of the lexicographic methods above, so the
-// mixed plan's order (isolated adults, then the scalar bilans) is read in exactly one place per
-// site (design §12.2).
-
-// better: o is a better layout than p.
-func (r order) better(o, p objective) bool {
-	if r == netOrder {
-		return o.iso < p.iso || (o.iso == p.iso && o.net() > p.net())
-	}
-	return o.better(p)
-}
-
-// improves: the step strictly improves the layout.
-func (r order) improves(d delta) bool {
-	if r == netOrder {
-		return d.iso < 0 || (d.iso == 0 && d.net() > 0)
-	}
-	return d.improves()
-}
-
-// notWorse: the step does not worsen the layout.
-func (r order) notWorse(d delta) bool {
-	if r == netOrder {
-		return d.iso < 0 || (d.iso == 0 && d.net() >= 0)
-	}
-	return d.notWorse()
-}
-
-// stepBetter: step d is a better candidate than e (repairFloor's choice).
-func (r order) stepBetter(d, e delta) bool {
-	if r == netOrder {
-		return d.iso < e.iso || (d.iso == e.iso && d.net() > e.net())
-	}
-	return d.better(e)
-}
-
-// energy is the exponent numerator of the annealing acceptance of a worse step d:
-// the lexicographic walk uses the weighted knobs, the bilans walk the true bilans plus the
-// same isolation knob.
-func (r order) energy(d delta) float64 {
-	if r == netOrder {
-		return float64(d.net()) - annealIsoWeight*float64(d.iso)
-	}
+// energy is the exponent numerator of the annealing acceptance of a worse step: the
+// weighted knobs of the lexicographic objective.
+func (d delta) energy() float64 {
 	return float64(d.score) - annealIsoWeight*float64(d.iso) - annealStrangerWeight*float64(d.str)
 }
 
@@ -358,7 +304,7 @@ func (l *layout) swapDelta(a, b int) delta {
 }
 
 func (l *layout) toPlan() Plan {
-	p := Plan{Capacity: l.it.capacity, Mixed: l.it.order == netOrder, Tables: make([]Table, l.k)}
+	p := Plan{Capacity: l.it.capacity, Mixed: l.it.mixed, Tables: make([]Table, l.k)}
 	for t := range p.Tables {
 		p.Tables[t].Number = t + 1
 	}
@@ -474,7 +420,7 @@ func (l *layout) liftByMove(t int) bool {
 		if l.fill[t]+s > l.it.capacity || l.fill[x]-s < l.it.floor {
 			continue
 		}
-		if d := l.moveDelta(a, t); bestA < 0 || l.it.order.stepBetter(d, bestDelta) {
+		if d := l.moveDelta(a, t); bestA < 0 || d.better(bestDelta) {
 			bestA, bestDelta = a, d
 		}
 	}
@@ -500,7 +446,7 @@ func (l *layout) liftBySwap(t int) bool {
 			if sa <= sb || l.fill[t]+sa-sb > l.it.capacity || l.fill[x]-sa+sb < l.it.floor {
 				continue
 			}
-			if d := l.swapDelta(a, b); bestA < 0 || l.it.order.stepBetter(d, bestDelta) {
+			if d := l.swapDelta(a, b); bestA < 0 || d.better(bestDelta) {
 				bestA, bestB, bestDelta = a, b, d
 			}
 		}
@@ -533,7 +479,7 @@ func improve(l *layout, passes int) {
 				if t == x || l.fill[t]+s > l.it.capacity || l.fill[x]-s < floor {
 					continue
 				}
-				if l.it.order.improves(l.moveDelta(a, t)) {
+				if l.moveDelta(a, t).improves() {
 					l.move(a, t)
 					changed = true
 				}
@@ -553,7 +499,7 @@ func improve(l *layout, passes int) {
 				if newA > l.it.capacity || newB > l.it.capacity || newA < floor || newB < floor {
 					continue
 				}
-				if l.it.order.improves(l.swapDelta(a, b)) {
+				if l.swapDelta(a, b).improves() {
 					l.move(a, tb)
 					l.move(b, ta)
 					changed = true
@@ -715,7 +661,7 @@ func proposeMixed(g Graph, it items, pins map[int]int) Plan {
 			bestEffort, bestViolations = fewestViolations(g, tries, bestEffort, bestViolations)
 			continue
 		}
-		if best == nil || it.order.better(l.objective(), best.objective()) {
+		if best == nil || l.objective().better(best.objective()) {
 			best = l
 		}
 	}
