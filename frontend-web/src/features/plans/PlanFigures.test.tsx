@@ -31,3 +31,37 @@ describe('PlanFigures: isolated guests', () => {
     )
   })
 })
+
+describe('PlanFigures: stranger pairs and bilans (task 015)', () => {
+  it.each([0, 7])('shows "Pary obcych: %i", also for zero', (pairs) => {
+    render(<PlanFigures summary={summary} strangerPairs={pairs} />)
+
+    expect(screen.getByText(`Pary obcych: ${pairs}`)).toBeInTheDocument()
+  })
+
+  it('shows nothing when the props are undefined', () => {
+    render(<PlanFigures summary={summary} />)
+
+    expect(screen.queryByText(/Pary obcych/)).toBeNull()
+    expect(screen.queryByText(/Bilans/)).toBeNull()
+  })
+
+  it('shows the bilans with its tooltip, negative included', () => {
+    render(<PlanFigures summary={summary} bilans={-4} />)
+
+    expect(screen.getByText('Bilans: -4')).toHaveAttribute(
+      'title',
+      'Zadowolenie minus 2 za każdą parę obcych (każda z dwóch osób traci 1)',
+    )
+  })
+
+  it('explains the pairs in a tooltip and is no violation', () => {
+    render(<PlanFigures summary={summary} strangerPairs={3} />)
+
+    expect(screen.getByText('Pary obcych: 3')).toHaveAttribute(
+      'title',
+      'Pary dorosłych przy jednym stole, którzy się nie znają (ani grupa 0, ani 1, ani 2)',
+    )
+    expect(screen.getByText('Naruszenia').nextSibling).toHaveTextContent('1')
+  })
+})

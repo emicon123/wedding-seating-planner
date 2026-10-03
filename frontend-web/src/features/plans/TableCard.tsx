@@ -12,10 +12,12 @@ import {
   preferredHereLabel,
   scoreLabel,
   sourceUnderFloorLabel,
+  STRANGER_PAIRS_HINT,
+  strangerPairsLabel,
   tableSizeBadgeLabel,
   violationLabel,
 } from '@/domain/labels'
-import { isMixed, type PlanKind } from '@/domain/plans'
+import { isMixed, minTableFill, type PlanKind } from '@/domain/plans'
 import { sortPlacements } from '@/domain/planView'
 import { sizeAfterDrop, tableSize } from '@/domain/tableSizes'
 import { fillStatus } from '@/domain/tableStatus'
@@ -43,6 +45,8 @@ type TableCardProps = {
   violations: Violation[]
   /** The server's table score; hidden (null) while a save is in flight. */
   score: number | null
+  /** Stranger pairs at this table (derived from the guest scores); null while a save is in flight. */
+  strangerPairs: number | null
   highlighted: boolean
   /** Set on the hovered table while dragging. */
   hint: DropHint | null
@@ -72,7 +76,7 @@ function DropHintBanner({ hint, kind }: { hint: DropHint; kind: PlanKind }) {
           {preview.underFloorSource && hint.sourceNumber !== null && (
             <p className="flex items-center gap-1.5 font-medium">
               <TriangleAlertIcon className="size-4" />
-              {sourceUnderFloorLabel(hint.sourceNumber)}
+              {sourceUnderFloorLabel(hint.sourceNumber, minTableFill(kind))}
             </p>
           )}
         </>
@@ -91,6 +95,7 @@ export const TableCard = memo(function TableCard({
   tableCount,
   violations,
   score,
+  strangerPairs,
   highlighted,
   hint,
   dragging,
@@ -102,8 +107,9 @@ export const TableCard = memo(function TableCard({
   const mixed = isMixed(kind)
   const size = tableSize(table.fill, kind)
   const { setNodeRef, isOver } = useDroppable({ id: tableDropId(table.number) })
-  const status = fillStatus(table.fill, capacity, tableCount)
-  const statusText = fillStatusLabel(status, table.fill, capacity)
+  const floor = minTableFill(kind)
+  const status = fillStatus(table.fill, capacity, tableCount, floor)
+  const statusText = fillStatusLabel(status, table.fill, capacity, floor)
   const clusters = useMemo(
     () => sortPlacements(table.clusters, view.nameOf),
     [table.clusters, view.nameOf],
@@ -179,11 +185,14 @@ export const TableCard = memo(function TableCard({
           {violations.map((violation, index) => (
             <p key={index} className="flex items-start gap-1 text-xs font-semibold text-brick">
               <TriangleAlertIcon aria-hidden="true" className="mt-px size-3.5 shrink-0" />
-              {violationLabel(violation)}
+              {violationLabel(violation, floor)}
             </p>
           ))}
           <p className="text-xs text-muted-foreground">
             Zadowolenie {score === null ? '…' : scoreLabel(score)}
+            {strangerPairs !== null && strangerPairs > 0 && (
+              <span title={STRANGER_PAIRS_HINT}> · {strangerPairsLabel(strangerPairs)}</span>
+            )}
           </p>
         </div>
       </header>

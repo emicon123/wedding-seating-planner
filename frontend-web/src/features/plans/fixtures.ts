@@ -28,8 +28,8 @@ export function evenPlan(count: number, fill: number): SeatingPlan {
   return fillsPlan(Array.from({ length: count }, () => fill))
 }
 
-/** The mixed plan of the fixtures: tables of 12, 8 (a 9-seat table) and 11 guests. */
-export const mixedFixturePlan = (): SeatingPlan => fillsPlan([12, 8, 11])
+/** The mixed plan of the fixtures: tables of 12, 9 and 10 guests (the contract example, task 015). */
+export const mixedFixturePlan = (): SeatingPlan => fillsPlan([12, 9, 10])
 
 export function fiveScenarios(overrides: Partial<Record<PlanKey, SeatingPlan>> = {}): Scenario[] {
   return [
@@ -114,8 +114,8 @@ function score(guestId: number, tableNumber: number | null, over: Partial<GuestS
 }
 
 /**
- * Capacity 10. Table 1: Maciek + Karolina (paczka) and Zosia; table 2: Michał + Ola; Basia has
- * no table. Maciek prefers Michał's paczka, which sits at the other table.
+ * Capacity 10. Table 1: Maciek + Karolina (paczka) and Zosia, who do not know each other (2 stranger
+ * pairs); table 2: Michał + Ola; Basia has no table. Maciek prefers Michał's paczka, which sits at the other table.
  */
 export function detailScenario(): Scenario {
   const plan = withoutViolations(
@@ -130,7 +130,13 @@ export function detailScenario(): Scenario {
   plan.guestScores = [
     score(4, 1, { satisfaction: -1, preferredTotal: 2, preferredAtTable: 0, strangersAtTable: 1 }),
     score(5, 1, { satisfaction: -1, preferredTotal: 2, preferredAtTable: 0, strangersAtTable: 1 }),
-    score(8, 1, { preferredTotal: 1, preferredAtTable: 1, fallbackAtTable: 2 }),
+    // strangers are symmetric: Maciek and Karolina each see Zosia, Zosia sees both of them
+    score(8, 1, {
+      preferredTotal: 1,
+      preferredAtTable: 1,
+      fallbackAtTable: 2,
+      strangersAtTable: 2,
+    }),
     score(6, 2),
     score(7, 2),
   ]

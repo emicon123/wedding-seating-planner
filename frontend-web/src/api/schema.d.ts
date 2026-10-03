@@ -191,8 +191,9 @@ export interface paths {
          * Compute proposals for all five plans — step 1 of "Generuj plany" (UC-10)
          * @description Pure computation — nothing is stored. Runs auto-seating for the plans 9, 10, 11, 12 and mixed
          *     from the current guests, links and each plan's own pins (pinned clusters stay at their table,
-         *     `pinned: true`). The mixed plan uses the fewest tables of at most 12 guests, or one table more
-         *     when that strictly lowers the number of guests sitting without anyone from their groups 1/2
+         *     `pinned: true`). The uniform plans use the fewest tables (8 to capacity guests each). The mixed
+         *     plan has 9–12 guests at every table and any number of tables: the layout with the highest
+         *     bilans (satisfaction minus 2 per stranger pair, see `PlanSummary`), fewer tables on ties
          *     (docs/architecture/03-seating-model.md § The mixed plan). "Generuj plany" stores the five results
          *     straight away: the SPA sends them unchanged to `PUT /scenarios` (one atomic call,
          *     version-checked) without showing a preview.
@@ -650,14 +651,17 @@ export interface components {
         PlanKey: "9" | "10" | "11" | "12" | "mixed";
         /**
          * @description Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
-         *     exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
-         *     9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
-         *     no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+         *     exactly this many seats; floor 8 guests per table. The mixed plan: always 12, floor **9** guests
+         *     per table (task 015), any number of tables; each of its tables has the smallest size of 9, 10,
+         *     11, 12 that holds its fill (a valid table has 9–12 guests, so its size equals its fill; fill < 9
+         *     → 9 and the table is `under_floor`, > 12 → 12 and `over_capacity`; an empty table has no size and
+         *     is not needed). The client derives those sizes and the "potrzebne stoły" summary from
          *     `PlanTable.fill`; no size is stored or sent.
          * @example 10
          * @enum {integer}
          */
         Capacity: 9 | 10 | 11 | 12;
+        /** @description Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly from `SeatingPlan.guestScores`. The **bilans** (net satisfaction) = `score` − 2 · stranger pairs (each adult of a stranger pair loses 1; task 015) is also derived by the client; it is what the mixed plan maximises. */
         PlanSummary: {
             /** @example 10 */
             tableCount: number;
@@ -746,7 +750,7 @@ export interface components {
              */
             fallbackAtTable: number;
             /**
-             * @description Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child.
+             * @description Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child. Symmetric: the number of stranger pairs at a table (or in a plan) is exactly half the sum of `strangersAtTable` over its guests, which is how clients derive "Pary obcych" (task 015: the optimiser minimises stranger pairs right after isolated adults and before satisfaction).
              * @example 0
              */
             strangersAtTable: number;
@@ -757,7 +761,10 @@ export interface components {
              * @enum {string}
              */
             code: "cluster_split" | "over_capacity" | "under_floor" | "unseated_guests" | "oversized_cluster";
-            /** @example Table 3 has 6 guests (minimum 8). */
+            /**
+             * @description Human-readable. `under_floor`: fewer than 8 guests at a table of a uniform plan, fewer than 9 in the mixed plan (task 015), only when the plan has more than one table.
+             * @example Table 3 has 6 guests (minimum 8).
+             */
             message: string;
             /** @example 3 */
             tableNumber: number | null;

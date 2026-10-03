@@ -14,6 +14,7 @@ import {
   parseFilters,
   type GuestFilters as Filters,
 } from '@/domain/guestFilters'
+import { familyReach } from '@/domain/acquaintance'
 import { buildGuestIndex } from '@/domain/guestIndex'
 import { guestCounts } from '@/domain/guestList'
 import { relatedTo, summariseRelations } from '@/domain/relations'
@@ -27,6 +28,7 @@ import { GuestEditDialog } from '@/features/guests/GuestEditDialog'
 import { GuestFilters } from '@/features/guests/GuestFilters'
 import { GuestTable } from '@/features/guests/GuestTable'
 import { LinkEditor } from '@/features/guests/LinkEditor'
+import { MissingLinksSection } from '@/features/guests/MissingLinksSection'
 import { QuickAddBar } from '@/features/guests/QuickAddBar'
 
 type Dialog = { kind: 'links' | 'edit' | 'delete'; guestId: number }
@@ -70,6 +72,7 @@ export function GuestsPage() {
     return sortByCluster(matching, overview)
   }, [guests, index, deferredFilters, related, overview])
   const counts = useMemo(() => guestCounts(guests), [guests])
+  const reaches = useMemo(() => (overview ? familyReach(guests, overview) : []), [guests, overview])
   const warnedIds = useMemo(
     () => new Set(overview?.warnings.flatMap((warning) => warning.guestIds) ?? []),
     [overview],
@@ -182,6 +185,8 @@ export function GuestsPage() {
           </div>
         </details>
       )}
+
+      <MissingLinksSection reaches={reaches} nameOf={nameOf} onOpenLinks={onOpenLinks} />
 
       <GuestFilters
         filters={filters}

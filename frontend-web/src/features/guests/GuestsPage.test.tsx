@@ -1,6 +1,13 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { GuestsPage } from '@/features/guests/GuestsPage'
-import { bigList, serveGuests, serveToggle, SMALL_LIST } from '@/features/guests/fixtures'
+import {
+  bigList,
+  reportGuests,
+  reportOverview,
+  serveGuests,
+  serveToggle,
+  SMALL_LIST,
+} from '@/features/guests/fixtures'
 import {
   KAROLINA,
   MACIEK,
@@ -305,5 +312,40 @@ describe('GuestsPage: switch and bulk toggle', () => {
     await waitFor(() =>
       expect(screen.getByRole('switch', { name: 'Uwzględniony: Zosia' })).toBeChecked(),
     )
+  })
+})
+
+describe('GuestsPage: the missing-links report (task 015)', () => {
+  const HEADER = 'Braki powiązań: 2 rodziny bez stołu w gronie znajomych, 2 tylko na mniejszy stół'
+
+  it('sits on the guests page, collapsed, and ignores the search and the filters', async () => {
+    serveGuests(reportGuests(), reportOverview())
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+
+    const header = await screen.findByRole('button', { name: HEADER })
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+
+    await user.type(screen.getByRole('searchbox', { name: 'Szukaj gościa' }), 'Cezary')
+
+    expect(screen.getByRole('button', { name: HEADER })).toBeInTheDocument()
+  })
+
+  it('a family name opens the relations panel of that family', async () => {
+    serveGuests(reportGuests(), reportOverview())
+    const { user } = renderPage(<GuestsPage />, '/goscie')
+    await user.click(await screen.findByRole('button', { name: HEADER }))
+
+    const report = screen.getByRole('region', { name: 'Braki powiązań' })
+    await user.click(within(report).getByRole('button', { name: 'Filip Sam' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Powiązania: Filip Sam' })).toBeInTheDocument()
+  })
+
+  it('is not shown for an empty list', async () => {
+    serveGuests([], reportOverview([]))
+    renderPage(<GuestsPage />, '/goscie')
+    await screen.findByText(/Lista jest pusta/)
+
+    expect(screen.queryByText(/Braki powiązań/)).toBeNull()
   })
 })

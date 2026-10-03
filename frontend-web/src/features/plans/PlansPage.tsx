@@ -73,7 +73,6 @@ export function PlansPage() {
         ? scenarios.data.filter((scenario) => scenario.key === target.key)
         : [...scenarios.data].sort((a, b) => PLAN_KEYS.indexOf(a.key) - PLAN_KEYS.indexOf(b.key))
   const pending = target?.kind === 'one' ? reset.isPending : resettingAll
-  const twelve = scenarios.data?.find((scenario) => scenario.key === '12')
   const allEmpty = scenarios.data?.every((s) => s.plan.summary.tableCount === 0) ?? false
 
   return (
@@ -123,7 +122,6 @@ export function PlansPage() {
               <li key={scenario.key}>
                 <PlanCard
                   scenario={scenario}
-                  twelve={twelve}
                   onDelete={(key) => openDelete({ kind: 'one', key })}
                 />
               </li>

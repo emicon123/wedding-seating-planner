@@ -1,9 +1,13 @@
 import { CircleCheckIcon, TriangleAlertIcon, UserXIcon } from 'lucide-react'
 import {
+  BILANS_HINT,
+  BILANS_LABEL,
   ISOLATED_LABEL,
   peopleLabel,
   SCORE_ADULTS_HINT,
   scoreLabel,
+  STRANGER_PAIRS_HINT,
+  STRANGER_PAIRS_LABEL,
   violationCountLabel,
 } from '@/domain/labels'
 import type { PlanSummary } from '@/domain/types'
@@ -39,10 +43,22 @@ type PlanFiguresProps = {
   summary: PlanSummary
   /** Guests "bez znajomych przy stole" (derived from the guest scores); a note, not a violation. */
   isolated?: number
+  /** Pairs of adults at one table who do not know each other (derived); a note, not a violation. */
+  strangerPairs?: number
+  /** Score minus 2 per stranger pair (derived), comparable across the five plans. */
+  bilans?: number
+  /** The mixed plan maximises the bilans, so its line stands out. */
+  bilansEmphasised?: boolean
 }
 
 /** Table count, satisfaction score and violation count of a plan: the three numbers to compare. */
-export function PlanFigures({ summary, isolated = 0 }: PlanFiguresProps) {
+export function PlanFigures({
+  summary,
+  isolated = 0,
+  strangerPairs,
+  bilans,
+  bilansEmphasised = false,
+}: PlanFiguresProps) {
   const broken = summary.violationCount > 0
   return (
     <div className="space-y-2">
@@ -81,6 +97,23 @@ export function PlanFigures({ summary, isolated = 0 }: PlanFiguresProps) {
         <p className="flex items-center gap-1 text-sm font-medium text-brick">
           <UserXIcon aria-hidden="true" className="size-4 shrink-0" />
           {ISOLATED_LABEL}: {isolated} os.
+        </p>
+      )}
+      {(strangerPairs !== undefined || bilans !== undefined) && (
+        <p className="flex flex-wrap gap-x-3 text-sm text-muted-foreground">
+          {strangerPairs !== undefined && (
+            <span title={STRANGER_PAIRS_HINT}>
+              {STRANGER_PAIRS_LABEL}: {scoreLabel(strangerPairs)}
+            </span>
+          )}
+          {bilans !== undefined && (
+            <span
+              title={BILANS_HINT}
+              className={cn(bilansEmphasised && 'font-medium text-foreground')}
+            >
+              {BILANS_LABEL}: {scoreLabel(bilans)}
+            </span>
+          )}
         </p>
       )}
     </div>

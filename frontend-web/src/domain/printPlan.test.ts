@@ -1,6 +1,6 @@
 import { buildGuestIndex } from '@/domain/guestIndex'
 import { buildNameIndex, buildPrintTables } from '@/domain/printPlan'
-import { makeGuest, makePlan, placement, withoutViolations } from '@/test/builders'
+import { fillsPlan, makeGuest, makePlan, placement, withoutViolations } from '@/test/builders'
 
 const guests = [
   makeGuest({ id: 1, firstName: 'Zosia', lastName: 'Żak' }),
@@ -112,3 +112,14 @@ describe('buildNameIndex', () => {
 function pl(a: string, b: string): number {
   return a.localeCompare(b, 'pl')
 }
+
+describe('buildPrintTables: the floor follows the plan kind (task 015)', () => {
+  it('a table of 8 is fine in plan 12 and under the floor in the mixed plan', () => {
+    const eight = fillsPlan([12, 8])
+    const uniform = buildPrintTables(eight, { key: '12', capacity: 12 }, index)
+    const mixed = buildPrintTables(eight, { key: 'mixed', capacity: 12 }, index)
+
+    expect(uniform.tables.map((t) => t.status)).toEqual(['ok', 'ok'])
+    expect(mixed.tables.map((t) => t.status)).toEqual(['ok', 'under'])
+  })
+})

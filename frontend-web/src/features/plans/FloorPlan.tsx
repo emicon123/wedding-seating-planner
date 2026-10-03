@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { tableViolations } from '@/domain/planView'
+import { tableStrangerPairs } from '@/domain/strangers'
 import type { SeatingPlan } from '@/domain/types'
 import { TableCard, type DropHint } from '@/features/plans/TableCard'
 import { cn } from '@/lib/utils'
@@ -34,6 +35,16 @@ export function FloorPlan({
     () => new Map(plan.tables.map((table) => [table.number, tableViolations(plan, table.number)])),
     [plan],
   )
+  const pairsByTable = useMemo(
+    () =>
+      new Map(
+        plan.tables.map((table) => [
+          table.number,
+          tableStrangerPairs(plan.guestScores, table.number),
+        ]),
+      ),
+    [plan],
+  )
 
   return (
     <section
@@ -55,6 +66,7 @@ export function FloorPlan({
               tableCount={plan.tables.length}
               violations={settled ? (violationsByTable.get(table.number) ?? NONE) : NONE}
               score={settled ? table.score : null}
+              strangerPairs={settled ? (pairsByTable.get(table.number) ?? 0) : null}
               highlighted={highlightedTable === table.number}
               hint={hoveredTable === table.number ? hint : null}
               dragging={dragging}

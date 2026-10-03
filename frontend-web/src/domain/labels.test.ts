@@ -1,6 +1,5 @@
 import {
   dropHintLabel,
-  EXTRA_TABLE_NOTE,
   GENERATE_SAVED_MESSAGE,
   peopleCountLabel,
   tablesNeededSummary,
@@ -12,6 +11,10 @@ import {
   guestCountsLabel,
   linkDiffLabel,
   preferredHereLabel,
+  sourceUnderFloorLabel,
+  strangerPairsLabel,
+  missingLinksSummary,
+  scoreLabel,
   relationCountLabel,
   relationReasonLabel,
   planContentsLabel,
@@ -72,7 +75,7 @@ const error = (code: ErrorCode, field: string | null = null): ErrorItem => ({
 
 describe('Polish labels', () => {
   it.each(Object.keys(VIOLATION_CODES) as Violation['code'][])('violation %s', (code) => {
-    const label = violationLabel(violation(code))
+    const label = violationLabel(violation(code), 8)
     expect(label).not.toBe('')
     expect(label).not.toMatch(/English message/)
   })
@@ -90,8 +93,9 @@ describe('Polish labels', () => {
   })
 
   it('names the table in table violations', () => {
-    expect(violationLabel(violation('over_capacity'))).toBe('Stół 3 jest przepełniony')
-    expect(violationLabel(violation('under_floor'))).toBe('Stół 3 ma za mało osób (minimum 8)')
+    expect(violationLabel(violation('over_capacity'), 8)).toBe('Stół 3 jest przepełniony')
+    expect(violationLabel(violation('under_floor'), 8)).toBe('Stół 3 ma za mało osób (minimum 8)')
+    expect(violationLabel(violation('under_floor'), 9)).toBe('Stół 3 ma za mało osób (minimum 9)')
   })
 
   it.each([
@@ -102,7 +106,7 @@ describe('Polish labels', () => {
     [22, '22 osoby bez stołu'],
   ])('uses the right Polish plural for %i unseated', (count, expected) => {
     const guestIds = Array.from({ length: count }, (_, i) => i + 1)
-    expect(violationLabel(violation('unseated_guests', { tableNumber: null, guestIds }))).toBe(
+    expect(violationLabel(violation('unseated_guests', { tableNumber: null, guestIds }), 8)).toBe(
       expected,
     )
   })
@@ -161,9 +165,10 @@ describe('plan labels', () => {
   })
 
   it('words a fill that breaks a rule, and stays silent when it is fine', () => {
-    expect(fillStatusLabel('over', 11, 10)).toBe('Za dużo osób: 11/10')
-    expect(fillStatusLabel('under', 4, 10)).toBe('Za mało osób (minimum 8)')
-    expect(fillStatusLabel('ok', 8, 10)).toBeNull()
+    expect(fillStatusLabel('over', 11, 10, 8)).toBe('Za dużo osób: 11/10')
+    expect(fillStatusLabel('under', 4, 10, 8)).toBe('Za mało osób (minimum 8)')
+    expect(fillStatusLabel('under', 8, 12, 9)).toBe('Za mało osób (minimum 9)')
+    expect(fillStatusLabel('ok', 8, 10, 8)).toBeNull()
   })
 
   it('words the drop hint with counts only', () => {
@@ -247,18 +252,44 @@ describe('mixed plan copy (task 013)', () => {
     )
   })
 
-  it('words sizes, counters and the extra-table note', () => {
+  it('words sizes and counters', () => {
     expect(tableSizeBadgeLabel(11)).toBe('stół 11-os.')
     expect(tableSizePrintLabel(11)).toBe('11-osobowy')
     expect(peopleCountLabel(11)).toBe('11 os.')
-    expect(EXTRA_TABLE_NOTE(1, 4)).toBe(
-      '1 stół więcej niż plan 12 — mniej osób bez znajomych (1 zamiast 4)',
-    )
   })
 
   it('names the saved plans, with the mixed one last', () => {
     expect(GENERATE_SAVED_MESSAGE(['9', '10', '11', '12', 'mixed'])).toBe(
       'Zapisano nowe plany: 9, 10, 11, 12 miejsc i mieszany.',
     )
+  })
+
+  it('words the under-floor hint with the plan floor', () => {
+    expect(sourceUnderFloorLabel(2, 8)).toBe('Stół 2 będzie miał za mało osób (minimum 8)')
+    expect(sourceUnderFloorLabel(2, 9)).toBe('Stół 2 będzie miał za mało osób (minimum 9)')
+  })
+
+  it.each([
+    [0, '0 par obcych'],
+    [1, '1 para obcych'],
+    [3, '3 pary obcych'],
+    [5, '5 par obcych'],
+    [22, '22 pary obcych'],
+  ])('uses the right Polish plural for %i stranger pairs', (count, expected) => {
+    expect(strangerPairsLabel(count)).toBe(expected)
+  })
+
+  it('words the missing-links header with Polish plurals', () => {
+    expect(missingLinksSummary(1, 4)).toBe(
+      'Braki powiązań: 1 rodzina bez stołu w gronie znajomych, 4 tylko na mniejszy stół',
+    )
+    expect(missingLinksSummary(3, 0)).toBe(
+      'Braki powiązań: 3 rodziny bez stołu w gronie znajomych, 0 tylko na mniejszy stół',
+    )
+    expect(missingLinksSummary(11, 2)).toContain('11 rodzin bez stołu')
+  })
+
+  it('formats a negative bilans', () => {
+    expect(scoreLabel(-4)).toBe('-4')
   })
 })

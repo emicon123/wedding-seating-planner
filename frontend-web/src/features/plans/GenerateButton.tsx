@@ -5,7 +5,11 @@ import { errorMessage } from '@/api/errorMessage'
 import { ApiError } from '@/api/errors'
 import { GENERATE_MUTATION_KEY, useGeneratePlans } from '@/api/scenarios'
 import { Button } from '@/components/ui/button'
-import { GENERATE_CONFLICT_MESSAGE, GENERATE_SAVED_MESSAGE } from '@/domain/labels'
+import {
+  GENERATE_CONFLICT_MESSAGE,
+  GENERATE_SAVED_MESSAGE,
+  GENERATE_WAIT_HINT,
+} from '@/domain/labels'
 
 type GenerateButtonProps = {
   label?: string
@@ -38,19 +42,26 @@ export function GenerateButton({
   }
 
   return (
-    <Button
-      type="button"
-      variant={variant}
-      size={size}
-      disabled={running}
-      onClick={() => void generate()}
-    >
-      {running ? (
-        <Loader2Icon aria-hidden="true" className="animate-spin" />
-      ) : (
-        <SparklesIcon aria-hidden="true" />
+    <div className="flex flex-col items-start gap-1">
+      <Button
+        type="button"
+        variant={variant}
+        size={size}
+        disabled={running}
+        onClick={() => void generate()}
+      >
+        {running ? (
+          <Loader2Icon aria-hidden="true" className="animate-spin" />
+        ) : (
+          <SparklesIcon aria-hidden="true" />
+        )}
+        {running ? 'Liczę i zapisuję plany…' : label}
+      </Button>
+      {running && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {GENERATE_WAIT_HINT}
+        </p>
       )}
-      {running ? 'Liczę i zapisuję plany…' : label}
-    </Button>
+    </div>
   )
 }

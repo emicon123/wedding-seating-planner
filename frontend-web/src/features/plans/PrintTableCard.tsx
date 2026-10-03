@@ -1,7 +1,7 @@
 import { TriangleAlertIcon } from 'lucide-react'
 import { GroupMark } from '@/components/GroupMark'
 import { fillStatusLabel, tableSizePrintLabel } from '@/domain/labels'
-import { isMixed, type PlanKind } from '@/domain/plans'
+import { isMixed, minTableFill, type PlanKind } from '@/domain/plans'
 import type { PrintCluster, PrintTable } from '@/domain/printPlan'
 import { PrintGuestName } from '@/features/plans/PrintGuestName'
 import { TableSeats } from '@/features/plans/TableSeats'
@@ -37,7 +37,7 @@ type PrintTableCardProps = { table: PrintTable; kind: PlanKind }
 export function PrintTableCard({ table, kind }: PrintTableCardProps) {
   const { capacity } = kind
   const mixed = isMixed(kind)
-  const statusText = fillStatusLabel(table.status, table.fill, capacity)
+  const statusText = fillStatusLabel(table.status, table.fill, capacity, minTableFill(kind))
   return (
     <section
       aria-label={`Stół ${table.number}`}

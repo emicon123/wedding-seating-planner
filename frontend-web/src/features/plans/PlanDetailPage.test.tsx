@@ -98,6 +98,54 @@ describe('PlanDetailPage: the hall (read)', () => {
     ).toBeInTheDocument()
   })
 
+  describe('stranger pairs (task 015)', () => {
+    it('shows the plan header pair and bilans, and the count on the table that has strangers', async () => {
+      await renderDetail()
+
+      expect(screen.getByText('Pary obcych').nextSibling).toHaveTextContent('2')
+      expect(screen.getByText('Bilans').nextSibling).toHaveTextContent('38') // 42 - 2 * 2
+      expect(within(table(1)).getByText(/2 pary obcych/)).toHaveAttribute(
+        'title',
+        'Pary dorosłych przy jednym stole, którzy się nie znają (ani grupa 0, ani 1, ani 2)',
+      )
+      expect(within(table(2)).queryByText(/obcych/)).toBeNull()
+    })
+
+    it('shows … in the header and nothing on the tables while a save is in flight', async () => {
+      const { user } = await renderDetail()
+      const hold = gate()
+      mockApi('put', '/scenarios/10/assignments/8', async () => {
+        await hold.opened
+        return HttpResponse.json(single(detailScenario()))
+      })
+
+      await user.click(menuOf('Zosia'))
+      await user.click(await screen.findByRole('menuitem', { name: /Stół 2/ }))
+
+      await waitFor(() =>
+        expect(screen.getByText('Pary obcych').nextSibling).toHaveTextContent('…'),
+      )
+      expect(screen.getByText('Bilans').nextSibling).toHaveTextContent('…')
+      expect(within(table(1)).queryByText(/pary obcych/)).toBeNull()
+      hold.open()
+      await waitFor(() =>
+        expect(screen.getByText('Pary obcych').nextSibling).toHaveTextContent('2'),
+      )
+    })
+
+    it('the child at the table adds no pair', async () => {
+      serveDetail(detailScenarioWithChild())
+      server.use(
+        http.get(apiUrl('/guests'), () => HttpResponse.json(list(detailGuestsWithChild()))),
+      )
+      renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
+      await screen.findByRole('region', { name: 'Stół 1' })
+
+      expect(screen.getByText('Pary obcych').nextSibling).toHaveTextContent('0')
+      expect(within(table(1)).queryByText(/obcych/)).toBeNull()
+    })
+  })
+
   describe('children are not scored (task 014)', () => {
     async function renderWithChild(path: string) {
       serveDetail(detailScenarioWithChild())
@@ -311,6 +359,14 @@ describe('PlanDetailPage: the mixed plan', () => {
     expect(within(table(3)).getByText('pusty — niepotrzebny')).toBeInTheDocument()
     expect(within(table(3)).queryByText(/stół \d+-os\./)).toBeNull()
     expect(within(table(1)).queryByText(/\/12/)).toBeNull()
+  })
+
+  it('judges the tables against the mixed floor of 9, not 8 (task 015)', async () => {
+    await renderMixed()
+
+    // table 2 has 2 guests: under the floor; the uniform plan says "minimum 8" for the same shape
+    expect(within(table(2)).getByText('Za mało osób (minimum 9)')).toBeInTheDocument()
+    expect(within(table(1)).queryByText(/Za mało osób/)).toBeNull()
   })
 
   it('keeps the uniform plan as it was: no size badge, "N/capacity" counter', async () => {

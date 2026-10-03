@@ -12,6 +12,14 @@ export const MIXED_KEY: PlanKey = 'mixed'
 
 export const isMixed = (scenario: Pick<Scenario, 'key'>): boolean => scenario.key === MIXED_KEY
 
+/** Hard lower bound for a table (glossary "Floor"): 8 guests in the uniform plans, 9 in the mixed one. */
+export const FLOOR = 8
+export const MIXED_FLOOR = 9
+
+/** The one place the floor is decided: it belongs to the plan kind, so callers pass the plan, not a number. */
+export const minTableFill = (scenario: Pick<Scenario, 'key'>): number =>
+  isMixed(scenario) ? MIXED_FLOOR : FLOOR
+
 /** Parses a route parameter ("10", "mixed") into a PlanKey; null when it is not one of the five. */
 export function parsePlanKey(raw: string | undefined): PlanKey | null {
   return PLAN_KEYS.find((key) => key === raw) ?? null

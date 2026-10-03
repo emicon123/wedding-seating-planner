@@ -1,7 +1,7 @@
 import { guestTableMap, sortPlacements } from '@/domain/planView'
 import type { GuestIndex } from '@/domain/guestIndex'
 import { fillStatus, type FillStatus } from '@/domain/tableStatus'
-import type { PlanKind } from '@/domain/plans'
+import { minTableFill, type PlanKind } from '@/domain/plans'
 import { tableSize, type TableSize } from '@/domain/tableSizes'
 import type { ClusterPlacement, Guest, SeatingPlan } from '@/domain/types'
 
@@ -58,7 +58,7 @@ export function buildPrintTables(
       number: table.number,
       fill: table.fill,
       size: tableSize(table.fill, kind),
-      status: fillStatus(table.fill, kind.capacity, plan.tables.length),
+      status: fillStatus(table.fill, kind.capacity, plan.tables.length, minTableFill(kind)),
       clusters: printClusters(table.clusters, index),
     })),
     unseated: printClusters(plan.unseated, index),

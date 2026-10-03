@@ -24,67 +24,104 @@ const neededLine = (name: string): string | null =>
     })
     .map((element) => element.textContent)[0] ?? null
 
-/** The same plan with `count` guests marked as sitting without any acquaintance (satisfaction -1). */
-function withIsolated(plan: SeatingPlan, count: number): SeatingPlan {
+/** Scores for one table where `strangers[i]` is the stranger count of the i-th adult (symmetric by construction). */
+function withStrangers(plan: SeatingPlan, strangers: number[]): SeatingPlan {
   return {
     ...plan,
-    guestScores: Array.from({ length: count }, (_, i) => ({
+    guestScores: strangers.map((strangersAtTable, i) => ({
       guestId: i + 1,
       tableNumber: 1,
-      satisfaction: -1,
-      preferredTotal: 1,
+      satisfaction: 0,
+      preferredTotal: 0,
       preferredAtTable: 0,
       fallbackAtTable: 0,
-      strangersAtTable: 0,
+      strangersAtTable,
     })),
   }
 }
 
-const NOTE = /1 stół więcej niż plan 12/
-
-describe('PlansPage: the mixed card explains its extra table', () => {
-  it('says so when it has one table more than plan 12 and fewer guests without acquaintances', async () => {
+describe('PlansPage: the mixed card chooses its own table count (task 015)', () => {
+  it('has the new subline and no "1 stół więcej" note, whatever the table counts', async () => {
     serveScenarios(
-      fiveScenarios({
-        12: withIsolated(fillsPlan([12, 12]), 3),
-        mixed: withIsolated(fillsPlan([12, 12, 8]), 1),
-      }),
+      fiveScenarios({ 12: fillsPlan([12, 12]), mixed: fillsPlan([12, 12, 9]) }), // one table more than plan 12
     )
     renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan mieszany' })
 
     expect(
       within(card('Plan mieszany')).getByText(
-        '1 stół więcej niż plan 12 — mniej osób bez znajomych (1 zamiast 3)',
+        'Stoły 9–12-osobowe, liczba stołów dobrana pod najlepszy bilans',
       ),
     ).toBeInTheDocument()
-    expect(within(card('Plan na 12 miejsc')).queryByText(NOTE)).toBeNull()
+    expect(screen.queryByText(/stół więcej/)).toBeNull()
   })
 
-  it('stays silent when the extra table does not reduce the isolated guests', async () => {
+  it('keeps "Potrzebne stoły" for the contract example 12 + 9 + 10', async () => {
+    serveScenarios(fiveScenarios())
+    renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan mieszany' })
+
+    expect(neededLine('Plan mieszany')).toBe('Potrzebne stoły: 1 × 12, 1 × 10, 1 × 9 (31 miejsc)')
+  })
+
+  it('counts a table of 8 as under the floor of 9 in the mixed plan only', async () => {
+    const broken = (plan: SeatingPlan): SeatingPlan => ({
+      ...plan,
+      violations: [{ code: 'under_floor', message: 'x', tableNumber: 2, guestIds: [] }],
+      summary: { ...plan.summary, violationCount: 1, needsRecalculation: true },
+    })
     serveScenarios(
-      fiveScenarios({
-        12: withIsolated(fillsPlan([12, 12]), 2),
-        mixed: withIsolated(fillsPlan([12, 12, 8]), 2),
-      }),
+      fiveScenarios({ '12': broken(fillsPlan([12, 8])), mixed: broken(fillsPlan([12, 8])) }),
     )
     renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan mieszany' })
 
-    expect(within(card('Plan mieszany')).queryByText(NOTE)).toBeNull()
+    expect(
+      within(card('Plan mieszany')).getByText('Stół 2 ma za mało osób (minimum 9)'),
+    ).toBeInTheDocument()
+    expect(
+      within(card('Plan na 12 miejsc')).getByText('Stół 2 ma za mało osób (minimum 8)'),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('PlansPage: stranger pairs and bilans on every card (task 015)', () => {
+  it('shows "Pary obcych" and "Bilans" on all five cards, derived from the guest scores', async () => {
+    // 7 pairs = 14 adults' counts; score 42 (the fixture's) - 2 * 7 = 28
+    const withPairs = withStrangers(fillsPlan([8, 8]), [4, 4, 3, 3])
+    serveScenarios(fiveScenarios({ 10: withPairs }))
+    renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    expect(within(card('Plan na 10 miejsc')).getByText('Pary obcych: 7')).toBeInTheDocument()
+    expect(within(card('Plan na 10 miejsc')).getByText('Bilans: 28')).toBeInTheDocument()
+    for (const name of ['Plan na 9 miejsc', 'Plan na 12 miejsc', 'Plan mieszany']) {
+      expect(within(card(name)).getByText('Pary obcych: 0')).toBeInTheDocument()
+      expect(within(card(name)).getByText('Bilans: 42')).toBeInTheDocument()
+    }
   })
 
-  it('stays silent when the table count is the same as plan 12 (also after hand edits)', async () => {
-    serveScenarios(
-      fiveScenarios({
-        12: withIsolated(fillsPlan([12, 12]), 3),
-        mixed: withIsolated(fillsPlan([12, 12]), 1),
-      }),
-    )
+  it('emphasises the bilans on the mixed card only, and explains both figures in a tooltip', async () => {
+    serveScenarios(fiveScenarios())
     renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan mieszany' })
 
-    expect(within(card('Plan mieszany')).queryByText(NOTE)).toBeNull()
+    expect(within(card('Plan mieszany')).getByText('Bilans: 42')).toHaveClass('font-medium')
+    expect(within(card('Plan na 10 miejsc')).getByText('Bilans: 42')).not.toHaveClass('font-medium')
+    expect(
+      within(card('Plan mieszany')).getByTitle(
+        'Zadowolenie minus 2 za każdą parę obcych (każda z dwóch osób traci 1)',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows a negative bilans', async () => {
+    const plan = withStrangers(fillsPlan([8, 8]), [40, 40])
+    serveScenarios(fiveScenarios({ 10: { ...plan, summary: { ...plan.summary, score: 10 } } }))
+    renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    expect(within(card('Plan na 10 miejsc')).getByText('Bilans: -70')).toBeInTheDocument()
   })
 })
 
@@ -108,7 +145,7 @@ describe('PlansPage: compare the five plans', () => {
       'Plan mieszany',
     ])
     expect(within(card('Plan mieszany')).getByText('Mieszany')).toBeInTheDocument()
-    expect(within(card('Plan mieszany')).getByText('Stoły 9–12-osobowe')).toBeInTheDocument()
+    expect(within(card('Plan mieszany')).getByText(/Stoły 9–12-osobowe/)).toBeInTheDocument()
   })
 
   it('says on every card which tables the venue must provide, and how many seats that is', async () => {
@@ -120,7 +157,7 @@ describe('PlansPage: compare the five plans', () => {
     expect(neededLine('Plan na 10 miejsc')).toBe('Potrzebne stoły: 3 × 10 (30 miejsc)')
     expect(neededLine('Plan na 11 miejsc')).toBe('Potrzebne stoły: 2 × 11 (22 miejsca)')
     expect(neededLine('Plan na 12 miejsc')).toBe('Potrzebne stoły: 2 × 12 (24 miejsca)')
-    expect(neededLine('Plan mieszany')).toBe('Potrzebne stoły: 1 × 12, 1 × 11, 1 × 9 (32 miejsca)')
+    expect(neededLine('Plan mieszany')).toBe('Potrzebne stoły: 1 × 12, 1 × 10, 1 × 9 (31 miejsc)')
   })
 
   it('leaves the line out of a plan without tables', async () => {
@@ -270,6 +307,7 @@ describe('PlansPage: Generate stores the plans at once', () => {
     await user.click(screen.getByRole('button', { name: 'Generuj plany' }))
 
     expect(await screen.findByRole('button', { name: 'Liczę i zapisuję plany…' })).toBeDisabled()
+    expect(screen.getByText('To może potrwać kilka sekund.')).toBeInTheDocument()
     hold.open()
     await screen.findByText(barText)
   })

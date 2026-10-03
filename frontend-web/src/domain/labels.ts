@@ -1,6 +1,6 @@
 // Polish copy for every code the server sends (one place, DRY). The server's own `message`
 // is English and for logs only; the UI always maps `code` to these.
-import { MIN_TABLE_FILL, type DropPreview } from '@/domain/dropPreview'
+import type { DropPreview } from '@/domain/dropPreview'
 import type { GuestCounts } from '@/domain/guestList'
 import type { ViaReason } from '@/domain/linkColumns'
 import type { LinkDiff } from '@/domain/linkSelection'
@@ -45,11 +45,11 @@ export const GROUP_TAGLINE: Record<LinkLevel, string> = {
   2: 'ewentualnie',
 }
 
-export function violationLabel(violation: Violation): string {
+export function violationLabel(violation: Violation, floor: number): string {
   const table = violation.tableNumber === null ? 'Stół' : `Stół ${violation.tableNumber}`
   const labels: Record<Violation['code'], string> = {
     over_capacity: `${table} jest przepełniony`,
-    under_floor: `${table} ma za mało osób (minimum ${MIN_TABLE_FILL})`,
+    under_floor: `${table} ma za mało osób (minimum ${floor})`,
     cluster_split: 'Paczka jest rozdzielona między stoły',
     unseated_guests: `${pluralPl(violation.guestIds.length, 'osoba', 'osoby', 'osób')} bez stołu`,
     oversized_cluster: 'Paczka jest za duża na stół w tym planie',
@@ -152,9 +152,14 @@ export function violationCountLabel(count: number): string {
 }
 
 /** A fill counter that breaks a hard rule: shown as text next to an icon, never colour alone. */
-export function fillStatusLabel(status: FillStatus, fill: number, capacity: number): string | null {
+export function fillStatusLabel(
+  status: FillStatus,
+  fill: number,
+  capacity: number,
+  floor: number,
+): string | null {
   if (status === 'over') return `Za dużo osób: ${fill}/${capacity}`
-  if (status === 'under') return `Za mało osób (minimum ${MIN_TABLE_FILL})`
+  if (status === 'under') return `Za mało osób (minimum ${floor})`
   return null
 }
 
@@ -193,16 +198,48 @@ export function tablesNeededSummary(needed: TablesNeeded): string {
   return `Potrzebne stoły: ${tablesNeededLabel(needed)} (${seats})`
 }
 
-/** The calm note on the mixed card when it spends one more table to leave fewer guests alone. */
-export const EXTRA_TABLE_NOTE = (isolatedMixed: number, isolatedTwelve: number) =>
-  `1 stół więcej niż plan 12 — mniej osób bez znajomych (${isolatedMixed} zamiast ${isolatedTwelve})`
+/** Stranger pairs (task 015): adults at one table who do not know each other. */
+export const STRANGER_PAIRS_LABEL = 'Pary obcych'
+export const STRANGER_PAIRS_HINT =
+  'Pary dorosłych przy jednym stole, którzy się nie znają (ani grupa 0, ani 1, ani 2)'
+/** "1 para obcych", "3 pary obcych", "5 par obcych". */
+export const strangerPairsLabel = (count: number) =>
+  `${pluralPl(count, 'para', 'pary', 'par')} obcych`
+export const BILANS_LABEL = 'Bilans'
+export const BILANS_HINT = 'Zadowolenie minus 2 za każdą parę obcych (każda z dwóch osób traci 1)'
+
+/** The line under "Mieszany" on its plan card: the table count is the algorithm's choice. */
+export const MIXED_PLAN_SUBLINE = 'Stoły 9–12-osobowe, liczba stołów dobrana pod najlepszy bilans'
+
+/** Generate now takes several seconds (the mixed plan tries every table count). */
+export const GENERATE_WAIT_HINT = 'To może potrwać kilka sekund.'
+
+// --- missing-links report (task 015) ----------------------------------------------------------
+
+export const familyCountLabel = (count: number) => pluralPl(count, 'rodzina', 'rodziny', 'rodzin')
+
+/** The header of the report: the two counts that matter. */
+export const missingLinksSummary = (none: number, partial: number) =>
+  `Braki powiązań: ${familyCountLabel(none)} bez stołu w gronie znajomych, ${partial} tylko na mniejszy stół`
+export const MISSING_LINKS_ALL_OK = 'Każda rodzina ma grupę znajomych na pełny stół.'
+export const MISSING_LINKS_HELP =
+  'Żeby nikt nie siedział z obcymi, każda rodzina potrzebuje grupy co najmniej 8 osób, w której wszyscy się znają (grupa 0, 1 lub 2). Dopisz powiązania z grup 1/2 z rodzinami, które znają też ich znajomi.'
+export const MISSING_LINKS_MIXED_NOTE = 'Plan mieszany ma minimum 9 osób przy stole.'
+export const knownPeopleLabel = (count: number) => `Zna: ${count} os.`
+export const reachLabel = (count: number) => `Największa grupa znajomych: ${count} os.`
+export const REACH_NONE_BADGE = 'Za mało znajomych na stół (min. 8)'
+export const reachPartialBadge = (reach: number) => `Stół bez obcych najwyżej na ${reach} os.`
+export const REACH_ALONE = 'Nikt — dopisz pierwsze powiązania z grup 1/2'
+export const reachWithLabel = (names: string) => `Razem z: ${names}`
+export const restOkLabel = (count: number) =>
+  `Pozostałe rodziny (${count}): wystarczy znajomych na pełny stół.`
 
 export function preferredHereLabel(count: number): string {
   return count === 0 ? 'Nikogo z grupy 1' : `${pluralPl(count, 'osoba', 'osoby', 'osób')} z grupy 1`
 }
 
-export function sourceUnderFloorLabel(tableNumber: number): string {
-  return `Stół ${tableNumber} będzie miał za mało osób (minimum ${MIN_TABLE_FILL})`
+export function sourceUnderFloorLabel(tableNumber: number, floor: number): string {
+  return `Stół ${tableNumber} będzie miał za mało osób (minimum ${floor})`
 }
 
 export function placeLabel(place: number | 'unseated' | 'disabled'): string {

@@ -3,8 +3,9 @@ import { Link } from 'react-router'
 import { TableGlyph } from '@/components/TableGlyph'
 import { buttonVariants } from '@/components/ui/button'
 import { isolatedCount } from '@/domain/isolation'
-import { EXTRA_TABLE_NOTE } from '@/domain/labels'
-import { isMixed, planHeading, planName } from '@/domain/plans'
+import { MIXED_PLAN_SUBLINE } from '@/domain/labels'
+import { isMixed, minTableFill, planHeading, planName } from '@/domain/plans'
+import { bilans, strangerPairs } from '@/domain/strangers'
 import type { PlanKey, Scenario } from '@/domain/types'
 import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
 import { FillBars } from '@/features/plans/FillBars'
@@ -12,16 +13,6 @@ import { PlanFigures } from '@/features/plans/PlanFigures'
 import { RecalculationBanner } from '@/features/plans/RecalculationBanner'
 import { TablesNeededLine } from '@/features/plans/TablesNeededLine'
 import { cn } from '@/lib/utils'
-
-const extraTableNote = (scenario: Scenario, twelve: Scenario | undefined): string | null => {
-  if (!twelve || !isMixed(scenario)) return null
-  const mixedIsolated = isolatedCount(scenario.plan.guestScores)
-  const twelveIsolated = isolatedCount(twelve.plan.guestScores)
-  const oneMoreTable = scenario.plan.summary.tableCount === twelve.plan.summary.tableCount + 1
-  return oneMoreTable && mixedIsolated < twelveIsolated
-    ? EXTRA_TABLE_NOTE(mixedIsolated, twelveIsolated)
-    : null
-}
 
 function PlanCardHeader({ scenario }: { scenario: Scenario }) {
   const { key, capacity } = scenario
@@ -34,7 +25,7 @@ function PlanCardHeader({ scenario }: { scenario: Scenario }) {
         </span>
         <div>
           <h3 className="font-display text-2xl leading-tight font-semibold">{planName(key)}</h3>
-          <p className="text-sm text-muted-foreground">Stoły 9–12-osobowe</p>
+          <p className="text-sm text-muted-foreground">{MIXED_PLAN_SUBLINE}</p>
         </div>
       </header>
     )
@@ -53,17 +44,14 @@ function PlanCardHeader({ scenario }: { scenario: Scenario }) {
 /** One stored plan on the compare screen: figures, fill bars, the recalculation call to action. */
 export function PlanCard({
   scenario,
-  twelve,
   onDelete,
 }: {
   scenario: Scenario
-  /** The 12-seat plan, for the mixed card's "1 stół więcej" note. */
-  twelve?: Scenario
   onDelete: (key: PlanKey) => void
 }) {
   const { key, capacity, plan } = scenario
   const empty = plan.summary.tableCount === 0
-  const note = extraTableNote(scenario, twelve)
+  const floor = minTableFill(scenario)
   return (
     <article
       aria-label={planHeading(key)}
@@ -74,16 +62,19 @@ export function PlanCard({
     >
       <PlanCardHeader scenario={scenario} />
 
-      <PlanFigures summary={plan.summary} isolated={isolatedCount(plan.guestScores)} />
+      <PlanFigures
+        summary={plan.summary}
+        isolated={isolatedCount(plan.guestScores)}
+        strangerPairs={strangerPairs(plan.guestScores)}
+        bilans={bilans(plan)}
+        bilansEmphasised={isMixed(scenario)}
+      />
       <TablesNeededLine scenario={scenario} />
-      {note && (
-        <p className="rounded-md bg-secondary px-3 py-2 text-sm text-secondary-foreground">
-          {note}
-        </p>
-      )}
-      <FillBars plan={plan} capacity={capacity} />
+      <FillBars plan={plan} capacity={capacity} floor={floor} />
 
-      {plan.summary.needsRecalculation && <RecalculationBanner violations={plan.violations} />}
+      {plan.summary.needsRecalculation && (
+        <RecalculationBanner violations={plan.violations} floor={floor} />
+      )}
 
       <div className="mt-auto flex gap-2">
         <Link to={`/plany/${key}`} className={cn(buttonVariants({ variant: 'outline' }), 'flex-1')}>

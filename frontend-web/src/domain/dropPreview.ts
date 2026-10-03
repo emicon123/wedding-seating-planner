@@ -1,7 +1,5 @@
-import type { Capacity, ClusterOverview, ClusterPlacement, SeatingPlan } from '@/domain/types'
-
-/** Hard lower bound for every table (glossary "Floor"), waived when a plan needs just one table. */
-export const MIN_TABLE_FILL = 8
+import { minTableFill, type PlanKind } from '@/domain/plans'
+import type { ClusterOverview, ClusterPlacement, SeatingPlan } from '@/domain/types'
 
 export type DropPreview = {
   /** Seats taken at the target table if dropped now (0 for the tray). */
@@ -17,13 +15,13 @@ const seats = (cluster: ClusterPlacement) => cluster.guestIds.length
 
 /**
  * What a drop would look like, shown while hovering a table (state machine §3). A display hint
- * only: counts, never scores. Whether the plan really breaks a rule is the server's call.
+ * only: counts, never scores. The floor depends on the plan kind (9 in the mixed plan). Whether the plan really breaks a rule is the server's call.
  */
 export function dropPreview(
   plan: SeatingPlan,
   cluster: ClusterPlacement,
   toTable: number | null,
-  capacity: Capacity,
+  kind: PlanKind,
   overview: ClusterOverview,
 ): DropPreview {
   const source = plan.tables.find((table) =>
@@ -34,7 +32,7 @@ export function dropPreview(
 
   const leavesSource = source !== undefined && source.number !== toTable
   const underFloorSource =
-    leavesSource && plan.tables.length > 1 && source.fill - seats(cluster) < MIN_TABLE_FILL
+    leavesSource && plan.tables.length > 1 && source.fill - seats(cluster) < minTableFill(kind)
 
   if (!target) return { fillAfter: 0, overCapacity: false, underFloorSource, preferredHere: 0 }
 
@@ -50,5 +48,5 @@ export function dropPreview(
     .filter((c) => liked.has(c.clusterKey))
     .reduce((sum, c) => sum + seats(c), 0)
 
-  return { fillAfter, overCapacity: fillAfter > capacity, underFloorSource, preferredHere }
+  return { fillAfter, overCapacity: fillAfter > kind.capacity, underFloorSource, preferredHere }
 }

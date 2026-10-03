@@ -1,6 +1,7 @@
 import {
   isMixed,
   isRetiredPlanKey,
+  minTableFill,
   parsePlanKey,
   PLAN_KEYS,
   planHeading,
@@ -46,5 +47,14 @@ describe('plan names', () => {
   it('knows the mixed plan', () => {
     expect(isMixed({ key: 'mixed' })).toBe(true)
     expect(isMixed({ key: '12' })).toBe(false)
+  })
+})
+
+describe('minTableFill', () => {
+  it('is 9 in the mixed plan and 8 in every uniform plan', () => {
+    expect(minTableFill({ key: 'mixed' })).toBe(9)
+    expect(PLAN_KEYS.filter((key) => key !== 'mixed').map((key) => minTableFill({ key }))).toEqual([
+      8, 8, 8, 8,
+    ])
   })
 })

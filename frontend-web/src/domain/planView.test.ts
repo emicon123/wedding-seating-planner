@@ -21,7 +21,17 @@ describe('fillStatus', () => {
     [0, 10, 3, 'under'],
     [5, 10, 1, 'ok'], // the floor is waived when the plan needs a single table
   ] as const)('fill %i of %i with %i tables is %s', (fill, capacity, tables, expected) => {
-    expect(fillStatus(fill, capacity, tables)).toBe(expected)
+    expect(fillStatus(fill, capacity, tables, 8)).toBe(expected)
+  })
+
+  it.each([
+    [8, 3, 'under'], // the mixed plan's floor is 9
+    [9, 3, 'ok'],
+    [12, 3, 'ok'],
+    [13, 3, 'over'],
+    [8, 1, 'ok'], // waived for a single table
+  ] as const)('mixed plan (floor 9): fill %i with %i tables is %s', (fill, tables, expected) => {
+    expect(fillStatus(fill, 12, tables, 9)).toBe(expected)
   })
 })
 

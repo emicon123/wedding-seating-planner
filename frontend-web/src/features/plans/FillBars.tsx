@@ -1,5 +1,4 @@
 import { useId } from 'react'
-import { MIN_TABLE_FILL } from '@/domain/dropPreview'
 import { fillStatus } from '@/domain/tableStatus'
 import type { Capacity, SeatingPlan } from '@/domain/types'
 
@@ -9,14 +8,14 @@ const HEIGHT = 56
 const LABEL_ROOM = 16
 const SVG_HEIGHT = HEIGHT + LABEL_ROOM + 10
 
-type FillBarsProps = { plan: SeatingPlan; capacity: Capacity }
+type FillBarsProps = { plan: SeatingPlan; capacity: Capacity; floor: number }
 
 /**
  * One bar per table, as tall as the table is full. Rule breaks are drawn, not just coloured:
  * an over-full table gets a hatched, full bar with a "!" above it; an under-floor table a
- * dashed outline. The dashed line across is the floor (8 guests). The numbers are the fills.
+ * dashed outline. The dashed line across is the floor (`floor` guests: 8, or 9 in the mixed plan). The numbers are the fills.
  */
-export function FillBars({ plan, capacity }: FillBarsProps) {
+export function FillBars({ plan, capacity, floor }: FillBarsProps) {
   const hatchId = useId()
   const count = plan.tables.length
   if (count === 0) {
@@ -24,7 +23,7 @@ export function FillBars({ plan, capacity }: FillBarsProps) {
   }
 
   const width = count * SLOT - (SLOT - BAR)
-  const floorY = SVG_HEIGHT - LABEL_ROOM - (Math.min(MIN_TABLE_FILL, capacity) / capacity) * HEIGHT
+  const floorY = SVG_HEIGHT - LABEL_ROOM - (Math.min(floor, capacity) / capacity) * HEIGHT
   const summary = plan.tables.map((table) => table.fill).join(', ')
 
   return (
@@ -60,7 +59,7 @@ export function FillBars({ plan, capacity }: FillBarsProps) {
         />
       )}
       {plan.tables.map((table, index) => {
-        const status = fillStatus(table.fill, capacity, count)
+        const status = fillStatus(table.fill, capacity, count, floor)
         const x = index * SLOT
         const bottom = SVG_HEIGHT - LABEL_ROOM
         const barHeight = Math.max(Math.min(table.fill / capacity, 1) * HEIGHT, 1.5)

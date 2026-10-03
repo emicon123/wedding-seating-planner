@@ -105,7 +105,7 @@ export function useClusterDrag({ plan, kind, overview, nameOf, onMove }: Options
       plan,
       location.cluster,
       target.kind === 'table' ? target.number : null,
-      kind.capacity,
+      kind,
       overview ?? NO_OVERVIEW,
     )
 
@@ -117,13 +117,13 @@ export function useClusterDrag({ plan, kind, overview, nameOf, onMove }: Options
         plan,
         activeLocation.cluster,
         over.number,
-        kind.capacity,
+        kind,
         overview ?? NO_OVERVIEW,
       ),
       sameTable,
       sourceNumber: sameTable ? null : activeLocation.table,
     }
-  }, [activeLocation, over, plan, kind.capacity, overview])
+  }, [activeLocation, over, plan, kind, overview])
 
   const locationOf = (id: string | number): Located | undefined => {
     const key = String(id).replace(/^cluster-/, '')

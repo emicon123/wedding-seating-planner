@@ -21,14 +21,19 @@ import { guestDetails, placeOf } from '@/domain/guestDetails'
 import { buildGuestIndex } from '@/domain/guestIndex'
 import { isolatedCount } from '@/domain/isolation'
 import {
+  BILANS_HINT,
+  BILANS_LABEL,
   ISOLATED_LABEL,
   peopleLabel,
   scoreLabel,
+  STRANGER_PAIRS_HINT,
+  STRANGER_PAIRS_LABEL,
   tableCountLabel,
   violationCountLabel,
 } from '@/domain/labels'
-import { planHeading, planTitle } from '@/domain/plans'
+import { minTableFill, planHeading, planTitle } from '@/domain/plans'
 import { guestTableMap } from '@/domain/planView'
+import { bilans, strangerPairs } from '@/domain/strangers'
 import type { ClusterOverview, ClusterPlacement, Guest, PlanKey } from '@/domain/types'
 import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
 import { DeletePlanDialog } from '@/features/plans/DeletePlanDialog'
@@ -313,6 +318,16 @@ export function PlanDetailPage({ planKey }: { planKey: PlanKey }) {
                 <dd className="font-semibold">{isolatedCount(plan.guestScores)} os.</dd>
               </div>
             )}
+            <div className="flex gap-1.5" title={STRANGER_PAIRS_HINT}>
+              <dt className="text-muted-foreground">{STRANGER_PAIRS_LABEL}</dt>
+              <dd className="font-semibold">
+                {saving ? '…' : scoreLabel(strangerPairs(plan.guestScores))}
+              </dd>
+            </div>
+            <div className="flex gap-1.5" title={BILANS_HINT}>
+              <dt className="text-muted-foreground">{BILANS_LABEL}</dt>
+              <dd className="font-semibold">{saving ? '…' : scoreLabel(bilans(plan))}</dd>
+            </div>
             <div className="flex gap-1.5">
               <dt className="text-muted-foreground">Naruszenia</dt>
               <dd className="font-semibold">
@@ -324,7 +339,7 @@ export function PlanDetailPage({ planKey }: { planKey: PlanKey }) {
           <TablesNeededLine scenario={scenario} />
 
           {!saving && plan.summary.needsRecalculation && (
-            <RecalculationBanner violations={plan.violations} />
+            <RecalculationBanner violations={plan.violations} floor={minTableFill(scenario)} />
           )}
 
           <div className="flex flex-wrap items-center gap-2">

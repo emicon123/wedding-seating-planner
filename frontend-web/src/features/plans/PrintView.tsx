@@ -7,7 +7,7 @@ import { useScenarios } from '@/api/scenarios'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { buildGuestIndex } from '@/domain/guestIndex'
 import { peopleLabel, tableCountLabel, tablesNeededSummary, violationLabel } from '@/domain/labels'
-import { isMixed } from '@/domain/plans'
+import { isMixed, minTableFill } from '@/domain/plans'
 import { buildNameIndex, buildPrintTables } from '@/domain/printPlan'
 import { tablesNeeded } from '@/domain/tableSizes'
 import type { Guest, PlanKey, Scenario } from '@/domain/types'
@@ -62,7 +62,7 @@ function ProblemsNotice({ scenario }: { scenario: Scenario }) {
       <p>Możesz go wydrukować, ale wydruk będzie zawierał te same braki:</p>
       <ul className="list-disc space-y-0.5 pl-5">
         {shown.map((violation, index) => (
-          <li key={index}>{violationLabel(violation)}</li>
+          <li key={index}>{violationLabel(violation, minTableFill(scenario))}</li>
         ))}
         {more > 0 && <li>i jeszcze {more}</li>}
       </ul>
