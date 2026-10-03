@@ -399,7 +399,10 @@ export interface components {
             readonly displayName: string;
             /** @example wegetarianin */
             notes: string;
-            /** @example false */
+            /**
+             * @description A child takes a seat like any guest (fill, capacity, floor of 8, cluster integrity) but is not scored: a child's satisfaction is 0, a child at the table adds nothing to anyone's satisfaction, and a child is never isolated (task 014).
+             * @example false
+             */
             isChild: boolean;
             /**
              * @description Disabled guests stay on the list but are ignored by all five plans.
@@ -663,7 +666,7 @@ export interface components {
             /** @example 0 */
             unseatedCount: number;
             /**
-             * @description Sum of the table scores (a whole number; negative possible).
+             * @description Sum of the table scores (a whole number; negative possible): adults' satisfaction only, children are not scored (task 014). Not comparable with scores from before 2026-10-03 (task 014), which included children.
              * @example 318
              */
             score: number;
@@ -705,7 +708,7 @@ export interface components {
              */
             fill: number;
             /**
-             * @description Sum of the guests' satisfaction (a whole number; negative possible).
+             * @description Sum of the guests' satisfaction (a whole number; negative possible). Only adults contribute: children's satisfaction is 0 (task 014).
              * @example 21
              */
             score: number;
@@ -723,20 +726,29 @@ export interface components {
              */
             tableNumber: number | null;
             /**
-             * @description Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5), minus 1 when the guest is isolated: seated, with at least one enabled group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests.
+             * @description For an adult: Σ w(affinity) over enabled ADULT table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5; children at the table add nothing), minus 1 when the guest is isolated: seated, with at least one enabled adult group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests. Always 0 for a child (`Guest.isChild`, task 014): children are not scored and never isolated.
              * @example 5.5
              */
             satisfaction: number;
             /**
-             * @description Enabled effective group-1 companions in the whole guest list.
+             * @description Enabled adult effective group-1 companions in the whole guest list (children are not counted, task 014). 0 for a child.
              * @example 20
              */
             preferredTotal: number;
-            /** @example 5 */
+            /**
+             * @description Enabled adult group-1 companions at the guest's table. 0 for a child.
+             * @example 5
+             */
             preferredAtTable: number;
-            /** @example 1 */
+            /**
+             * @description Enabled adult group-2 companions at the guest's table. 0 for a child.
+             * @example 1
+             */
             fallbackAtTable: number;
-            /** @example 0 */
+            /**
+             * @description Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child.
+             * @example 0
+             */
             strangersAtTable: number;
         };
         Violation: {
@@ -758,7 +770,7 @@ export interface components {
             tables: components["schemas"]["PlanTable"][];
             /** @description Clusters with at least one enabled member and no table. */
             unseated: components["schemas"]["ClusterPlacement"][];
-            /** @description One entry per enabled guest. */
+            /** @description One entry per enabled guest, children included (a child's entry has tableNumber as for anyone else and 0 in every number). */
             guestScores: components["schemas"]["GuestScore"][];
             violations: components["schemas"]["Violation"][];
         };

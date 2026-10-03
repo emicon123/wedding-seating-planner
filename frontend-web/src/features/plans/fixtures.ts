@@ -138,6 +138,27 @@ export function detailScenario(): Scenario {
 }
 
 /**
+ * Task 014: the detail plan with Zosia as a child. She sits at table 1 with Maciek and Karolina
+ * (both without acquaintances there) but is not scored: her `GuestScore` is all zeros, and the
+ * adults' strangers count excludes her.
+ */
+export function detailScenarioWithChild(): Scenario {
+  const base = detailScenario()
+  const guestScores = base.plan.guestScores.map((entry) =>
+    entry.guestId === 8
+      ? score(8, 1)
+      : entry.guestId === 4 || entry.guestId === 5
+        ? { ...entry, strangersAtTable: 0 }
+        : entry,
+  )
+  return { ...base, plan: { ...base.plan, guestScores } }
+}
+
+/** The detail guest list with Zosia marked as a child. */
+export const detailGuestsWithChild = (): Guest[] =>
+  DETAIL_GUESTS.map((guest) => (guest.id === ZOSIA.id ? { ...guest, isChild: true } : guest))
+
+/**
  * The mixed plan in the detail fixture: table 1 has 10 guests (Maciek's paczka and eight guests
  * the guest list does not name), table 2 has Michał and Ola, table 3 is empty.
  */

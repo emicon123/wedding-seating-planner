@@ -22,4 +22,12 @@ describe('PlanFigures: isolated guests', () => {
 
     expect(screen.getByText('Zadowolenie').nextSibling).toHaveTextContent(/^[-−]3$/)
   })
+
+  it('explains in a tooltip that the score sums adults only', () => {
+    render(<PlanFigures summary={summary} />)
+
+    expect(screen.getByTitle('Suma zadowolenia dorosłych — dzieci się nie liczą')).toContainElement(
+      screen.getByText('Zadowolenie'),
+    )
+  })
 })

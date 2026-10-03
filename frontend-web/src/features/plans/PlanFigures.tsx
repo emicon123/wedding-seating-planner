@@ -1,18 +1,26 @@
 import { CircleCheckIcon, TriangleAlertIcon, UserXIcon } from 'lucide-react'
-import { ISOLATED_LABEL, peopleLabel, scoreLabel, violationCountLabel } from '@/domain/labels'
+import {
+  ISOLATED_LABEL,
+  peopleLabel,
+  SCORE_ADULTS_HINT,
+  scoreLabel,
+  violationCountLabel,
+} from '@/domain/labels'
 import type { PlanSummary } from '@/domain/types'
 import { cn } from '@/lib/utils'
 
 type FigureProps = {
   label: string
   value: string
+  /** Tooltip explaining the number. */
+  hint?: string
   tone?: 'bad'
   icon?: React.ReactNode
 }
 
-function Figure({ label, value, tone, icon }: FigureProps) {
+function Figure({ label, value, hint, tone, icon }: FigureProps) {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" title={hint}>
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd
         className={cn(
@@ -40,7 +48,7 @@ export function PlanFigures({ summary, isolated = 0 }: PlanFiguresProps) {
     <div className="space-y-2">
       <dl className="grid grid-cols-3 gap-2">
         <Figure label="Stoły" value={String(summary.tableCount)} />
-        <Figure label="Zadowolenie" value={scoreLabel(summary.score)} />
+        <Figure label="Zadowolenie" value={scoreLabel(summary.score)} hint={SCORE_ADULTS_HINT} />
         <Figure
           label="Naruszenia"
           value={String(summary.violationCount)}

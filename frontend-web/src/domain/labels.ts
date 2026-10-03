@@ -227,6 +227,12 @@ export const UNDO_REFUSED_MESSAGE = 'Nie można cofnąć — plany zmieniono po 
 export const ISOLATED_LABEL = 'Bez znajomych przy stole'
 export const ISOLATED_HINT = 'nikt z grup 1 i 2 tu nie siedzi'
 
+/** Children (task 014) take a seat but are not scored: the server sends them all-zero scores. */
+export const CHILD_NOT_SCORED =
+  'Dziecko — nie wlicza się do zadowolenia (zajmuje miejsce przy stole).'
+export const STRANGERS_ADULTS_LABEL = 'Obcych dorosłych przy stole'
+export const SCORE_ADULTS_HINT = 'Suma zadowolenia dorosłych — dzieci się nie liczą'
+
 /**
  * A score the way the server computed it. Table and plan scores are whole numbers and can be
  * negative (a "-3" is fine: isolated guests cost 1 each); only a single guest's satisfaction can

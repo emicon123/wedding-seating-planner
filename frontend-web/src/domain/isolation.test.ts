@@ -35,4 +35,11 @@ describe('isolatedCount', () => {
   it('is 0 for an empty list', () => {
     expect(isolatedCount([])).toBe(0)
   })
+
+  it('ignores a child: its all-zero score is never isolated, even at a table of strangers', () => {
+    const child = { ...score(9, 0), strangersAtTable: 6 }
+
+    expect(isIsolated(child)).toBe(false)
+    expect(isolatedCount([score(1, -1), child, score(3, -1)])).toBe(2)
+  })
 })

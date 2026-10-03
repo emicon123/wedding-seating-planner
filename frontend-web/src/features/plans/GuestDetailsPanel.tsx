@@ -3,7 +3,15 @@ import { GroupMark } from '@/components/GroupMark'
 import { Button } from '@/components/ui/button'
 import type { CompanionRow, GuestDetails } from '@/domain/guestDetails'
 import { isIsolated } from '@/domain/isolation'
-import { ISOLATED_HINT, ISOLATED_LABEL, peopleLabel, placeLabel, viaLabel } from '@/domain/labels'
+import {
+  CHILD_NOT_SCORED,
+  ISOLATED_HINT,
+  ISOLATED_LABEL,
+  peopleLabel,
+  placeLabel,
+  STRANGERS_ADULTS_LABEL,
+  viaLabel,
+} from '@/domain/labels'
 import type { LinkLevel } from '@/domain/types'
 import { cn } from '@/lib/utils'
 
@@ -37,6 +45,13 @@ function Dots({ filled, total }: { filled: number; total: number }) {
 function Satisfaction({ details }: { details: GuestDetails }) {
   const { score } = details
   if (!score) return null
+  if (details.guest.isChild) {
+    return (
+      <p className="rounded-lg border bg-background p-2.5 text-sm text-muted-foreground">
+        {CHILD_NOT_SCORED}
+      </p>
+    )
+  }
   return (
     <div className="space-y-1.5 rounded-lg border bg-background p-2.5 text-sm">
       {isIsolated(score) && (
@@ -63,7 +78,9 @@ function Satisfaction({ details }: { details: GuestDetails }) {
           <span className="text-muted-foreground">(tylko awaryjnie)</span>
         </p>
       )}
-      <p className="text-muted-foreground">Obcych przy stole: {score.strangersAtTable}</p>
+      <p className="text-muted-foreground">
+        {STRANGERS_ADULTS_LABEL}: {score.strangersAtTable}
+      </p>
     </div>
   )
 }

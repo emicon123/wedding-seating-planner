@@ -55,4 +55,11 @@ describe('GuestScoreMark: "Bez znajomych przy stole"', () => {
 
     expect(container).toBeEmptyDOMElement()
   })
+
+  it('renders no mark and no badge for a child (all-zero score, task 014)', () => {
+    const { container } = render(<GuestScoreMark score={score({ tableNumber: 3 })} />)
+
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByText('Bez znajomych przy stole')).toBeNull()
+  })
 })

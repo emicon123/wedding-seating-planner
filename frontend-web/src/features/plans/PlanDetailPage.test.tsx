@@ -1,7 +1,9 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { PlanDetailPage } from '@/features/plans/PlanDetailPage'
 import {
+  detailGuestsWithChild,
   detailScenario,
+  detailScenarioWithChild,
   mixedDetailPlan,
   serveDetail,
   serveGenerateFlow,
@@ -11,7 +13,7 @@ import type { PlanTable, Scenario } from '@/domain/types'
 import { makePlan, makeScenario, placement, withoutViolations } from '@/test/builders'
 import { renderPage } from '@/test/renderPage'
 import { http } from 'msw'
-import { apiUrl, failure, gate, HttpResponse, mockApi, single, server } from '@/test/server'
+import { apiUrl, failure, gate, HttpResponse, list, mockApi, single, server } from '@/test/server'
 
 const table = (number: number) => screen.getByRole('region', { name: `Stół ${number}` })
 const chip = (names: string) =>
@@ -94,6 +96,45 @@ describe('PlanDetailPage: the hall (read)', () => {
     expect(
       within(panel).getByText('Bez znajomych przy stole — nikt z grup 1 i 2 tu nie siedzi.'),
     ).toBeInTheDocument()
+  })
+
+  describe('children are not scored (task 014)', () => {
+    async function renderWithChild(path: string) {
+      serveDetail(detailScenarioWithChild())
+      server.use(
+        http.get(apiUrl('/guests'), () => HttpResponse.json(list(detailGuestsWithChild()))),
+      )
+      renderPage(<PlanDetailPage planKey="10" />, path)
+      await screen.findByRole('region', { name: 'Stół 1' })
+    }
+
+    it('shows the child line instead of the satisfaction block, with no mark or badge on the chip', async () => {
+      await renderWithChild('/plany/10?guest=8')
+
+      const panel = screen.getByRole('region', { name: 'Szczegóły: Zosia' })
+      expect(
+        within(panel).getByText(
+          'Dziecko — nie wlicza się do zadowolenia (zajmuje miejsce przy stole).',
+        ),
+      ).toBeInTheDocument()
+      expect(within(panel).queryByText(/Ten gość nie ma preferowanych osób/)).toBeNull()
+      expect(within(panel).queryByText(/Obcych/)).toBeNull()
+      expect(within(panel).queryByText(/Bez znajomych przy stole/)).toBeNull()
+      const zosia = chip('Zosia') as HTMLElement
+      expect(within(zosia).queryByText('Bez znajomych przy stole')).toBeNull()
+      expect(within(zosia).queryByText(/preferowanych osób/)).toBeNull()
+    })
+
+    it('counts adults only: the plan header ignores the child at a table of strangers', async () => {
+      await renderWithChild('/plany/10?guest=4')
+
+      expect(screen.getByText('2 os.').previousSibling).toHaveTextContent(
+        'Bez znajomych przy stole',
+      )
+      const panel = screen.getByRole('region', { name: 'Szczegóły: Maciek' })
+      expect(within(panel).getByText('Obcych dorosłych przy stole: 0')).toBeInTheDocument()
+      expect(within(panel).queryByText(/^Obcych przy stole/)).toBeNull()
+    })
   })
 
   it('flags an over-full and an under-floor table with icon and text, not colour alone', async () => {
