@@ -12,9 +12,11 @@ type Table struct {
 	Seats  []Seat
 }
 
-// Plan is the seating of one scenario: every table has the same Capacity
-// (8, 10 or 12). Tables are ordered 1..k.
+// Plan is the seating of one scenario: at most Capacity guests per table (9, 10, 11 or 12).
+// Mixed marks the mixed plan (Capacity 12, tables of 9-12 seats whose size follows their fill);
+// it only changes how Propose picks the table count, Evaluate ignores it. Tables are ordered 1..k.
 type Plan struct {
 	Capacity int
+	Mixed    bool
 	Tables   []Table
 }

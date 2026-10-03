@@ -219,6 +219,33 @@ func (e LinkLevel) Valid() bool {
 	}
 }
 
+// Defines values for PlanKey.
+const (
+	Mixed   PlanKey = "mixed"
+	Seats10 PlanKey = "10"
+	Seats11 PlanKey = "11"
+	Seats12 PlanKey = "12"
+	Seats9  PlanKey = "9"
+)
+
+// Valid indicates whether the value is a known member of the PlanKey enum.
+func (e PlanKey) Valid() bool {
+	switch e {
+	case Mixed:
+		return true
+	case Seats10:
+		return true
+	case Seats11:
+		return true
+	case Seats12:
+		return true
+	case Seats9:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ViolationCode.
 const (
 	ClusterSplit     ViolationCode = "cluster_split"
@@ -252,7 +279,11 @@ type AssignmentSet struct {
 	TableNumber int  `json:"tableNumber"`
 }
 
-// Capacity Seats per table; identifies one of the four plans.
+// Capacity Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
+// exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
+// 9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
+// no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+// `PlanTable.fill`; no size is stored or sent.
 type Capacity int
 
 // Cluster Connected component of group-0 links over ALL guests (derived, never stored).
@@ -344,7 +375,7 @@ type Guest struct {
 	// DisplayName firstName + optional " " + lastName; unique ignoring case.
 	DisplayName *string `json:"displayName,omitempty"`
 
-	// Enabled Disabled guests stay on the list but are ignored by all four plans.
+	// Enabled Disabled guests stay on the list but are ignored by all five plans.
 	Enabled   bool                      `json:"enabled"`
 	FirstName string                    `json:"firstName"`
 	Id        *int64                    `json:"id,omitempty"`
@@ -435,7 +466,7 @@ type GuestScore struct {
 	// PreferredTotal Enabled effective group-1 companions in the whole guest list.
 	PreferredTotal int `json:"preferredTotal"`
 
-	// Satisfaction Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5).
+	// Satisfaction Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5), minus 1 when the guest is isolated: seated, with at least one enabled group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests.
 	Satisfaction     float32 `json:"satisfaction"`
 	StrangersAtTable int     `json:"strangersAtTable"`
 
@@ -531,29 +562,37 @@ type Page struct {
 	Total *int `json:"total,omitempty"`
 }
 
+// PlanKey Identity of one of the five permanent plans, always listed in this order: the uniform plans
+// `9`, `10`, `11`, `12` (every table has that many seats) and `mixed` ("Mieszany": tables of 9–12
+// seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
+type PlanKey string
+
 // PlanSummary defines model for PlanSummary.
 type PlanSummary struct {
 	// NeedsRecalculation True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
 	// cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
 	// cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
 	// regenerates on its own. False for a freshly generated plan without violations.
-	NeedsRecalculation bool    `json:"needsRecalculation"`
-	Score              float32 `json:"score"`
-	SeatedCount        int     `json:"seatedCount"`
-	TableCount         int     `json:"tableCount"`
-	UnseatedCount      int     `json:"unseatedCount"`
-	ViolationCount     int     `json:"violationCount"`
+	NeedsRecalculation bool `json:"needsRecalculation"`
+
+	// Score Sum of the table scores (a whole number; negative possible).
+	Score          float32 `json:"score"`
+	SeatedCount    int     `json:"seatedCount"`
+	TableCount     int     `json:"tableCount"`
+	UnseatedCount  int     `json:"unseatedCount"`
+	ViolationCount int     `json:"violationCount"`
 }
 
 // PlanTable defines model for PlanTable.
 type PlanTable struct {
 	Clusters []ClusterPlacement `json:"clusters"`
 
-	// Fill Enabled guests at the table.
+	// Fill Enabled guests at the table. In the mixed plan it also gives the table's size (see
+	// `Capacity`): the client derives it, nothing else is sent.
 	Fill   int `json:"fill"`
 	Number int `json:"number"`
 
-	// Score Sum of the guests' satisfaction.
+	// Score Sum of the guests' satisfaction (a whole number; negative possible).
 	Score float32 `json:"score"`
 }
 
@@ -563,8 +602,17 @@ type Proposal struct {
 	// BasedOnVersion Scenario version the proposal was computed from.
 	BasedOnVersion int `json:"basedOnVersion"`
 
-	// Capacity Seats per table; identifies one of the four plans.
+	// Capacity Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
+	// exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
+	// 9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
+	// no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+	// `PlanTable.fill`; no size is stored or sent.
 	Capacity Capacity `json:"capacity"`
+
+	// Key Identity of one of the five permanent plans, always listed in this order: the uniform plans
+	// `9`, `10`, `11`, `12` (every table has that many seats) and `mixed` ("Mieszany": tables of 9–12
+	// seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
+	Key PlanKey `json:"key"`
 
 	// Plan Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
 	Plan SeatingPlan `json:"plan"`
@@ -572,7 +620,7 @@ type Proposal struct {
 
 // ProposalListResponse defines model for ProposalListResponse.
 type ProposalListResponse struct {
-	// Data Always exactly four proposals, ordered 9, 10, 11, 12.
+	// Data Always exactly five proposals, ordered 9, 10, 11, 12, mixed.
 	Data []Proposal `json:"data"`
 
 	// Meta Response metadata.
@@ -584,8 +632,17 @@ type ProposalListResponse struct {
 
 // Scenario defines model for Scenario.
 type Scenario struct {
-	// Capacity Seats per table; identifies one of the four plans.
+	// Capacity Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
+	// exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
+	// 9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
+	// no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+	// `PlanTable.fill`; no size is stored or sent.
 	Capacity Capacity `json:"capacity"`
+
+	// Key Identity of one of the five permanent plans, always listed in this order: the uniform plans
+	// `9`, `10`, `11`, `12` (every table has that many seats) and `mixed` ("Mieszany": tables of 9–12
+	// seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
+	Key PlanKey `json:"key"`
 
 	// Plan Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
 	Plan    SeatingPlan `json:"plan"`
@@ -597,8 +654,10 @@ type ScenarioLayout struct {
 	// BasedOnVersion The stored version this layout replaces (optimistic lock).
 	BasedOnVersion int `json:"basedOnVersion"`
 
-	// Capacity Seats per table; identifies one of the four plans.
-	Capacity Capacity `json:"capacity"`
+	// Key Identity of one of the five permanent plans, always listed in this order: the uniform plans
+	// `9`, `10`, `11`, `12` (every table has that many seats) and `mixed` ("Mieszany": tables of 9–12
+	// seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
+	Key PlanKey `json:"key"`
 
 	// Tables Tables 1..k without gaps; `[]` = empty plan.
 	Tables []TableLayout `json:"tables"`
@@ -623,7 +682,7 @@ type ScenarioResponse struct {
 	Meta Meta `json:"meta"`
 }
 
-// ScenariosReplace All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+// ScenariosReplace All five plans, each key (9, 10, 11, 12, mixed) exactly once, in any order. Stored atomically
 // by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
 type ScenariosReplace struct {
 	Plans []ScenarioLayout `json:"plans"`
@@ -731,7 +790,7 @@ type UnprocessableEntity = ErrorResponse
 // ImportGuestsParams defines parameters for ImportGuests.
 type ImportGuestsParams struct {
 	// DryRun `true` (default) only validates and returns the report. `false` commits:
-	// replaces ALL guests and links and clears all four plans.
+	// replaces ALL guests and links and clears all five plans.
 	DryRun *DryRun `form:"dryRun,omitempty" json:"dryRun,omitempty"`
 }
 
@@ -788,30 +847,30 @@ type ServerInterface interface {
 	// GetHealth Liveness check (DB reachable)
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
-	// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
+	// ListScenarios The five plans (9, 10, 11, 12, mixed) with their evaluations (UC-09, UC-14)
 	// (GET /scenarios)
 	ListScenarios(w http.ResponseWriter, r *http.Request)
-	// ReplaceScenarios Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+	// ReplaceScenarios Replace all five plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
 	// (PUT /scenarios)
 	ReplaceScenarios(w http.ResponseWriter, r *http.Request)
-	// CalculateProposals Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
+	// CalculateProposals Compute proposals for all five plans — step 1 of "Generuj plany" (UC-10)
 	// (POST /scenarios/calculate)
 	CalculateProposals(w http.ResponseWriter, r *http.Request)
 	// DeleteAssignment Move the guest's whole cluster back to the unseated tray (UC-11)
-	// (DELETE /scenarios/{capacity}/assignments/{guestId})
-	DeleteAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId)
+	// (DELETE /scenarios/{planKey}/assignments/{guestId})
+	DeleteAssignment(w http.ResponseWriter, r *http.Request, planKey PlanKey, guestId GuestId)
 	// SetAssignment Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
-	// (PUT /scenarios/{capacity}/assignments/{guestId})
-	SetAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId)
+	// (PUT /scenarios/{planKey}/assignments/{guestId})
+	SetAssignment(w http.ResponseWriter, r *http.Request, planKey PlanKey, guestId GuestId)
 	// ResetPlan Delete a plan — remove all its tables, assignments and pins (UC-17)
-	// (DELETE /scenarios/{capacity}/tables)
-	ResetPlan(w http.ResponseWriter, r *http.Request, capacity Capacity)
+	// (DELETE /scenarios/{planKey}/tables)
+	ResetPlan(w http.ResponseWriter, r *http.Request, planKey PlanKey)
 	// AddTable Add an empty table at the end of a plan (UC-13)
-	// (POST /scenarios/{capacity}/tables)
-	AddTable(w http.ResponseWriter, r *http.Request, capacity Capacity)
+	// (POST /scenarios/{planKey}/tables)
+	AddTable(w http.ResponseWriter, r *http.Request, planKey PlanKey)
 	// DeleteTable Remove a table from a plan (UC-13)
-	// (DELETE /scenarios/{capacity}/tables/{tableNumber})
-	DeleteTable(w http.ResponseWriter, r *http.Request, capacity Capacity, tableNumber TableNumber)
+	// (DELETE /scenarios/{planKey}/tables/{tableNumber})
+	DeleteTable(w http.ResponseWriter, r *http.Request, planKey PlanKey, tableNumber TableNumber)
 	// DeleteSession Log out ("Wyloguj")
 	// (DELETE /session)
 	DeleteSession(w http.ResponseWriter, r *http.Request)
@@ -887,51 +946,51 @@ func (_ Unimplemented) GetHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
+// ListScenarios The five plans (9, 10, 11, 12, mixed) with their evaluations (UC-09, UC-14)
 // (GET /scenarios)
 func (_ Unimplemented) ListScenarios(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// ReplaceScenarios Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+// ReplaceScenarios Replace all five plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
 // (PUT /scenarios)
 func (_ Unimplemented) ReplaceScenarios(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// CalculateProposals Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
+// CalculateProposals Compute proposals for all five plans — step 1 of "Generuj plany" (UC-10)
 // (POST /scenarios/calculate)
 func (_ Unimplemented) CalculateProposals(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // DeleteAssignment Move the guest's whole cluster back to the unseated tray (UC-11)
-// (DELETE /scenarios/{capacity}/assignments/{guestId})
-func (_ Unimplemented) DeleteAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId) {
+// (DELETE /scenarios/{planKey}/assignments/{guestId})
+func (_ Unimplemented) DeleteAssignment(w http.ResponseWriter, r *http.Request, planKey PlanKey, guestId GuestId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // SetAssignment Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
-// (PUT /scenarios/{capacity}/assignments/{guestId})
-func (_ Unimplemented) SetAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId) {
+// (PUT /scenarios/{planKey}/assignments/{guestId})
+func (_ Unimplemented) SetAssignment(w http.ResponseWriter, r *http.Request, planKey PlanKey, guestId GuestId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // ResetPlan Delete a plan — remove all its tables, assignments and pins (UC-17)
-// (DELETE /scenarios/{capacity}/tables)
-func (_ Unimplemented) ResetPlan(w http.ResponseWriter, r *http.Request, capacity Capacity) {
+// (DELETE /scenarios/{planKey}/tables)
+func (_ Unimplemented) ResetPlan(w http.ResponseWriter, r *http.Request, planKey PlanKey) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // AddTable Add an empty table at the end of a plan (UC-13)
-// (POST /scenarios/{capacity}/tables)
-func (_ Unimplemented) AddTable(w http.ResponseWriter, r *http.Request, capacity Capacity) {
+// (POST /scenarios/{planKey}/tables)
+func (_ Unimplemented) AddTable(w http.ResponseWriter, r *http.Request, planKey PlanKey) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // DeleteTable Remove a table from a plan (UC-13)
-// (DELETE /scenarios/{capacity}/tables/{tableNumber})
-func (_ Unimplemented) DeleteTable(w http.ResponseWriter, r *http.Request, capacity Capacity, tableNumber TableNumber) {
+// (DELETE /scenarios/{planKey}/tables/{tableNumber})
+func (_ Unimplemented) DeleteTable(w http.ResponseWriter, r *http.Request, planKey PlanKey, tableNumber TableNumber) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1217,12 +1276,12 @@ func (siw *ServerInterfaceWrapper) DeleteAssignment(w http.ResponseWriter, r *ht
 	var err error
 	_ = err
 
-	// ------------- Path parameter "capacity" -------------
-	var capacity Capacity
+	// ------------- Path parameter "planKey" -------------
+	var planKey PlanKey
 
-	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "planKey", chi.URLParam(r, "planKey"), &planKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planKey", Err: err})
 		return
 	}
 
@@ -1236,7 +1295,7 @@ func (siw *ServerInterfaceWrapper) DeleteAssignment(w http.ResponseWriter, r *ht
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteAssignment(w, r, capacity, guestId)
+		siw.Handler.DeleteAssignment(w, r, planKey, guestId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1252,12 +1311,12 @@ func (siw *ServerInterfaceWrapper) SetAssignment(w http.ResponseWriter, r *http.
 	var err error
 	_ = err
 
-	// ------------- Path parameter "capacity" -------------
-	var capacity Capacity
+	// ------------- Path parameter "planKey" -------------
+	var planKey PlanKey
 
-	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "planKey", chi.URLParam(r, "planKey"), &planKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planKey", Err: err})
 		return
 	}
 
@@ -1271,7 +1330,7 @@ func (siw *ServerInterfaceWrapper) SetAssignment(w http.ResponseWriter, r *http.
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.SetAssignment(w, r, capacity, guestId)
+		siw.Handler.SetAssignment(w, r, planKey, guestId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1287,17 +1346,17 @@ func (siw *ServerInterfaceWrapper) ResetPlan(w http.ResponseWriter, r *http.Requ
 	var err error
 	_ = err
 
-	// ------------- Path parameter "capacity" -------------
-	var capacity Capacity
+	// ------------- Path parameter "planKey" -------------
+	var planKey PlanKey
 
-	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "planKey", chi.URLParam(r, "planKey"), &planKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planKey", Err: err})
 		return
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ResetPlan(w, r, capacity)
+		siw.Handler.ResetPlan(w, r, planKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1313,17 +1372,17 @@ func (siw *ServerInterfaceWrapper) AddTable(w http.ResponseWriter, r *http.Reque
 	var err error
 	_ = err
 
-	// ------------- Path parameter "capacity" -------------
-	var capacity Capacity
+	// ------------- Path parameter "planKey" -------------
+	var planKey PlanKey
 
-	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "planKey", chi.URLParam(r, "planKey"), &planKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planKey", Err: err})
 		return
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.AddTable(w, r, capacity)
+		siw.Handler.AddTable(w, r, planKey)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1339,12 +1398,12 @@ func (siw *ServerInterfaceWrapper) DeleteTable(w http.ResponseWriter, r *http.Re
 	var err error
 	_ = err
 
-	// ------------- Path parameter "capacity" -------------
-	var capacity Capacity
+	// ------------- Path parameter "planKey" -------------
+	var planKey PlanKey
 
-	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "planKey", chi.URLParam(r, "planKey"), &planKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planKey", Err: err})
 		return
 	}
 
@@ -1358,7 +1417,7 @@ func (siw *ServerInterfaceWrapper) DeleteTable(w http.ResponseWriter, r *http.Re
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteTable(w, r, capacity, tableNumber)
+		siw.Handler.DeleteTable(w, r, planKey, tableNumber)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1560,19 +1619,19 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/scenarios/calculate", wrapper.CalculateProposals)
 	})
 	r.Group(func(r chi.Router) {
-		r.Delete(options.BaseURL+"/scenarios/{capacity}/assignments/{guestId}", wrapper.DeleteAssignment)
+		r.Delete(options.BaseURL+"/scenarios/{planKey}/assignments/{guestId}", wrapper.DeleteAssignment)
 	})
 	r.Group(func(r chi.Router) {
-		r.Put(options.BaseURL+"/scenarios/{capacity}/assignments/{guestId}", wrapper.SetAssignment)
+		r.Put(options.BaseURL+"/scenarios/{planKey}/assignments/{guestId}", wrapper.SetAssignment)
 	})
 	r.Group(func(r chi.Router) {
-		r.Delete(options.BaseURL+"/scenarios/{capacity}/tables", wrapper.ResetPlan)
+		r.Delete(options.BaseURL+"/scenarios/{planKey}/tables", wrapper.ResetPlan)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/scenarios/{capacity}/tables", wrapper.AddTable)
+		r.Post(options.BaseURL+"/scenarios/{planKey}/tables", wrapper.AddTable)
 	})
 	r.Group(func(r chi.Router) {
-		r.Delete(options.BaseURL+"/scenarios/{capacity}/tables/{tableNumber}", wrapper.DeleteTable)
+		r.Delete(options.BaseURL+"/scenarios/{planKey}/tables/{tableNumber}", wrapper.DeleteTable)
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/session", wrapper.DeleteSession)
@@ -2738,8 +2797,8 @@ func (response CalculateProposals500JSONResponse) VisitCalculateProposalsRespons
 }
 
 type DeleteAssignmentRequestObject struct {
-	Capacity Capacity `json:"capacity"`
-	GuestId  GuestId  `json:"guestId"`
+	PlanKey PlanKey `json:"planKey"`
+	GuestId GuestId `json:"guestId"`
 }
 
 type DeleteAssignmentResponseObject interface {
@@ -2831,9 +2890,9 @@ func (response DeleteAssignment500JSONResponse) VisitDeleteAssignmentResponse(w 
 }
 
 type SetAssignmentRequestObject struct {
-	Capacity Capacity `json:"capacity"`
-	GuestId  GuestId  `json:"guestId"`
-	Body     *SetAssignmentJSONRequestBody
+	PlanKey PlanKey `json:"planKey"`
+	GuestId GuestId `json:"guestId"`
+	Body    *SetAssignmentJSONRequestBody
 }
 
 type SetAssignmentResponseObject interface {
@@ -2941,7 +3000,7 @@ func (response SetAssignment500JSONResponse) VisitSetAssignmentResponse(w http.R
 }
 
 type ResetPlanRequestObject struct {
-	Capacity Capacity `json:"capacity"`
+	PlanKey PlanKey `json:"planKey"`
 }
 
 type ResetPlanResponseObject interface {
@@ -3033,7 +3092,7 @@ func (response ResetPlan500JSONResponse) VisitResetPlanResponse(w http.ResponseW
 }
 
 type AddTableRequestObject struct {
-	Capacity Capacity `json:"capacity"`
+	PlanKey PlanKey `json:"planKey"`
 }
 
 type AddTableResponseObject interface {
@@ -3125,7 +3184,7 @@ func (response AddTable500JSONResponse) VisitAddTableResponse(w http.ResponseWri
 }
 
 type DeleteTableRequestObject struct {
-	Capacity    Capacity    `json:"capacity"`
+	PlanKey     PlanKey     `json:"planKey"`
 	TableNumber TableNumber `json:"tableNumber"`
 }
 
@@ -3470,29 +3529,29 @@ type StrictServerInterface interface {
 	// GetHealth Liveness check (DB reachable)
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
-	// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
+	// ListScenarios The five plans (9, 10, 11, 12, mixed) with their evaluations (UC-09, UC-14)
 	// (GET /scenarios)
 	ListScenarios(ctx context.Context, request ListScenariosRequestObject) (ListScenariosResponseObject, error)
-	// ReplaceScenarios Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+	// ReplaceScenarios Replace all five plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
 	// (PUT /scenarios)
 	ReplaceScenarios(ctx context.Context, request ReplaceScenariosRequestObject) (ReplaceScenariosResponseObject, error)
-	// CalculateProposals Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
+	// CalculateProposals Compute proposals for all five plans — step 1 of "Generuj plany" (UC-10)
 	// (POST /scenarios/calculate)
 	CalculateProposals(ctx context.Context, request CalculateProposalsRequestObject) (CalculateProposalsResponseObject, error)
 	// DeleteAssignment Move the guest's whole cluster back to the unseated tray (UC-11)
-	// (DELETE /scenarios/{capacity}/assignments/{guestId})
+	// (DELETE /scenarios/{planKey}/assignments/{guestId})
 	DeleteAssignment(ctx context.Context, request DeleteAssignmentRequestObject) (DeleteAssignmentResponseObject, error)
 	// SetAssignment Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
-	// (PUT /scenarios/{capacity}/assignments/{guestId})
+	// (PUT /scenarios/{planKey}/assignments/{guestId})
 	SetAssignment(ctx context.Context, request SetAssignmentRequestObject) (SetAssignmentResponseObject, error)
 	// ResetPlan Delete a plan — remove all its tables, assignments and pins (UC-17)
-	// (DELETE /scenarios/{capacity}/tables)
+	// (DELETE /scenarios/{planKey}/tables)
 	ResetPlan(ctx context.Context, request ResetPlanRequestObject) (ResetPlanResponseObject, error)
 	// AddTable Add an empty table at the end of a plan (UC-13)
-	// (POST /scenarios/{capacity}/tables)
+	// (POST /scenarios/{planKey}/tables)
 	AddTable(ctx context.Context, request AddTableRequestObject) (AddTableResponseObject, error)
 	// DeleteTable Remove a table from a plan (UC-13)
-	// (DELETE /scenarios/{capacity}/tables/{tableNumber})
+	// (DELETE /scenarios/{planKey}/tables/{tableNumber})
 	DeleteTable(ctx context.Context, request DeleteTableRequestObject) (DeleteTableResponseObject, error)
 	// DeleteSession Log out ("Wyloguj")
 	// (DELETE /session)
@@ -3904,10 +3963,10 @@ func (sh *strictHandler) CalculateProposals(w http.ResponseWriter, r *http.Reque
 }
 
 // DeleteAssignment operation middleware
-func (sh *strictHandler) DeleteAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId) {
+func (sh *strictHandler) DeleteAssignment(w http.ResponseWriter, r *http.Request, planKey PlanKey, guestId GuestId) {
 	var request DeleteAssignmentRequestObject
 
-	request.Capacity = capacity
+	request.PlanKey = planKey
 	request.GuestId = guestId
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
@@ -3931,10 +3990,10 @@ func (sh *strictHandler) DeleteAssignment(w http.ResponseWriter, r *http.Request
 }
 
 // SetAssignment operation middleware
-func (sh *strictHandler) SetAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId) {
+func (sh *strictHandler) SetAssignment(w http.ResponseWriter, r *http.Request, planKey PlanKey, guestId GuestId) {
 	var request SetAssignmentRequestObject
 
-	request.Capacity = capacity
+	request.PlanKey = planKey
 	request.GuestId = guestId
 
 	var body SetAssignmentJSONRequestBody
@@ -3965,10 +4024,10 @@ func (sh *strictHandler) SetAssignment(w http.ResponseWriter, r *http.Request, c
 }
 
 // ResetPlan operation middleware
-func (sh *strictHandler) ResetPlan(w http.ResponseWriter, r *http.Request, capacity Capacity) {
+func (sh *strictHandler) ResetPlan(w http.ResponseWriter, r *http.Request, planKey PlanKey) {
 	var request ResetPlanRequestObject
 
-	request.Capacity = capacity
+	request.PlanKey = planKey
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ResetPlan(ctx, request.(ResetPlanRequestObject))
@@ -3991,10 +4050,10 @@ func (sh *strictHandler) ResetPlan(w http.ResponseWriter, r *http.Request, capac
 }
 
 // AddTable operation middleware
-func (sh *strictHandler) AddTable(w http.ResponseWriter, r *http.Request, capacity Capacity) {
+func (sh *strictHandler) AddTable(w http.ResponseWriter, r *http.Request, planKey PlanKey) {
 	var request AddTableRequestObject
 
-	request.Capacity = capacity
+	request.PlanKey = planKey
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.AddTable(ctx, request.(AddTableRequestObject))
@@ -4017,10 +4076,10 @@ func (sh *strictHandler) AddTable(w http.ResponseWriter, r *http.Request, capaci
 }
 
 // DeleteTable operation middleware
-func (sh *strictHandler) DeleteTable(w http.ResponseWriter, r *http.Request, capacity Capacity, tableNumber TableNumber) {
+func (sh *strictHandler) DeleteTable(w http.ResponseWriter, r *http.Request, planKey PlanKey, tableNumber TableNumber) {
 	var request DeleteTableRequestObject
 
-	request.Capacity = capacity
+	request.PlanKey = planKey
 	request.TableNumber = tableNumber
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {

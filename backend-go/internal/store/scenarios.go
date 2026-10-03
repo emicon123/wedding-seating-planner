@@ -17,7 +17,7 @@ type Scenarios struct{ db *sql.DB }
 
 func NewScenarios(db *sql.DB) *Scenarios { return &Scenarios{db: db} }
 
-// List returns the four plans ordered by capacity.
+// List returns the five plans ordered 9, 10, 11, 12, mixed.
 func (s *Scenarios) List(ctx context.Context) ([]scenarios.PlanState, error) {
 	var out []scenarios.PlanState
 	err := withTx(ctx, s.db, func(q *sqlcgen.Queries) (err error) {
@@ -27,24 +27,24 @@ func (s *Scenarios) List(ctx context.Context) ([]scenarios.PlanState, error) {
 	return out, err
 }
 
-// Get returns one plan, or apperr.ErrNotFound for a capacity that is not 9, 10, 11 or 12.
-func (s *Scenarios) Get(ctx context.Context, capacity int) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error { return nil })
+// Get returns one plan, or apperr.ErrNotFound for a key that is not one of the five plans.
+func (s *Scenarios) Get(ctx context.Context, key scenarios.Key) (scenarios.PlanState, error) {
+	return s.tx(ctx, key, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error { return nil })
 }
 
 // ReplacePlans swaps the whole content (tables, seats, pins) of every given plan in ONE
 // transaction. Per plan it is a compare-and-set on the scenario version: when the stored
 // version is not ExpectedVersion the transaction is rolled back (nothing of any plan is
 // written) and the error is apperr.StaleVersion (matches apperr.ErrVersionConflict). A
-// capacity that does not exist gives apperr.ErrNotFound. Each replaced plan's version is bumped
+// plan that does not exist gives apperr.ErrNotFound. Each replaced plan's version is bumped
 // by 1. Plan tables are stored under their own numbers; the caller guarantees 1..k and no guest
-// twice. Returns the stored states of the given capacities, ordered by capacity.
+// twice. Returns the stored states of the given plans in List order.
 func (s *Scenarios) ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace) ([]scenarios.PlanState, error) {
 	var out []scenarios.PlanState
 	err := withTx(ctx, s.db, func(q *sqlcgen.Queries) error {
-		replaced := make(map[int]bool, len(ps))
+		replaced := make(map[scenarios.Key]bool, len(ps))
 		for _, p := range ps {
-			sc, err := q.GetScenario(ctx, int64(p.Capacity))
+			sc, err := q.GetScenario(ctx, scenarioKey(p.Key))
 			if err != nil {
 				return err // sql.ErrNoRows -> ErrNotFound
 			}
@@ -53,7 +53,7 @@ func (s *Scenarios) ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace
 				return err
 			}
 			if n == 0 {
-				return apperr.StaleVersion{Capacity: p.Capacity, Current: sc.Version}
+				return apperr.StaleVersion{Plan: p.Key.String(), Current: sc.Version}
 			}
 			if err := q.DeleteScenarioTables(ctx, sc.ID); err != nil {
 				return err
@@ -71,14 +71,14 @@ func (s *Scenarios) ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace
 					}
 				}
 			}
-			replaced[p.Capacity] = true
+			replaced[p.Key] = true
 		}
 		states, err := loadStates(ctx, q)
 		if err != nil {
 			return err
 		}
 		for _, st := range states {
-			if replaced[st.Plan.Capacity] {
+			if replaced[st.Key()] {
 				out = append(out, st)
 			}
 		}
@@ -90,8 +90,8 @@ func (s *Scenarios) ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace
 // SeatCluster puts every listed guest at the table (moving the seated, seating the unseated)
 // with the given pin flag. A table that does not exist in this plan, or an unknown guest, gives
 // apperr.ErrNotFound and nothing is changed.
-func (s *Scenarios) SeatCluster(ctx context.Context, capacity int, guestIDs []int64, tableNumber int, pinned bool) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
+func (s *Scenarios) SeatCluster(ctx context.Context, key scenarios.Key, guestIDs []int64, tableNumber int, pinned bool) (scenarios.PlanState, error) {
+	return s.tx(ctx, key, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 		tableID, err := q.GetDiningTableID(ctx, sqlcgen.GetDiningTableIDParams{ScenarioID: sc.ID, Number: int64(tableNumber)})
 		if err != nil {
 			return err // sql.ErrNoRows -> ErrNotFound
@@ -109,8 +109,8 @@ func (s *Scenarios) SeatCluster(ctx context.Context, capacity int, guestIDs []in
 
 // UnseatCluster removes the listed guests' assignments (and pins); guests without one are
 // ignored, so repeating it succeeds.
-func (s *Scenarios) UnseatCluster(ctx context.Context, capacity int, guestIDs []int64) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
+func (s *Scenarios) UnseatCluster(ctx context.Context, key scenarios.Key, guestIDs []int64) (scenarios.PlanState, error) {
+	return s.tx(ctx, key, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 		if len(guestIDs) > 0 {
 			if err := q.DeleteAssignments(ctx, sqlcgen.DeleteAssignmentsParams{ScenarioID: sc.ID, GuestIds: guestIDs}); err != nil {
 				return err
@@ -121,8 +121,8 @@ func (s *Scenarios) UnseatCluster(ctx context.Context, capacity int, guestIDs []
 }
 
 // AddTable appends an empty table numbered max+1.
-func (s *Scenarios) AddTable(ctx context.Context, capacity int) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
+func (s *Scenarios) AddTable(ctx context.Context, key scenarios.Key) (scenarios.PlanState, error) {
+	return s.tx(ctx, key, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 		max, err := q.MaxTableNumber(ctx, sc.ID)
 		if err != nil {
 			return err
@@ -136,8 +136,8 @@ func (s *Scenarios) AddTable(ctx context.Context, capacity int) (scenarios.PlanS
 
 // RemoveTable deletes table `number` (its guests become unseated, pins included) and renumbers
 // the later tables down by one so numbers stay 1..k. A missing table gives apperr.ErrNotFound.
-func (s *Scenarios) RemoveTable(ctx context.Context, capacity, number int) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
+func (s *Scenarios) RemoveTable(ctx context.Context, key scenarios.Key, number int) (scenarios.PlanState, error) {
+	return s.tx(ctx, key, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 		n, err := q.DeleteDiningTable(ctx, sqlcgen.DeleteDiningTableParams{ScenarioID: sc.ID, Number: int64(number)})
 		if err != nil {
 			return err
@@ -160,9 +160,9 @@ func (s *Scenarios) RemoveTable(ctx context.Context, capacity, number int) (scen
 // ClearPlan deletes the plan: every table of the scenario goes, and its assignments (pins
 // included, disabled guests' too) go with them by ON DELETE CASCADE. The scenario row stays and
 // its version is bumped. There is no version check, so repeating it succeeds (and bumps again);
-// an unknown capacity gives apperr.ErrNotFound.
-func (s *Scenarios) ClearPlan(ctx context.Context, capacity int) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
+// an unknown key gives apperr.ErrNotFound.
+func (s *Scenarios) ClearPlan(ctx context.Context, key scenarios.Key) (scenarios.PlanState, error) {
+	return s.tx(ctx, key, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 		if err := q.DeleteScenarioTables(ctx, sc.ID); err != nil {
 			return err
 		}
@@ -170,12 +170,12 @@ func (s *Scenarios) ClearPlan(ctx context.Context, capacity int) (scenarios.Plan
 	})
 }
 
-// tx runs fn on the scenario of that capacity in one transaction and returns the plan as stored
-// after fn (apperr.ErrNotFound when the capacity does not exist).
-func (s *Scenarios) tx(ctx context.Context, capacity int, fn func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error) (scenarios.PlanState, error) {
+// tx runs fn on the scenario of that key in one transaction and returns the plan as stored
+// after fn (apperr.ErrNotFound when the plan does not exist).
+func (s *Scenarios) tx(ctx context.Context, key scenarios.Key, fn func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error) (scenarios.PlanState, error) {
 	var out scenarios.PlanState
 	err := withTx(ctx, s.db, func(q *sqlcgen.Queries) error {
-		sc, err := q.GetScenario(ctx, int64(capacity))
+		sc, err := q.GetScenario(ctx, scenarioKey(key))
 		if err != nil {
 			return err // sql.ErrNoRows -> ErrNotFound
 		}
@@ -187,7 +187,7 @@ func (s *Scenarios) tx(ctx context.Context, capacity int, fn func(q *sqlcgen.Que
 			return err
 		}
 		for _, st := range states {
-			if st.Plan.Capacity == capacity {
+			if st.Key() == key {
 				out = st
 			}
 		}
@@ -201,7 +201,13 @@ func bump(ctx context.Context, q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 	return err
 }
 
-// loadStates reads all four plans: scenarios, then tables and seats grouped by scenario.
+// scenarioKey is the (capacity, mixed) lookup of a plan; the only query that finds a scenario by
+// identity (every other one uses scenario_id).
+func scenarioKey(k scenarios.Key) sqlcgen.GetScenarioParams {
+	return sqlcgen.GetScenarioParams{Capacity: int64(k.Capacity), Mixed: boolInt(k.Mixed)}
+}
+
+// loadStates reads all five plans: scenarios, then tables and seats grouped by scenario.
 // Tables are ordered by number, seats by guest id; an empty table has no seats.
 func loadStates(ctx context.Context, q *sqlcgen.Queries) ([]scenarios.PlanState, error) {
 	scs, err := q.ListScenarios(ctx)
@@ -224,7 +230,7 @@ func loadStates(ctx context.Context, q *sqlcgen.Queries) ([]scenarios.PlanState,
 	byScenario := make(map[int64]*scenarios.PlanState, len(scs))
 	out := make([]scenarios.PlanState, len(scs))
 	for i, sc := range scs {
-		out[i] = scenarios.PlanState{Version: sc.Version, Plan: seating.Plan{Capacity: int(sc.Capacity)}}
+		out[i] = scenarios.PlanState{Version: sc.Version, Plan: seating.Plan{Capacity: int(sc.Capacity), Mixed: sc.Mixed != 0}}
 		byScenario[sc.ID] = &out[i]
 	}
 	index := make(map[tableKey]int, len(tables)) // table -> position in its plan's Tables

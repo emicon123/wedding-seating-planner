@@ -1,11 +1,14 @@
--- Scenario, table and assignment queries (B-09). Scenarios are seeded by the migration (3 rows)
+-- Scenario, table and assignment queries (B-09). Scenarios are seeded by the migrations (5 rows: capacities
+-- 9, 10, 11, 12 and the mixed plan = (12, mixed 1), task 013)
 -- and never created or deleted. Every plan mutation bumps scenario.version.
 
 -- name: ListScenarios :many
-SELECT * FROM scenario ORDER BY capacity;
+-- Order 9, 10, 11, 12, mixed.
+SELECT * FROM scenario ORDER BY mixed, capacity;
 
 -- name: GetScenario :one
-SELECT * FROM scenario WHERE capacity = ?;
+-- A plan is identified by (capacity, mixed); capacity alone matches two rows for 12.
+SELECT * FROM scenario WHERE capacity = ? AND mixed = ?;
 
 -- name: ListDiningTables :many
 SELECT * FROM dining_table ORDER BY scenario_id, number;

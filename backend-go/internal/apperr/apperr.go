@@ -30,12 +30,12 @@ func (v Validation) Error() string {
 // no longer matches the stored one. It matches ErrVersionConflict under errors.Is and carries
 // what the error envelope needs to name the plan.
 type StaleVersion struct {
-	Capacity int
-	Current  int64
+	Plan    string // plan key as in the API: "9".."12" or "mixed"
+	Current int64
 }
 
 func (e StaleVersion) Error() string {
-	return fmt.Sprintf("version conflict: plan %d is at version %d", e.Capacity, e.Current)
+	return fmt.Sprintf("version conflict: plan %s is at version %d", e.Plan, e.Current)
 }
 
 func (e StaleVersion) Is(target error) bool { return target == ErrVersionConflict }

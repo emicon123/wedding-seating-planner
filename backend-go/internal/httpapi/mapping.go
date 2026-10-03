@@ -127,6 +127,7 @@ func nonNil(ids []int64) []int64 {
 func toScenario(ev scenarios.Evaluated) oapi.Scenario {
 	version := int(ev.State.Version)
 	return oapi.Scenario{
+		Key:      oapi.PlanKey(ev.State.Key().String()),
 		Capacity: oapi.Capacity(ev.State.Plan.Capacity),
 		Version:  &version,
 		Plan:     toSeatingPlan(ev.State.Plan.Capacity, ev.Eval),
@@ -136,6 +137,7 @@ func toScenario(ev scenarios.Evaluated) oapi.Scenario {
 // toProposal maps a transient auto-seating result (calculateProposals).
 func toProposal(p scenarios.Proposal) oapi.Proposal {
 	return oapi.Proposal{
+		Key:            oapi.PlanKey(scenarios.Key{Capacity: p.Plan.Capacity, Mixed: p.Plan.Mixed}.String()),
 		Capacity:       oapi.Capacity(p.Plan.Capacity),
 		BasedOnVersion: int(p.BasedOnVersion),
 		Plan:           toSeatingPlan(p.Plan.Capacity, p.Eval),
@@ -221,13 +223,17 @@ func violationMessage(v seating.Violation, capacity int, fills map[int]int) stri
 	}
 }
 
-// fromScenariosReplace maps the four ScenarioLayouts to service inputs: one Seat per listed
+// fromScenariosReplace maps the five ScenarioLayouts to service inputs: one Seat per listed
 // guest, Pinned when the guest is in the table's pinnedGuestIds. A pinned id that is not one of
 // the table's guests cannot be expressed as a seat and is rejected here (422, field plans).
 func fromScenariosReplace(body oapi.ScenariosReplace) ([]scenarios.PlanInput, error) {
 	out := make([]scenarios.PlanInput, len(body.Plans))
 	for i, p := range body.Plans {
-		in := scenarios.PlanInput{Capacity: int(p.Capacity), BasedOn: int64(p.BasedOnVersion), Tables: make([]seating.Table, len(p.Tables))}
+		key, ok := scenarios.ParseKey(string(p.Key))
+		if !ok {
+			return nil, apperr.Validation{Field: "plans", Message: fmt.Sprintf("Unknown plan %q.", string(p.Key))}
+		}
+		in := scenarios.PlanInput{Key: key, BasedOn: int64(p.BasedOnVersion), Tables: make([]seating.Table, len(p.Tables))}
 		for j, t := range p.Tables {
 			pinned := make(map[int64]bool, len(t.PinnedGuestIds))
 			for _, id := range t.PinnedGuestIds {
@@ -239,7 +245,7 @@ func fromScenariosReplace(body oapi.ScenariosReplace) ([]scenarios.PlanInput, er
 				delete(pinned, id)
 			}
 			if len(pinned) > 0 {
-				return nil, apperr.Validation{Field: "plans", Message: fmt.Sprintf("Plan %d: table %d pins a guest who is not at that table.", p.Capacity, t.Number)}
+				return nil, apperr.Validation{Field: "plans", Message: fmt.Sprintf("Plan %s: table %d pins a guest who is not at that table.", key, t.Number)}
 			}
 			in.Tables[j] = seating.Table{Number: t.Number, Seats: seats}
 		}

@@ -38,7 +38,7 @@ func tableOfGuest(p Plan, id GuestID) int {
 func emptyPlan(capacity int) Plan { return Plan{Capacity: capacity} }
 
 func clonePlan(p Plan) Plan {
-	out := Plan{Capacity: p.Capacity}
+	out := Plan{Capacity: p.Capacity, Mixed: p.Mixed}
 	for _, t := range p.Tables {
 		out.Tables = append(out.Tables, Table{Number: t.Number, Seats: append([]Seat(nil), t.Seats...)})
 	}

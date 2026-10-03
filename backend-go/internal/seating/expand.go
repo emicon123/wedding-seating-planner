@@ -38,7 +38,7 @@ func ExpandDisabled(g Graph, p Plan) Plan {
 		}
 	}
 
-	out := Plan{Capacity: p.Capacity, Tables: make([]Table, len(p.Tables))}
+	out := Plan{Capacity: p.Capacity, Mixed: p.Mixed, Tables: make([]Table, len(p.Tables))}
 	for ti, t := range p.Tables {
 		out.Tables[ti] = Table{Number: t.Number}
 		for _, s := range t.Seats {

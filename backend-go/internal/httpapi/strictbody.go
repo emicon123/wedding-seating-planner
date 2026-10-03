@@ -62,7 +62,7 @@ var bodyOps = map[string]bodyShape{
 	"PUT /guest-links/{linkKey}": shapeOf(reflect.TypeFor[oapi.GuestLinkUpsert]()),
 	"POST /session":              shapeOf(reflect.TypeFor[oapi.SessionCreate]()),
 	"PUT /scenarios":             shapeOf(reflect.TypeFor[oapi.ScenariosReplace]()),
-	"PUT /scenarios/{capacity}/assignments/{guestId}": shapeOf(reflect.TypeFor[oapi.AssignmentSet]()),
+	"PUT /scenarios/{planKey}/assignments/{guestId}": shapeOf(reflect.TypeFor[oapi.AssignmentSet]()),
 }
 
 // shapeFor finds the body shape of the matched route, if the operation has one.

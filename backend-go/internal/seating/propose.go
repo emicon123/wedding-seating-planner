@@ -508,6 +508,30 @@ func feasibleAt(it items, k int, pins map[int]int) (best *layout, tries []*layou
 	return nil, tries
 }
 
+// solve finds the optimised feasible layout at the smallest feasible table count k (from
+// ⌈seats/capacity⌉ upwards): every fill in [Floor, capacity] (floor waived for one table), clusters
+// intact, pinned clusters kept at their table (a pin to a table number above k is released). When
+// no k works it returns nil and the plan with the fewest violations (Evaluate lists them), the
+// best-effort fallback. it.total must be > 0.
+func solve(g Graph, it items, pins map[int]int) (l *layout, bestEffort Plan) {
+	bestViolations := -1
+	for k := minTables(it.total, it.capacity); ; k++ {
+		l, tries := feasibleAt(it, k, pins)
+		if l != nil {
+			return l, Plan{}
+		}
+		for _, t := range tries {
+			p := t.toPlan()
+			if v := len(Evaluate(g, p).Violations); bestViolations < 0 || v < bestViolations {
+				bestEffort, bestViolations = p, v
+			}
+		}
+		if (k+1)*Floor > it.total {
+			return nil, bestEffort
+		}
+	}
+}
+
 // Propose computes a seating for current.Capacity: the fewest tables k that
 // admit a packing with every fill in [Floor, capacity] (floor waived for one
 // table), clusters intact, pinned clusters kept at their table (a pin to a
@@ -517,30 +541,46 @@ func feasibleAt(it items, k int, pins map[int]int) (best *layout, tries []*layou
 // seated; oversized clusters stay unseated. When no k works it returns the plan
 // with the fewest violations (Evaluate lists them) instead of failing. Only
 // the pins of current are used. Deterministic: same input, same plan. Writes
-// nothing.
+// nothing. For the mixed plan (current.Mixed, Capacity 12) the table count may
+// be one above the fewest, see proposeMixed. The result keeps Capacity and Mixed.
 func Propose(g Graph, current Plan) Plan {
 	capacity := current.Capacity
 	it := newItems(g, capacity)
-	if it.total == 0 || capacity <= 0 {
-		return Plan{Capacity: capacity}
-	}
-	pins := pinTargets(g, current, it)
-
-	var best Plan
-	bestViolations := -1
-	for k := minTables(it.total, capacity); ; k++ {
-		l, tries := feasibleAt(it, k, pins)
+	var out Plan
+	switch {
+	case it.total == 0 || capacity <= 0:
+		out = Plan{Capacity: capacity}
+	case current.Mixed:
+		out = proposeMixed(g, it, pinTargets(g, current, it))
+	default:
+		l, best := solve(g, it, pinTargets(g, current, it))
 		if l != nil {
-			return l.toPlan()
-		}
-		for _, l := range tries {
-			p := l.toPlan()
-			if v := len(Evaluate(g, p).Violations); bestViolations < 0 || v < bestViolations {
-				best, bestViolations = p, v
-			}
-		}
-		if (k+1)*Floor > it.total {
-			return best
+			out = l.toPlan()
+		} else {
+			out = best
 		}
 	}
+	out.Mixed = current.Mixed
+	return out
+}
+
+// proposeMixed is the mixed plan (task 013): the capacity-12 pipeline with one more decision.
+// k0 is the fewest feasible table count, solved exactly as for the uniform plan. When that
+// layout has isolated guests and (k0+1)·Floor ≤ the seats to place, the layout at k0+1 is solved
+// too (same pins: a pin to table k0+1 is kept there, released at k0) and taken only if it has
+// STRICTLY fewer isolated guests; the score never justifies a table. Never more than k0+1.
+// With no feasible k it returns the best-effort plan, like the uniform plan.
+func proposeMixed(g Graph, it items, pins map[int]int) Plan {
+	l0, best := solve(g, it, pins)
+	if l0 == nil {
+		return best
+	}
+	iso0 := l0.objective().iso
+	if iso0 == 0 || (l0.k+1)*Floor > it.total {
+		return l0.toPlan()
+	}
+	if l1, _ := feasibleAt(it, l0.k+1, pins); l1 != nil && l1.objective().iso < iso0 {
+		return l1.toPlan()
+	}
+	return l0.toPlan()
 }

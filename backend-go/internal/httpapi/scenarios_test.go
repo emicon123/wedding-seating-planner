@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,11 +25,19 @@ func seedGuests(t *testing.T, h http.Handler, n int) {
 
 // startVer is the version of an untouched plan on a fresh database: migration 00002 bumps the
 // plan it converts from 8 to 9 seats (also when the database is new).
-func startVer(capacity oapi.Capacity) int {
-	if capacity == 9 {
+func startVer(key oapi.PlanKey) int {
+	if key == oapi.Seats9 {
 		return 2
 	}
 	return 1
+}
+
+// allKeys is the canonical order of the five plans.
+var allKeys = []oapi.PlanKey{oapi.Seats9, oapi.Seats10, oapi.Seats11, oapi.Seats12, oapi.Mixed}
+
+func capacityOf(k oapi.PlanKey) oapi.Capacity {
+	n, _ := strconv.Atoi(string(k))
+	return oapi.Capacity(n)
 }
 
 func listScenarios(t *testing.T, h http.Handler) oapi.ScenarioListResponse {
@@ -38,14 +47,14 @@ func listScenarios(t *testing.T, h http.Handler) oapi.ScenarioListResponse {
 	return decode[oapi.ScenarioListResponse](t, rec)
 }
 
-func scenarioOf(t *testing.T, list oapi.ScenarioListResponse, capacity int) oapi.Scenario {
+func scenarioOf(t *testing.T, list oapi.ScenarioListResponse, key oapi.PlanKey) oapi.Scenario {
 	t.Helper()
 	for _, s := range list.Data {
-		if int(s.Capacity) == capacity {
+		if s.Key == key {
 			return s
 		}
 	}
-	t.Fatalf("no scenario %d", capacity)
+	t.Fatalf("no scenario %s", key)
 	return oapi.Scenario{}
 }
 
@@ -58,7 +67,7 @@ func calculate(t *testing.T, h http.Handler) oapi.ProposalListResponse {
 
 // layoutOf maps a plan as the SPA does: its clusters' guest ids per table, and the guests of
 // its pinned clusters as pinnedGuestIds.
-func layoutOf(capacity oapi.Capacity, basedOn int, plan oapi.SeatingPlan) oapi.ScenarioLayout {
+func layoutOf(key oapi.PlanKey, basedOn int, plan oapi.SeatingPlan) oapi.ScenarioLayout {
 	tables := make([]oapi.TableLayout, 0, len(plan.Tables))
 	for _, tb := range plan.Tables {
 		ids, pinned := []int64{}, []int64{}
@@ -70,15 +79,15 @@ func layoutOf(capacity oapi.Capacity, basedOn int, plan oapi.SeatingPlan) oapi.S
 		}
 		tables = append(tables, oapi.TableLayout{Number: tb.Number, GuestIds: ids, PinnedGuestIds: pinned})
 	}
-	return oapi.ScenarioLayout{Capacity: capacity, BasedOnVersion: basedOn, Tables: tables}
+	return oapi.ScenarioLayout{Key: key, BasedOnVersion: basedOn, Tables: tables}
 }
 
-// proposalLayouts is "Generuj plany" as the SPA sends it: the four proposals' tables, basedOn
+// proposalLayouts is "Generuj plany" as the SPA sends it: the five proposals' tables, basedOn
 // = the version of each proposal (the plan the client had on screen).
 func proposalLayouts(props oapi.ProposalListResponse) []oapi.ScenarioLayout {
 	out := make([]oapi.ScenarioLayout, len(props.Data))
 	for i, p := range props.Data {
-		out[i] = layoutOf(p.Capacity, p.BasedOnVersion, p.Plan)
+		out[i] = layoutOf(p.Key, p.BasedOnVersion, p.Plan)
 	}
 	return out
 }
@@ -87,7 +96,7 @@ func proposalLayouts(props oapi.ProposalListResponse) []oapi.ScenarioLayout {
 func storedLayouts(list oapi.ScenarioListResponse) []oapi.ScenarioLayout {
 	out := make([]oapi.ScenarioLayout, len(list.Data))
 	for i, s := range list.Data {
-		out[i] = layoutOf(s.Capacity, *s.Version, s.Plan)
+		out[i] = layoutOf(s.Key, *s.Version, s.Plan)
 	}
 	return out
 }
@@ -111,7 +120,7 @@ func replaceOK(t *testing.T, h http.Handler, plans []oapi.ScenarioLayout) oapi.S
 	rec := replace(t, h, replaceBody(t, plans))
 	expect(t, rec, http.StatusOK, "")
 	got := decode[oapi.ScenarioListResponse](t, rec)
-	if got.Meta.RequestId == nil || got.Page.Total == nil || *got.Page.Total != 4 || len(got.Data) != 4 {
+	if got.Meta.RequestId == nil || got.Page.Total == nil || *got.Page.Total != 5 || len(got.Data) != 5 {
 		t.Fatalf("envelope = %+v", got)
 	}
 	return got
@@ -127,8 +136,9 @@ func scenarioResponse(t *testing.T, rec *httptest.ResponseRecorder, status int) 
 	return got.Data
 }
 
-func seatPath(capacity int, guest int64) string {
-	return fmt.Sprintf("%s/scenarios/%d/assignments/%d", api, capacity, guest)
+// seatPath addresses a plan by its key: 9..12 (int) or "mixed".
+func seatPath(planKey any, guest int64) string {
+	return fmt.Sprintf("%s/scenarios/%v/assignments/%d", api, planKey, guest)
 }
 
 func tableOfGuest(s oapi.Scenario, guest int64) (table int, pinned, ok bool) {
@@ -157,13 +167,17 @@ func TestListScenarios(t *testing.T) {
 	rec := do(h, http.MethodGet, api+"/scenarios", "")
 	expect(t, rec, http.StatusOK, "")
 	list := decode[oapi.ScenarioListResponse](t, rec)
-	if list.Meta.RequestId == nil || list.Page.Total == nil || *list.Page.Total != 4 || len(list.Data) != 4 {
+	if list.Meta.RequestId == nil || list.Page.Total == nil || *list.Page.Total != 5 || len(list.Data) != 5 {
 		t.Fatalf("envelope = %+v", list)
 	}
-	for i, c := range []oapi.Capacity{9, 10, 11, 12} {
+	for i, c := range allKeys {
 		s := list.Data[i]
-		if s.Capacity != c || s.Version == nil || *s.Version != startVer(c) {
-			t.Errorf("scenario %d = %d v%v", i, s.Capacity, s.Version)
+		wantCapacity := oapi.Capacity(12)
+		if c != oapi.Mixed {
+			wantCapacity = capacityOf(c)
+		}
+		if s.Key != c || s.Capacity != wantCapacity || s.Version == nil || *s.Version != startVer(c) {
+			t.Errorf("scenario %d = key %s capacity %d v%v", i, s.Key, s.Capacity, s.Version)
 		}
 		sum := s.Plan.Summary
 		if sum.TableCount != 0 || sum.SeatedCount != 0 || sum.UnseatedCount != 7 || sum.ViolationCount != 1 || !sum.NeedsRecalculation {
@@ -208,8 +222,8 @@ func TestListScenarios(t *testing.T) {
 	})
 }
 
-// Flow 1: calculate stores nothing; PUT /scenarios stores all four proposals; a stale PUT is 409.
-func TestCalculateThenReplaceAllFour(t *testing.T) {
+// Flow 1: calculate stores nothing; PUT /scenarios stores all five proposals; a stale PUT is 409.
+func TestCalculateThenReplaceAllFive(t *testing.T) {
 	h := newAPI(t)
 	seedGuests(t, h, 36)
 	putLink(t, h, "1-2", 0) // cluster {1,2,3}
@@ -219,19 +233,20 @@ func TestCalculateThenReplaceAllFour(t *testing.T) {
 	putLink(t, h, "6-7", 2)
 
 	props := calculate(t, h)
-	if props.Meta.RequestId == nil || props.Page.Total == nil || *props.Page.Total != 4 || len(props.Data) != 4 {
+	if props.Meta.RequestId == nil || props.Page.Total == nil || *props.Page.Total != 5 || len(props.Data) != 5 {
 		t.Fatalf("envelope = %+v", props)
 	}
 	// 36 guests, floor 8: four tables of 9 at capacities 9, 10 and 11; three of 12 at capacity 12
-	wantTables := map[oapi.Capacity]int{9: 4, 10: 4, 11: 4, 12: 3}
-	for i, c := range []oapi.Capacity{9, 10, 11, 12} {
+	// and in the mixed plan (nobody is isolated at 3 tables, so it takes no extra one)
+	wantTables := map[oapi.PlanKey]int{oapi.Seats9: 4, oapi.Seats10: 4, oapi.Seats11: 4, oapi.Seats12: 3, oapi.Mixed: 3}
+	for i, c := range allKeys {
 		p := props.Data[i]
-		if p.Capacity != c || p.BasedOnVersion != startVer(c) {
-			t.Errorf("proposal %d = %d basedOn %d", i, p.Capacity, p.BasedOnVersion)
+		if p.Key != c || (c == oapi.Mixed && p.Capacity != 12) || p.BasedOnVersion != startVer(c) {
+			t.Errorf("proposal %d = key %s capacity %d basedOn %d", i, p.Key, p.Capacity, p.BasedOnVersion)
 		}
 		sum := p.Plan.Summary
 		if sum.TableCount != wantTables[c] || sum.SeatedCount != 36 || sum.UnseatedCount != 0 || sum.NeedsRecalculation || sum.ViolationCount != 0 {
-			t.Errorf("capacity %d summary = %+v", c, sum)
+			t.Errorf("plan %s summary = %+v", c, sum)
 		}
 		for _, sc := range p.Plan.GuestScores {
 			if !sc.TableNumber.IsSpecified() || sc.TableNumber.IsNull() {
@@ -242,19 +257,19 @@ func TestCalculateThenReplaceAllFour(t *testing.T) {
 
 	t.Run("calculate stored nothing", func(t *testing.T) {
 		for _, s := range listScenarios(t, h).Data {
-			if *s.Version != startVer(s.Capacity) || len(s.Plan.Tables) != 0 {
-				t.Errorf("scenario %d changed: v%d, %d tables", s.Capacity, *s.Version, len(s.Plan.Tables))
+			if *s.Version != startVer(s.Key) || len(s.Plan.Tables) != 0 {
+				t.Errorf("scenario %s changed: v%d, %d tables", s.Key, *s.Version, len(s.Plan.Tables))
 			}
 		}
 	})
 
-	t.Run("PUT /scenarios stores all four proposals at once", func(t *testing.T) {
+	t.Run("PUT /scenarios stores all five proposals at once", func(t *testing.T) {
 		got := replaceOK(t, h, proposalLayouts(props))
 		for i, p := range props.Data {
 			s := got.Data[i]
-			if s.Capacity != p.Capacity || *s.Version != startVer(p.Capacity)+1 || s.Plan.Summary.TableCount != p.Plan.Summary.TableCount ||
+			if s.Key != p.Key || s.Capacity != p.Capacity || *s.Version != startVer(p.Key)+1 || s.Plan.Summary.TableCount != p.Plan.Summary.TableCount ||
 				s.Plan.Summary.NeedsRecalculation || s.Plan.Summary.SeatedCount != 36 {
-				t.Errorf("stored %d = v%d %+v", s.Capacity, *s.Version, s.Plan.Summary)
+				t.Errorf("stored %s = v%d %+v", s.Key, *s.Version, s.Plan.Summary)
 			}
 			if s.Plan.Summary.Score != p.Plan.Summary.Score {
 				t.Errorf("score %v != proposed %v", s.Plan.Summary.Score, p.Plan.Summary.Score)
@@ -264,8 +279,8 @@ func TestCalculateThenReplaceAllFour(t *testing.T) {
 
 	t.Run("GET /scenarios now returns the stored plans", func(t *testing.T) {
 		for _, s := range listScenarios(t, h).Data {
-			if *s.Version != startVer(s.Capacity)+1 || s.Plan.Summary.TableCount != wantTables[s.Capacity] {
-				t.Errorf("scenario %d = v%d, %d tables", s.Capacity, *s.Version, s.Plan.Summary.TableCount)
+			if *s.Version != startVer(s.Key)+1 || s.Plan.Summary.TableCount != wantTables[s.Key] {
+				t.Errorf("scenario %s = v%d, %d tables", s.Key, *s.Version, s.Plan.Summary.TableCount)
 			}
 		}
 	})
@@ -275,16 +290,21 @@ func TestCalculateThenReplaceAllFour(t *testing.T) {
 	})
 }
 
-// plansJSON builds a PUT /scenarios body: plan 10 as given, the other three empty with their
+// plansJSON builds a PUT /scenarios body: plan 10 as given, the other four empty with their
 // current (fresh database) versions.
 func plansJSON(plan10 string) string {
-	return fmt.Sprintf(`{"plans":[{"capacity":9,"basedOnVersion":2,"tables":[]},%s,{"capacity":11,"basedOnVersion":1,"tables":[]},{"capacity":12,"basedOnVersion":1,"tables":[]}]}`, plan10)
+	return fmt.Sprintf(`{"plans":[{"key":"9","basedOnVersion":2,"tables":[]},%s,{"key":"11","basedOnVersion":1,"tables":[]},{"key":"12","basedOnVersion":1,"tables":[]},{"key":"mixed","basedOnVersion":1,"tables":[]}]}`, plan10)
 }
 
 func TestReplaceScenariosErrors(t *testing.T) {
 	h := newAPI(t)
 	seedGuests(t, h, 6)
-	p10 := func(tables string) string { return `{"capacity":10,"basedOnVersion":1,"tables":` + tables + `}` }
+	p10 := func(tables string) string { return `{"key":"10","basedOnVersion":1,"tables":` + tables + `}` }
+	const (
+		e9, e10, e11 = `{"key":"9","basedOnVersion":2,"tables":[]}`, `{"key":"10","basedOnVersion":1,"tables":[]}`, `{"key":"11","basedOnVersion":1,"tables":[]}`
+		e12, eMixed  = `{"key":"12","basedOnVersion":1,"tables":[]}`, `{"key":"mixed","basedOnVersion":1,"tables":[]}`
+	)
+	body := func(plans ...string) string { return `{"plans":[` + strings.Join(plans, ",") + `]}` }
 	cases := []struct {
 		name       string
 		body       string
@@ -296,11 +316,15 @@ func TestReplaceScenariosErrors(t *testing.T) {
 		{"guest at two tables", plansJSON(p10(`[{"number":1,"guestIds":[1,2],"pinnedGuestIds":[]},{"number":2,"guestIds":[2],"pinnedGuestIds":[]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
 		{"unknown guest", plansJSON(p10(`[{"number":1,"guestIds":[1,99],"pinnedGuestIds":[]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
 		{"pinned guest not at that table", plansJSON(p10(`[{"number":1,"guestIds":[1],"pinnedGuestIds":[2]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
-		{"only three plans", `{"plans":[{"capacity":9,"basedOnVersion":2,"tables":[]},{"capacity":10,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]}]}`, 422, oapi.ErrorCodeValidationFailed, "plans"},
-		{"capacity repeated", `{"plans":[{"capacity":9,"basedOnVersion":2,"tables":[]},{"capacity":10,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]}]}`, 422, oapi.ErrorCodeValidationFailed, "plans"},
-		{"capacity 8 (removed)", `{"plans":[{"capacity":8,"basedOnVersion":1,"tables":[]},{"capacity":10,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]},{"capacity":12,"basedOnVersion":1,"tables":[]}]}`, 422, oapi.ErrorCodeValidationFailed, "plans"},
-		{"stale version", plansJSON(`{"capacity":10,"basedOnVersion":5,"tables":[]}`), 409, oapi.ErrorCodeVersionConflict, "plans"},
-		{"basedOnVersion below 1", plansJSON(`{"capacity":10,"basedOnVersion":0,"tables":[]}`), 400, oapi.ErrorCodeBadRequest, "basedOnVersion"},
+		{"only three plans", body(e9, e10, e11), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"the old four plans (no mixed)", body(e9, e10, e11, e12), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"key repeated", body(e9, e10, e11, e11, eMixed), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"mixed twice", body(e9, e10, e11, eMixed, eMixed), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"capacity 8 (removed)", body(`{"key":"8","basedOnVersion":1,"tables":[]}`, e10, e11, e12, eMixed), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"unknown key", body(`{"key":"foo","basedOnVersion":1,"tables":[]}`, e10, e11, e12, eMixed), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"old body with capacity instead of key", body(`{"capacity":9,"basedOnVersion":2,"tables":[]}`, e10, e11, e12, eMixed), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"stale version", plansJSON(`{"key":"10","basedOnVersion":5,"tables":[]}`), 409, oapi.ErrorCodeVersionConflict, "plans"},
+		{"basedOnVersion below 1", plansJSON(`{"key":"10","basedOnVersion":0,"tables":[]}`), 400, oapi.ErrorCodeBadRequest, "basedOnVersion"},
 		{"missing plans", `{}`, 400, oapi.ErrorCodeBadRequest, "plans"},
 		{"unknown top-level field", `{"plans":[],"extra":1}`, 400, oapi.ErrorCodeBadRequest, "extra"},
 		{"malformed body", `{"plans":`, 400, oapi.ErrorCodeBadRequest, ""},
@@ -316,15 +340,15 @@ func TestReplaceScenariosErrors(t *testing.T) {
 				}
 			}
 			for _, s := range listScenarios(t, h).Data {
-				if *s.Version != startVer(s.Capacity) || len(s.Plan.Tables) != 0 {
-					t.Fatalf("a rejected PUT changed scenario %d (v%d, %d tables)", s.Capacity, *s.Version, len(s.Plan.Tables))
+				if *s.Version != startVer(s.Key) || len(s.Plan.Tables) != 0 {
+					t.Fatalf("a rejected PUT changed scenario %s (v%d, %d tables)", s.Key, *s.Version, len(s.Plan.Tables))
 				}
 			}
 		})
 	}
 
 	t.Run("the 409 names the stale plan", func(t *testing.T) {
-		rec := replace(t, h, plansJSON(`{"capacity":10,"basedOnVersion":5,"tables":[]}`))
+		rec := replace(t, h, plansJSON(`{"key":"10","basedOnVersion":5,"tables":[]}`))
 		if msg := decodeError(t, rec).Errors[0].Message; !strings.Contains(msg, "Plan 10") || !strings.Contains(msg, "version 1") {
 			t.Errorf("message = %q", msg)
 		}
@@ -357,23 +381,23 @@ func TestReplaceScenariosPinsAndDisabledMembers(t *testing.T) {
 	for _, s := range got.Data {
 		for _, id := range []int64{1, 2} {
 			if tb, pinned, ok := tableOfGuest(s, id); !ok || tb != 2 || !pinned {
-				t.Errorf("plan %d guest %d: table %d pinned %v seated %v", s.Capacity, id, tb, pinned, ok)
+				t.Errorf("plan %s guest %d: table %d pinned %v seated %v", s.Key, id, tb, pinned, ok)
 			}
 		}
 		if _, pinned, _ := tableOfGuest(s, 4); pinned {
-			t.Errorf("plan %d: guest 4 must not be pinned", s.Capacity)
+			t.Errorf("plan %s: guest 4 must not be pinned", s.Key)
 		}
 		if s.Plan.Tables[1].Fill != 4 { // 1,2,9,10; the disabled child 3 rides along but does not count
-			t.Errorf("plan %d table 2 fill = %d, want 4", s.Capacity, s.Plan.Tables[1].Fill)
+			t.Errorf("plan %s table 2 fill = %d, want 4", s.Key, s.Plan.Tables[1].Fill)
 		}
-		if *s.Version != startVer(s.Capacity)+1 {
-			t.Errorf("plan %d version = %d", s.Capacity, *s.Version)
+		if *s.Version != startVer(s.Key)+1 {
+			t.Errorf("plan %s version = %d", s.Key, *s.Version)
 		}
 	}
 
 	// the disabled child sits at its cluster's table, pinned: re-enabling it shows it there
 	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":true}`), http.StatusOK, "")
-	if tb, pinned, ok := tableOfGuest(scenarioOf(t, listScenarios(t, h), 10), 3); !ok || tb != 2 || !pinned {
+	if tb, pinned, ok := tableOfGuest(scenarioOf(t, listScenarios(t, h), "10"), 3); !ok || tb != 2 || !pinned {
 		t.Errorf("re-enabled guest 3: table %d pinned %v seated %v, want table 2 pinned", tb, pinned, ok)
 	}
 
@@ -386,7 +410,7 @@ func TestReplaceScenariosPinsAndDisabledMembers(t *testing.T) {
 		}
 		for _, s := range replaceOK(t, h, plans).Data {
 			if _, pinned, _ := tableOfGuest(s, 1); pinned {
-				t.Errorf("plan %d: guest 1 still pinned", s.Capacity)
+				t.Errorf("plan %s: guest 1 still pinned", s.Key)
 			}
 		}
 	})
@@ -418,7 +442,7 @@ func TestReplaceScenariosGenerateThenUndo(t *testing.T) {
 		}
 		return plans
 	}())
-	if _, pinned, ok := tableOfGuest(scenarioOf(t, generated, 10), 1); !ok || !pinned {
+	if _, pinned, ok := tableOfGuest(scenarioOf(t, generated, "10"), 1); !ok || !pinned {
 		t.Errorf("Generate lost the pin (pinned %v seated %v)", pinned, ok)
 	}
 
@@ -430,13 +454,13 @@ func TestReplaceScenariosGenerateThenUndo(t *testing.T) {
 	for i, s := range restored.Data {
 		b := before.Data[i]
 		if len(s.Plan.Tables) != len(b.Plan.Tables) || s.Plan.Summary != b.Plan.Summary || *s.Version != *b.Version+2 {
-			t.Errorf("plan %d not restored: v%d %+v, want %+v", s.Capacity, *s.Version, s.Plan.Summary, b.Plan.Summary)
+			t.Errorf("plan %s not restored: v%d %+v, want %+v", s.Key, *s.Version, s.Plan.Summary, b.Plan.Summary)
 		}
 		for _, id := range []int64{1, 2, 13} {
 			tb1, p1, _ := tableOfGuest(s, id)
 			tb2, p2, _ := tableOfGuest(b, id)
 			if tb1 != tb2 || p1 != p2 {
-				t.Errorf("plan %d guest %d: table %d pinned %v, want table %d pinned %v", s.Capacity, id, tb1, p1, tb2, p2)
+				t.Errorf("plan %s guest %d: table %d pinned %v, want table %d pinned %v", s.Key, id, tb1, p1, tb2, p2)
 			}
 		}
 	}
@@ -451,19 +475,19 @@ func TestReplaceScenariosGenerateThenUndo(t *testing.T) {
 		after := listScenarios(t, h)
 		for i := range after.Data {
 			if *after.Data[i].Version != *now.Data[i].Version || after.Data[i].Plan.Summary != now.Data[i].Plan.Summary {
-				t.Errorf("plan %d changed by a rejected undo", after.Data[i].Capacity)
+				t.Errorf("plan %s changed by a rejected undo", after.Data[i].Key)
 			}
 		}
 	})
 }
 
-// acceptLayout stores `tables` (lists of guest ids) in plan `capacity` through PUT /scenarios
-// (re-sending the other three plans unchanged) and returns that scenario.
-func acceptLayout(t *testing.T, h http.Handler, capacity int, tables ...[]int64) oapi.Scenario {
+// acceptLayout stores `tables` (lists of guest ids) in plan `key` through PUT /scenarios
+// (re-sending the other four plans unchanged) and returns that scenario.
+func acceptLayout(t *testing.T, h http.Handler, key oapi.PlanKey, tables ...[]int64) oapi.Scenario {
 	t.Helper()
 	plans := storedLayouts(listScenarios(t, h))
 	for i := range plans {
-		if int(plans[i].Capacity) != capacity {
+		if plans[i].Key != key {
 			continue
 		}
 		plans[i].Tables = make([]oapi.TableLayout, len(tables))
@@ -471,7 +495,7 @@ func acceptLayout(t *testing.T, h http.Handler, capacity int, tables ...[]int64)
 			plans[i].Tables[j] = oapi.TableLayout{Number: j + 1, GuestIds: ids, PinnedGuestIds: []int64{}}
 		}
 	}
-	return scenarioOf(t, replaceOK(t, h, plans), capacity)
+	return scenarioOf(t, replaceOK(t, h, plans), key)
 }
 
 func rangeIDs(from, to int64) []int64 {
@@ -488,7 +512,7 @@ func TestMovePinAndUnseatCluster(t *testing.T) {
 	putLink(t, h, "1-2", 0)
 	putLink(t, h, "2-3", 0) // cluster {1,2,3}
 	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":false}`), http.StatusOK, "")
-	acceptLayout(t, h, 10, []int64{1, 2, 4, 5, 6}, []int64{7, 8, 9, 10}, nil)
+	acceptLayout(t, h, "10", []int64{1, 2, 4, 5, 6}, []int64{7, 8, 9, 10}, nil)
 
 	t.Run("moving ONE member moves the whole cluster, with the pin", func(t *testing.T) {
 		got := scenarioResponse(t, do(h, http.MethodPut, seatPath(10, 2), `{"tableNumber":2,"pinned":true}`), http.StatusOK)
@@ -523,7 +547,7 @@ func TestMovePinAndUnseatCluster(t *testing.T) {
 		seedGuests(t, h, 10)
 		putLink(t, h, "1-2", 0)
 		putLink(t, h, "2-3", 0)
-		acceptLayout(t, h, 9, rangeIDs(1, 3), rangeIDs(4, 10))                                                               // plan 9: fills 3 and 7
+		acceptLayout(t, h, "9", rangeIDs(1, 3), rangeIDs(4, 10))                                                             // plan 9: fills 3 and 7
 		got := scenarioResponse(t, do(h, http.MethodPut, seatPath(9, 1), `{"tableNumber":2,"pinned":false}`), http.StatusOK) // 7 + cluster{1,2,3} = 10 > 9
 		var over *oapi.Violation
 		for i, v := range got.Plan.Violations {
@@ -546,7 +570,7 @@ func TestMovePinAndUnseatCluster(t *testing.T) {
 		}
 	})
 
-	t.Run("404 unknown guest or capacity, 400 bad id", func(t *testing.T) {
+	t.Run("404 unknown guest or plan, 400 bad id", func(t *testing.T) {
 		expect(t, do(h, http.MethodPut, seatPath(10, 999), `{"tableNumber":1,"pinned":false}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
 		expect(t, do(h, http.MethodPut, seatPath(8, 1), `{"tableNumber":1,"pinned":false}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
 		expect(t, do(h, http.MethodDelete, seatPath(10, 999), ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
@@ -573,7 +597,7 @@ func TestMovePinAndUnseatCluster(t *testing.T) {
 func TestAddAndDeleteTable(t *testing.T) {
 	h := newAPI(t)
 	seedGuests(t, h, 12)
-	acceptLayout(t, h, 12, rangeIDs(1, 3), rangeIDs(4, 6), rangeIDs(7, 9), rangeIDs(10, 12))
+	acceptLayout(t, h, "12", rangeIDs(1, 3), rangeIDs(4, 6), rangeIDs(7, 9), rangeIDs(10, 12))
 
 	got := scenarioResponse(t, do(h, http.MethodPost, api+"/scenarios/12/tables", ""), http.StatusCreated)
 	if got.Plan.Summary.TableCount != 5 || got.Plan.Tables[4].Number != 5 || got.Plan.Tables[4].Fill != 0 || len(got.Plan.Tables[4].Clusters) != 0 {
@@ -615,16 +639,16 @@ func TestResetPlan(t *testing.T) {
 		t.Fatalf("precondition: guest 1 pinned %v seated %v", pinned, ok)
 	}
 	before := listScenarios(t, h)
-	old10 := scenarioOf(t, before, 10)
+	old10 := scenarioOf(t, before, "10")
 
 	rec := do(h, http.MethodDelete, api+"/scenarios/10/tables", "")
 	got := scenarioResponse(t, rec, http.StatusOK)
 	if !strings.Contains(rec.Body.String(), `"tables":[]`) {
 		t.Errorf("plan.tables must be an empty array, body: %s", rec.Body)
 	}
-	if got.Capacity != 10 || len(got.Plan.Tables) != 0 || got.Plan.Summary.TableCount != 0 ||
+	if got.Key != oapi.Seats10 || got.Capacity != 10 || len(got.Plan.Tables) != 0 || got.Plan.Summary.TableCount != 0 ||
 		got.Plan.Summary.SeatedCount != 0 || got.Plan.Summary.UnseatedCount != 36 || !got.Plan.Summary.NeedsRecalculation {
-		t.Errorf("reset plan = capacity %d summary %+v", got.Capacity, got.Plan.Summary)
+		t.Errorf("reset plan = key %s summary %+v", got.Key, got.Plan.Summary)
 	}
 	if !slices.Contains(violationCodes(got), oapi.UnseatedGuests) {
 		t.Errorf("violations = %v, want unseated_guests", violationCodes(got))
@@ -633,18 +657,18 @@ func TestResetPlan(t *testing.T) {
 		t.Errorf("version = %d, want %d", *got.Version, *old10.Version+1)
 	}
 
-	t.Run("GET /scenarios still lists four plans; the others are unchanged", func(t *testing.T) {
+	t.Run("GET /scenarios still lists five plans; the others are unchanged", func(t *testing.T) {
 		after := listScenarios(t, h)
-		if len(after.Data) != 4 {
-			t.Fatalf("scenarios = %d, want 4", len(after.Data))
+		if len(after.Data) != 5 {
+			t.Fatalf("scenarios = %d, want 5", len(after.Data))
 		}
-		if s := scenarioOf(t, after, 10); len(s.Plan.Tables) != 0 || *s.Version != *got.Version {
+		if s := scenarioOf(t, after, "10"); len(s.Plan.Tables) != 0 || *s.Version != *got.Version {
 			t.Errorf("plan 10 = v%d, %d tables", *s.Version, len(s.Plan.Tables))
 		}
-		for _, c := range []int{9, 11, 12} {
+		for _, c := range []oapi.PlanKey{oapi.Seats9, oapi.Seats11, oapi.Seats12, oapi.Mixed} {
 			b, a := scenarioOf(t, before, c), scenarioOf(t, after, c)
 			if *a.Version != *b.Version || a.Plan.Summary != b.Plan.Summary || len(a.Plan.Tables) != len(b.Plan.Tables) || len(a.Plan.Tables) == 0 {
-				t.Errorf("plan %d changed: v%d -> v%d, %d -> %d tables", c, *b.Version, *a.Version, len(b.Plan.Tables), len(a.Plan.Tables))
+				t.Errorf("plan %s changed: v%d -> v%d, %d -> %d tables", c, *b.Version, *a.Version, len(b.Plan.Tables), len(a.Plan.Tables))
 			}
 		}
 	})
@@ -662,10 +686,8 @@ func TestResetPlan(t *testing.T) {
 
 	t.Run("errors", func(t *testing.T) {
 		expect(t, do(h, http.MethodDelete, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
-		rec := do(h, http.MethodDelete, api+"/scenarios/abc/tables", "")
-		expect(t, rec, http.StatusBadRequest, oapi.ErrorCodeBadRequest)
-		if f, err := decodeError(t, rec).Errors[0].Field.Get(); err != nil || f != "capacity" {
-			t.Errorf("error field = %q (%v), want capacity", f, err)
+		for _, key := range []string{"abc", "13", "0", "Mixed", "012"} { // an unknown key is a 404, like an unknown capacity always was
+			expect(t, do(h, http.MethodDelete, api+"/scenarios/"+key+"/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 		}
 	})
 }
@@ -679,13 +701,13 @@ func TestReEnabledGuestNeedsRecalculation(t *testing.T) {
 	putLink(t, h, "1-3", 0) // cluster {1,2,3}
 	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":false}`), http.StatusOK, "")
 
-	acc := acceptLayout(t, h, 9, []int64{1, 2, 4, 5, 6, 7, 8, 9, 10}) // 9/9 enabled; child 3 rides along
+	acc := acceptLayout(t, h, "9", []int64{1, 2, 4, 5, 6, 7, 8, 9, 10}) // 9/9 enabled; child 3 rides along
 	if acc.Plan.Summary.NeedsRecalculation || acc.Plan.Tables[0].Fill != 9 {
 		t.Fatalf("precondition: %+v", acc.Plan.Summary)
 	}
 
 	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":true}`), http.StatusOK, "")
-	got := scenarioOf(t, listScenarios(t, h), 9)
+	got := scenarioOf(t, listScenarios(t, h), "9")
 	if *got.Version != *acc.Version {
 		t.Errorf("plan version %d -> %d: re-enabling must not touch plans", *acc.Version, *got.Version)
 	}
@@ -696,14 +718,14 @@ func TestReEnabledGuestNeedsRecalculation(t *testing.T) {
 		t.Errorf("fill %d summary %+v codes %v", got.Plan.Tables[0].Fill, got.Plan.Summary, violationCodes(got))
 	}
 	// the other plans have no tables: they need recalculation too, because everyone is unseated
-	if o := scenarioOf(t, listScenarios(t, h), 10); !o.Plan.Summary.NeedsRecalculation {
+	if o := scenarioOf(t, listScenarios(t, h), "10"); !o.Plan.Summary.NeedsRecalculation {
 		t.Error("plan 10 should need recalculation")
 	}
 
 	// regenerate: 10 guests fit one 12-seat table (the floor is waived for one table); at 9 seats
 	// no table count satisfies the floor of 8, so that proposal is best-effort with violations
 	prop := calculate(t, h).Data[3]
-	if prop.Capacity != 12 || prop.Plan.Summary.NeedsRecalculation || prop.Plan.Summary.SeatedCount != 10 {
+	if prop.Key != oapi.Seats12 || prop.Capacity != 12 || prop.Plan.Summary.NeedsRecalculation || prop.Plan.Summary.SeatedCount != 10 {
 		t.Errorf("proposal summary = %+v", prop.Plan.Summary)
 	}
 }
@@ -731,7 +753,7 @@ func TestCalculateFloorCases(t *testing.T) {
 			seedGuests(t, h, tc.guests)
 			var prop *oapi.Proposal
 			for _, p := range calculate(t, h).Data {
-				if int(p.Capacity) == tc.capacity {
+				if int(p.Capacity) == tc.capacity && p.Key != oapi.Mixed {
 					prop = &p
 				}
 			}
@@ -773,8 +795,110 @@ func TestRemovedCapacity8IsNotFound(t *testing.T) {
 	expect(t, do(h, http.MethodDelete, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 	expect(t, do(h, http.MethodPost, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 	for _, s := range listScenarios(t, h).Data {
-		if s.Capacity == 8 {
+		if s.Capacity == 8 || s.Key == "8" {
 			t.Error("capacity 8 listed")
 		}
 	}
+}
+
+// Task 013: the mixed plan is addressed as /scenarios/mixed/...; plan 12 and the mixed plan share
+// capacity 12 but are two plans.
+func TestMixedPlanEndpoints(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 14)
+
+	t.Run("GET /scenarios lists it fifth with key mixed and capacity 12", func(t *testing.T) {
+		list := listScenarios(t, h)
+		if len(list.Data) != 5 || list.Data[3].Key != oapi.Seats12 || list.Data[4].Key != oapi.Mixed || list.Data[4].Capacity != 12 || list.Data[3].Capacity != 12 {
+			t.Fatalf("scenarios = %+v", list.Data)
+		}
+		var raw struct{ Data []map[string]any }
+		rec := do(h, http.MethodGet, api+"/scenarios", "")
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw.Data[4]["key"] != "mixed" || raw.Data[4]["capacity"] != float64(12) || raw.Data[0]["key"] != "9" {
+			t.Errorf("JSON key/capacity = %v / %v / %v", raw.Data[4]["key"], raw.Data[4]["capacity"], raw.Data[0]["key"])
+		}
+	})
+
+	t.Run("calculate: five proposals with a key each, the last one mixed", func(t *testing.T) {
+		props := calculate(t, h)
+		for i, k := range allKeys {
+			if props.Data[i].Key != k {
+				t.Errorf("proposal %d key = %s, want %s", i, props.Data[i].Key, k)
+			}
+		}
+	})
+
+	acceptLayout(t, h, "12", rangeIDs(1, 8), rangeIDs(9, 14))
+	acceptLayout(t, h, "mixed", rangeIDs(1, 12), rangeIDs(13, 14))
+	before12 := scenarioOf(t, listScenarios(t, h), "12")
+
+	t.Run("seat, unseat, add and delete a table, reset: only the mixed plan changes", func(t *testing.T) {
+		got := scenarioResponse(t, do(h, http.MethodPut, seatPath("mixed", 13), `{"tableNumber":1,"pinned":true}`), http.StatusOK)
+		if got.Key != oapi.Mixed || got.Capacity != 12 || got.Plan.Tables[0].Fill != 13 || !slices.Contains(violationCodes(got), oapi.OverCapacity) {
+			t.Errorf("seat: key %s fill %d violations %v", got.Key, got.Plan.Tables[0].Fill, violationCodes(got))
+		}
+		if got = scenarioResponse(t, do(h, http.MethodDelete, seatPath("mixed", 14), ""), http.StatusOK); got.Key != oapi.Mixed || len(got.Plan.Unseated) != 1 {
+			t.Errorf("unseat: %+v", got.Plan.Unseated)
+		}
+		if got = scenarioResponse(t, do(h, http.MethodPost, api+"/scenarios/mixed/tables", ""), http.StatusCreated); got.Key != oapi.Mixed || got.Plan.Summary.TableCount != 3 {
+			t.Errorf("add table: key %s tables %d", got.Key, got.Plan.Summary.TableCount)
+		}
+		if got = scenarioResponse(t, do(h, http.MethodDelete, api+"/scenarios/mixed/tables/3", ""), http.StatusOK); got.Plan.Summary.TableCount != 2 {
+			t.Errorf("delete table: tables %d", got.Plan.Summary.TableCount)
+		}
+		after12 := scenarioOf(t, listScenarios(t, h), "12")
+		if *after12.Version != *before12.Version || after12.Plan.Summary != before12.Plan.Summary {
+			t.Errorf("plan 12 changed by edits of the mixed plan")
+		}
+		got = scenarioResponse(t, do(h, http.MethodDelete, api+"/scenarios/mixed/tables", ""), http.StatusOK)
+		if got.Key != oapi.Mixed || len(got.Plan.Tables) != 0 {
+			t.Errorf("reset: key %s tables %d", got.Key, len(got.Plan.Tables))
+		}
+		after12 = scenarioOf(t, listScenarios(t, h), "12")
+		if *after12.Version != *before12.Version || len(after12.Plan.Tables) != 2 {
+			t.Errorf("plan 12 changed by deleting the mixed plan: v%d, %d tables", *after12.Version, len(after12.Plan.Tables))
+		}
+	})
+
+	t.Run("an unknown plan key is 404 not_found on every per-plan route", func(t *testing.T) {
+		for _, key := range []string{"13", "8", "foo", "Mixed", "mixed2"} {
+			for _, r := range []struct{ method, path, body string }{
+				{http.MethodPut, "/scenarios/" + key + "/assignments/1", `{"tableNumber":1,"pinned":false}`},
+				{http.MethodDelete, "/scenarios/" + key + "/assignments/1", ""},
+				{http.MethodPost, "/scenarios/" + key + "/tables", ""},
+				{http.MethodDelete, "/scenarios/" + key + "/tables/1", ""},
+				{http.MethodDelete, "/scenarios/" + key + "/tables", ""},
+			} {
+				expect(t, do(h, r.method, api+r.path, r.body), http.StatusNotFound, oapi.ErrorCodeNotFound)
+			}
+		}
+	})
+
+	t.Run("a stale mixed version names the plan in the 409", func(t *testing.T) {
+		plans := storedLayouts(listScenarios(t, h))
+		plans[4].BasedOnVersion--
+		rec := replace(t, h, replaceBody(t, plans))
+		expect(t, rec, http.StatusConflict, oapi.ErrorCodeVersionConflict)
+		if msg := decodeError(t, rec).Errors[0].Message; !strings.Contains(msg, "Plan mixed") {
+			t.Errorf("message = %q", msg)
+		}
+	})
+
+	t.Run("PUT /scenarios round-trips the mixed plan (key, tables)", func(t *testing.T) {
+		plans := storedLayouts(listScenarios(t, h))
+		plans[4].Tables = []oapi.TableLayout{{Number: 1, GuestIds: rangeIDs(1, 9), PinnedGuestIds: []int64{}}, {Number: 2, GuestIds: rangeIDs(10, 14), PinnedGuestIds: []int64{10}}}
+		got := replaceOK(t, h, plans)
+		if m := got.Data[4]; m.Key != oapi.Mixed || m.Plan.Summary.TableCount != 2 || m.Plan.Summary.SeatedCount != 14 {
+			t.Errorf("mixed = %+v", m.Plan.Summary)
+		}
+		if tb, pinned, _ := tableOfGuest(got.Data[4], 10); tb != 2 || !pinned {
+			t.Errorf("guest 10: table %d pinned %v", tb, pinned)
+		}
+		if got.Data[3].Plan.Summary.TableCount != 2 || got.Data[3].Plan.Summary.SeatedCount != 14 {
+			t.Errorf("plan 12 was disturbed: %+v", got.Data[3].Plan.Summary)
+		}
+	})
 }

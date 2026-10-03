@@ -113,11 +113,17 @@ func (q *Queries) GetDiningTableID(ctx context.Context, arg GetDiningTableIDPara
 }
 
 const getScenario = `-- name: GetScenario :one
-SELECT id, capacity, mixed, version, updated_at FROM scenario WHERE capacity = ?
+SELECT id, capacity, mixed, version, updated_at FROM scenario WHERE capacity = ? AND mixed = ?
 `
 
-func (q *Queries) GetScenario(ctx context.Context, capacity int64) (Scenario, error) {
-	row := q.db.QueryRowContext(ctx, getScenario, capacity)
+type GetScenarioParams struct {
+	Capacity int64
+	Mixed    int64
+}
+
+// A plan is identified by (capacity, mixed); capacity alone matches two rows for 12.
+func (q *Queries) GetScenario(ctx context.Context, arg GetScenarioParams) (Scenario, error) {
+	row := q.db.QueryRowContext(ctx, getScenario, arg.Capacity, arg.Mixed)
 	var i Scenario
 	err := row.Scan(
 		&i.ID,
@@ -217,11 +223,13 @@ func (q *Queries) ListDiningTables(ctx context.Context) ([]DiningTable, error) {
 
 const listScenarios = `-- name: ListScenarios :many
 
-SELECT id, capacity, mixed, version, updated_at FROM scenario ORDER BY capacity
+SELECT id, capacity, mixed, version, updated_at FROM scenario ORDER BY mixed, capacity
 `
 
-// Scenario, table and assignment queries (B-09). Scenarios are seeded by the migration (3 rows)
+// Scenario, table and assignment queries (B-09). Scenarios are seeded by the migrations (5 rows: capacities
+// 9, 10, 11, 12 and the mixed plan = (12, mixed 1), task 013)
 // and never created or deleted. Every plan mutation bumps scenario.version.
+// Order 9, 10, 11, 12, mixed.
 func (q *Queries) ListScenarios(ctx context.Context) ([]Scenario, error) {
 	rows, err := q.db.QueryContext(ctx, listScenarios)
 	if err != nil {

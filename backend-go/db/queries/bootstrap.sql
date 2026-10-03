@@ -1,3 +1,3 @@
--- name: ListCapacities :many
--- Capacities of the seeded scenarios (B-02 bootstrap). Feature queries arrive with their tickets.
-SELECT capacity FROM scenario ORDER BY capacity;
+-- name: ListPlanKeys :many
+-- (capacity, mixed) of the seeded scenarios (B-02 bootstrap), ordered like ListScenarios.
+SELECT capacity, mixed FROM scenario ORDER BY mixed, capacity;

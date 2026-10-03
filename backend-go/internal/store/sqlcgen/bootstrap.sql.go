@@ -9,24 +9,29 @@ import (
 	"context"
 )
 
-const listCapacities = `-- name: ListCapacities :many
-SELECT capacity FROM scenario ORDER BY capacity
+const listPlanKeys = `-- name: ListPlanKeys :many
+SELECT capacity, mixed FROM scenario ORDER BY mixed, capacity
 `
 
-// Capacities of the seeded scenarios (B-02 bootstrap). Feature queries arrive with their tickets.
-func (q *Queries) ListCapacities(ctx context.Context) ([]int64, error) {
-	rows, err := q.db.QueryContext(ctx, listCapacities)
+type ListPlanKeysRow struct {
+	Capacity int64
+	Mixed    int64
+}
+
+// (capacity, mixed) of the seeded scenarios (B-02 bootstrap), ordered like ListScenarios.
+func (q *Queries) ListPlanKeys(ctx context.Context) ([]ListPlanKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPlanKeys)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []int64
+	var items []ListPlanKeysRow
 	for rows.Next() {
-		var capacity int64
-		if err := rows.Scan(&capacity); err != nil {
+		var i ListPlanKeysRow
+		if err := rows.Scan(&i.Capacity, &i.Mixed); err != nil {
 			return nil, err
 		}
-		items = append(items, capacity)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

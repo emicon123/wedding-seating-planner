@@ -28,7 +28,7 @@ type Server struct {
 	gate   *accessgate.Gate // nil = access gate off (STOLIKI_PIN unset)
 }
 
-// NewServer wires the HTTP adapter: the guest list, the four plans and the access gate
+// NewServer wires the HTTP adapter: the guest list, the five plans and the access gate
 // (nil = gate off, today's open behaviour).
 func NewServer(db Pinger, g *guests.Service, p *scenarios.Service, gate *accessgate.Gate) *Server {
 	return &Server{db: db, guests: g, plans: p, gate: gate}

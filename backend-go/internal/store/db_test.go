@@ -29,7 +29,7 @@ func openMigrated(t *testing.T) *sql.DB {
 
 func capacities(t *testing.T, db *sql.DB) []int {
 	t.Helper()
-	rows, err := db.Query(`SELECT capacity FROM scenario ORDER BY capacity`)
+	rows, err := db.Query(`SELECT capacity FROM scenario ORDER BY mixed, capacity`)
 	if err != nil {
 		t.Fatalf("query scenarios: %v", err)
 	}
@@ -48,10 +48,10 @@ func capacities(t *testing.T, db *sql.DB) []int {
 	return out
 }
 
-func TestOpenMigrateSeedsFourScenarios(t *testing.T) {
+func TestOpenMigrateSeedsFiveScenarios(t *testing.T) {
 	db := openMigrated(t)
-	if got := capacities(t, db); !slices.Equal(got, []int{9, 10, 11, 12}) {
-		t.Fatalf("scenarios = %v, want [9 10 11 12]", got)
+	if got := capacities(t, db); !slices.Equal(got, []int{9, 10, 11, 12, 12}) {
+		t.Fatalf("scenarios = %v, want [9 10 11 12 12] (the last one is the mixed plan)", got)
 	}
 }
 
@@ -85,8 +85,8 @@ func TestMigrateTwiceIsANoOp(t *testing.T) {
 	if err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
-	if got := capacities(t, db); !slices.Equal(got, []int{9, 10, 11, 12}) {
-		t.Fatalf("scenarios after second Migrate = %v, want [9 10 11 12]", got)
+	if got := capacities(t, db); !slices.Equal(got, []int{9, 10, 11, 12, 12}) {
+		t.Fatalf("scenarios after second Migrate = %v, want [9 10 11 12 12] (the last one is the mixed plan)", got)
 	}
 }
 
@@ -106,8 +106,8 @@ func TestBackupWritesAnOpenableCopy(t *testing.T) {
 		t.Fatalf("open backup: %v", err)
 	}
 	defer copyDB.Close()
-	if got := capacities(t, copyDB); !slices.Equal(got, []int{9, 10, 11, 12}) {
-		t.Errorf("backup scenarios = %v, want [9 10 11 12]", got)
+	if got := capacities(t, copyDB); !slices.Equal(got, []int{9, 10, 11, 12, 12}) {
+		t.Errorf("backup scenarios = %v, want [9 10 11 12 12] (the last one is the mixed plan)", got)
 	}
 	var guests int
 	if err := copyDB.QueryRow(`SELECT count(*) FROM guest`).Scan(&guests); err != nil || guests != 1 {
@@ -173,17 +173,18 @@ func TestWithTx(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("gives the callback working queries", func(t *testing.T) {
-		var got []int64
+		var got []sqlcgen.ListPlanKeysRow
 		err := withTx(ctx, db, func(q *sqlcgen.Queries) error {
 			var err error
-			got, err = q.ListCapacities(ctx)
+			got, err = q.ListPlanKeys(ctx)
 			return err
 		})
 		if err != nil {
 			t.Fatalf("withTx: %v", err)
 		}
-		if !slices.Equal(got, []int64{9, 10, 11, 12}) {
-			t.Errorf("capacities = %v", got)
+		want := []sqlcgen.ListPlanKeysRow{{Capacity: 9}, {Capacity: 10}, {Capacity: 11}, {Capacity: 12}, {Capacity: 12, Mixed: 1}}
+		if !slices.Equal(got, want) {
+			t.Errorf("plan keys = %v, want %v", got, want)
 		}
 	})
 

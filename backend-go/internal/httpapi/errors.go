@@ -45,7 +45,7 @@ func errorResponse(err error) (status int, body oapi.ErrorResponse) {
 		status, code, message = http.StatusNotFound, oapi.ErrorCodeNotFound, "The requested resource does not exist."
 	case errors.As(err, &stale): // before the generic conflict: it names the plan
 		status, code, field, message = http.StatusConflict, oapi.ErrorCodeVersionConflict, "plans",
-			fmt.Sprintf("Plan %d was changed by someone else (current version %d).", stale.Capacity, stale.Current)
+			fmt.Sprintf("Plan %s was changed by someone else (current version %d).", stale.Plan, stale.Current)
 	case errors.Is(err, apperr.ErrVersionConflict):
 		status, code, field, message = http.StatusConflict, oapi.ErrorCodeVersionConflict, "version",
 			"The resource was changed meanwhile; refetch and retry."

@@ -23,6 +23,11 @@ func newScenarios(t *testing.T, n int) (*Scenarios, *sql.DB) {
 	return NewScenarios(db), db
 }
 
+// uk is the key of a uniform plan; mixedKey the mixed plan's.
+func uk(capacity int) scenarios.Key { return scenarios.Key{Capacity: capacity} }
+
+var mixedKey = scenarios.Key{Capacity: 12, Mixed: true}
+
 // layout builds a plan for capacity with tables numbered 1..len(tables); each table lists its guests.
 func layout(capacity int, tables ...[]int64) seating.Plan {
 	p := seating.Plan{Capacity: capacity}
@@ -56,22 +61,22 @@ func numbers(p seating.Plan) []int {
 	return out
 }
 
-func TestScenariosListReturnsFourOrdered(t *testing.T) {
+func TestScenariosListReturnsFiveOrdered(t *testing.T) {
 	s, _ := newScenarios(t, 0)
 	got, err := s.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 {
-		t.Fatalf("List = %d scenarios, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("List = %d scenarios, want 5", len(got))
 	}
-	for i, want := range []int{9, 10, 11, 12} {
+	for i, want := range scenarios.Keys {
 		wantVersion := int64(1)
-		if want == 9 {
+		if want == uk(9) {
 			wantVersion = 2 // migration 00002 bumps the converted 8->9 plan, also on a fresh database
 		}
-		if got[i].Plan.Capacity != want || got[i].Version != wantVersion || len(got[i].Plan.Tables) != 0 {
-			t.Errorf("scenario %d = %+v, want empty capacity %d at version %d", i, got[i], want, wantVersion)
+		if got[i].Key() != want || got[i].Version != wantVersion || len(got[i].Plan.Tables) != 0 {
+			t.Errorf("scenario %d = %+v, want empty plan %v at version %d", i, got[i], want, wantVersion)
 		}
 	}
 }
@@ -79,18 +84,27 @@ func TestScenariosListReturnsFourOrdered(t *testing.T) {
 func TestScenariosGet(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newScenarios(t, 0)
-	got, err := s.Get(ctx, 10)
-	if err != nil || got.Plan.Capacity != 10 {
+	got, err := s.Get(ctx, uk(10))
+	if err != nil || got.Key() != uk(10) {
 		t.Fatalf("Get(10) = %+v, %v", got, err)
 	}
-	if _, err := s.Get(ctx, 8); !errors.Is(err, apperr.ErrNotFound) {
+	if _, err := s.Get(ctx, uk(8)); !errors.Is(err, apperr.ErrNotFound) {
 		t.Errorf("Get(8) err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Get(ctx, scenarios.Key{Capacity: 11, Mixed: true}); !errors.Is(err, apperr.ErrNotFound) {
+		t.Errorf("Get(11, mixed) err = %v, want ErrNotFound", err)
+	}
+	// capacity 12 names two plans: the key tells them apart
+	g12, err12 := s.Get(ctx, uk(12))
+	gm, errm := s.Get(ctx, mixedKey)
+	if err12 != nil || errm != nil || g12.Plan.Mixed || !gm.Plan.Mixed || gm.Plan.Capacity != 12 || g12.Key() == gm.Key() {
+		t.Errorf("Get(12) = %+v, %v; Get(mixed) = %+v, %v", g12, err12, gm, errm)
 	}
 }
 
 // replaceOne replaces a single plan through ReplacePlans (the only replace the store has).
-func replaceOne(ctx context.Context, s *Scenarios, capacity int, expected int64, p seating.Plan) (scenarios.PlanState, error) {
-	out, err := s.ReplacePlans(ctx, []scenarios.PlanReplace{{Capacity: capacity, ExpectedVersion: expected, Plan: p}})
+func replaceOne(ctx context.Context, s *Scenarios, key scenarios.Key, expected int64, p seating.Plan) (scenarios.PlanState, error) {
+	out, err := s.ReplacePlans(ctx, []scenarios.PlanReplace{{Key: key, ExpectedVersion: expected, Plan: p}})
 	if err != nil {
 		return scenarios.PlanState{}, err
 	}
@@ -104,7 +118,7 @@ func TestScenariosReplacePlan(t *testing.T) {
 	t.Run("replaces tables, seats and pins and bumps the version", func(t *testing.T) {
 		p := layout(10, []int64{1, 2}, []int64{3})
 		p.Tables[0].Seats[1].Pinned = true
-		got, err := replaceOne(ctx, s, 10, 1, p)
+		got, err := replaceOne(ctx, s, uk(10), 1, p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +131,7 @@ func TestScenariosReplacePlan(t *testing.T) {
 		}
 
 		// a second replace drops everything the first one stored
-		got, err = replaceOne(ctx, s, 10, 2, layout(10, []int64{4}))
+		got, err = replaceOne(ctx, s, uk(10), 2, layout(10, []int64{4}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,12 +142,12 @@ func TestScenariosReplacePlan(t *testing.T) {
 	})
 
 	t.Run("stale version is ErrVersionConflict and changes nothing", func(t *testing.T) {
-		before, _ := s.Get(ctx, 10)
-		_, err := replaceOne(ctx, s, 10, before.Version-1, layout(10, []int64{1}))
+		before, _ := s.Get(ctx, uk(10))
+		_, err := replaceOne(ctx, s, uk(10), before.Version-1, layout(10, []int64{1}))
 		if !errors.Is(err, apperr.ErrVersionConflict) {
 			t.Fatalf("err = %v, want ErrVersionConflict", err)
 		}
-		after, _ := s.Get(ctx, 10)
+		after, _ := s.Get(ctx, uk(10))
 		if after.Version != before.Version || len(after.Plan.Tables) != len(before.Plan.Tables) {
 			t.Errorf("state changed: %+v -> %+v", before, after)
 		}
@@ -141,25 +155,25 @@ func TestScenariosReplacePlan(t *testing.T) {
 
 	t.Run("only the addressed scenario changes", func(t *testing.T) {
 		for _, c := range []int{11, 12} {
-			if got, _ := s.Get(ctx, c); got.Version != 1 || len(got.Plan.Tables) != 0 {
+			if got, _ := s.Get(ctx, uk(c)); got.Version != 1 || len(got.Plan.Tables) != 0 {
 				t.Errorf("scenario %d = %+v, want untouched", c, got)
 			}
 		}
 	})
 
-	t.Run("unknown capacity", func(t *testing.T) {
-		if _, err := replaceOne(ctx, s, 8, 1, layout(8)); !errors.Is(err, apperr.ErrNotFound) {
+	t.Run("unknown plan", func(t *testing.T) {
+		if _, err := replaceOne(ctx, s, uk(8), 1, layout(8)); !errors.Is(err, apperr.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
 	})
 
 	t.Run("unknown guest rolls everything back", func(t *testing.T) {
-		before, _ := s.Get(ctx, 12)
-		_, err := replaceOne(ctx, s, 12, before.Version, layout(12, []int64{1, 999}))
+		before, _ := s.Get(ctx, uk(12))
+		_, err := replaceOne(ctx, s, uk(12), before.Version, layout(12, []int64{1, 999}))
 		if !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		if after, _ := s.Get(ctx, 12); after.Version != before.Version || len(after.Plan.Tables) != 0 {
+		if after, _ := s.Get(ctx, uk(12)); after.Version != before.Version || len(after.Plan.Tables) != 0 {
 			t.Errorf("state = %+v, want untouched", after)
 		}
 	})
@@ -168,29 +182,41 @@ func TestScenariosReplacePlan(t *testing.T) {
 func TestScenariosReplacePlans(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newScenarios(t, 6)
-	versions := map[int]int64{9: 2, 10: 1, 11: 1, 12: 1} // fresh database: migration 00002 bumps plan 9
+	// fresh database: migration 00002 bumps plan 9
+	versions := map[scenarios.Key]int64{uk(9): 2, uk(10): 1, uk(11): 1, uk(12): 1, mixedKey: 1}
 
 	pinned := layout(10, []int64{1, 2}, []int64{3})
 	pinned.Tables[0].Seats[1].Pinned = true
-	reps := func(v map[int]int64) []scenarios.PlanReplace {
+	mixedPlan := layout(12, []int64{1, 2, 3}, []int64{4, 5})
+	mixedPlan.Mixed = true
+	reps := func(v map[scenarios.Key]int64) []scenarios.PlanReplace {
 		return []scenarios.PlanReplace{
-			{Capacity: 9, ExpectedVersion: v[9], Plan: layout(9, []int64{1, 2, 3}, []int64{4, 5, 6})},
-			{Capacity: 10, ExpectedVersion: v[10], Plan: pinned},
-			{Capacity: 11, ExpectedVersion: v[11], Plan: layout(11, []int64{1, 2, 3, 4, 5, 6})},
-			{Capacity: 12, ExpectedVersion: v[12], Plan: layout(12)}, // empty plan
+			{Key: uk(9), ExpectedVersion: v[uk(9)], Plan: layout(9, []int64{1, 2, 3}, []int64{4, 5, 6})},
+			{Key: uk(10), ExpectedVersion: v[uk(10)], Plan: pinned},
+			{Key: uk(11), ExpectedVersion: v[uk(11)], Plan: layout(11, []int64{1, 2, 3, 4, 5, 6})},
+			{Key: uk(12), ExpectedVersion: v[uk(12)], Plan: layout(12)}, // empty plan
+			{Key: mixedKey, ExpectedVersion: v[mixedKey], Plan: mixedPlan},
+		}
+	}
+	untouched := func(t *testing.T) {
+		t.Helper()
+		for _, st := range mustList(t, s) {
+			if st.Version != versions[st.Key()] || len(st.Plan.Tables) != 0 {
+				t.Errorf("plan %v = %+v, want untouched", st.Key(), st)
+			}
 		}
 	}
 
-	t.Run("a stale version on one plan changes none of the four", func(t *testing.T) {
+	t.Run("a stale version on one plan changes none of the five", func(t *testing.T) {
 		before, err := s.List(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stale := map[int]int64{9: 2, 10: 1, 11: 1, 12: 5} // 12 is stale, 9..11 are fine
+		stale := map[scenarios.Key]int64{uk(9): 2, uk(10): 1, uk(11): 1, uk(12): 1, mixedKey: 5} // only mixed is stale
 		_, err = s.ReplacePlans(ctx, reps(stale))
 		var sv apperr.StaleVersion
-		if !errors.Is(err, apperr.ErrVersionConflict) || !errors.As(err, &sv) || sv.Capacity != 12 || sv.Current != 1 {
-			t.Fatalf("err = %v, want StaleVersion for plan 12 at version 1", err)
+		if !errors.Is(err, apperr.ErrVersionConflict) || !errors.As(err, &sv) || sv.Plan != "mixed" || sv.Current != 1 {
+			t.Fatalf("err = %v, want StaleVersion for plan mixed at version 1", err)
 		}
 		after, _ := s.List(ctx)
 		if !slices.EqualFunc(before, after, func(a, b scenarios.PlanState) bool { return a.Version == b.Version && plansEqual(a.Plan, b.Plan) }) {
@@ -200,40 +226,33 @@ func TestScenariosReplacePlans(t *testing.T) {
 
 	t.Run("an unknown guest in the last plan rolls back the earlier ones", func(t *testing.T) {
 		bad := reps(versions)
-		bad[3].Plan = layout(12, []int64{1, 999})
+		bad[4].Plan = layout(12, []int64{1, 999})
+		bad[4].Plan.Mixed = true
 		if _, err := s.ReplacePlans(ctx, bad); !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		for _, st := range mustList(t, s) {
-			if st.Version != versions[st.Plan.Capacity] || len(st.Plan.Tables) != 0 {
-				t.Errorf("plan %d = %+v, want untouched", st.Plan.Capacity, st)
-			}
-		}
+		untouched(t)
 	})
 
-	t.Run("an unknown capacity rolls everything back", func(t *testing.T) {
-		bad := append(reps(versions)[:3], scenarios.PlanReplace{Capacity: 8, ExpectedVersion: 1, Plan: layout(8)})
+	t.Run("an unknown plan rolls everything back", func(t *testing.T) {
+		bad := append(reps(versions)[:3], scenarios.PlanReplace{Key: uk(8), ExpectedVersion: 1, Plan: layout(8)})
 		if _, err := s.ReplacePlans(ctx, bad); !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		for _, st := range mustList(t, s) {
-			if st.Version != versions[st.Plan.Capacity] || len(st.Plan.Tables) != 0 {
-				t.Errorf("plan %d = %+v, want untouched", st.Plan.Capacity, st)
-			}
-		}
+		untouched(t)
 	})
 
-	t.Run("replaces all four, bumps four versions, keeps pins and empty tables", func(t *testing.T) {
+	t.Run("replaces all five, bumps five versions, keeps pins and empty tables", func(t *testing.T) {
 		got, err := s.ReplacePlans(ctx, reps(versions))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 4 {
+		if len(got) != 5 {
 			t.Fatalf("got %d plans", len(got))
 		}
-		for i, c := range []int{9, 10, 11, 12} {
-			if got[i].Plan.Capacity != c || got[i].Version != versions[c]+1 {
-				t.Errorf("plan %d = capacity %d version %d", i, got[i].Plan.Capacity, got[i].Version)
+		for i, k := range scenarios.Keys {
+			if got[i].Key() != k || got[i].Version != versions[k]+1 {
+				t.Errorf("plan %d = key %v version %d", i, got[i].Key(), got[i].Version)
 			}
 		}
 		if at, _ := tableOf(got[0].Plan); len(at) != 6 || at[4] != 2 {
@@ -243,7 +262,10 @@ func TestScenariosReplacePlans(t *testing.T) {
 			t.Errorf("plan 10 pins = %v", pin)
 		}
 		if len(got[3].Plan.Tables) != 0 {
-			t.Errorf("plan 12 should be empty: %+v", got[3].Plan)
+			t.Errorf("plan 12 should be empty (the mixed plan's tables must not leak into it): %+v", got[3].Plan)
+		}
+		if at, _ := tableOf(got[4].Plan); len(at) != 5 || !got[4].Plan.Mixed || got[4].Plan.Capacity != 12 || at[5] != 2 {
+			t.Errorf("mixed plan = %+v", got[4].Plan)
 		}
 		if stored := mustList(t, s); !slices.EqualFunc(got, stored, func(a, b scenarios.PlanState) bool { return a.Version == b.Version && plansEqual(a.Plan, b.Plan) }) {
 			t.Errorf("returned states differ from stored:\n%+v\n%+v", got, stored)
@@ -251,7 +273,7 @@ func TestScenariosReplacePlans(t *testing.T) {
 	})
 
 	t.Run("a second replace drops what the first stored", func(t *testing.T) {
-		next := map[int]int64{9: 3, 10: 2, 11: 2, 12: 2}
+		next := map[scenarios.Key]int64{uk(9): 3, uk(10): 2, uk(11): 2, uk(12): 2, mixedKey: 2}
 		in := reps(next)
 		in[0].Plan = layout(9, []int64{1}, nil, nil) // empty tables are kept
 		got, err := s.ReplacePlans(ctx, in)
@@ -260,6 +282,27 @@ func TestScenariosReplacePlans(t *testing.T) {
 		}
 		if at, _ := tableOf(got[0].Plan); len(at) != 1 || len(got[0].Plan.Tables) != 3 || got[0].Version != 4 {
 			t.Errorf("plan 9 = %+v", got[0])
+		}
+	})
+
+	t.Run("replacing only the mixed plan leaves plan 12 alone and vice versa", func(t *testing.T) {
+		st12, _ := s.Get(ctx, uk(12))
+		stM, _ := s.Get(ctx, mixedKey)
+		mp := layout(12, []int64{6})
+		mp.Mixed = true
+		if _, err := s.ReplacePlans(ctx, []scenarios.PlanReplace{{Key: mixedKey, ExpectedVersion: stM.Version, Plan: mp}}); err != nil {
+			t.Fatal(err)
+		}
+		after12, _ := s.Get(ctx, uk(12))
+		if after12.Version != st12.Version || !plansEqual(after12.Plan, st12.Plan) {
+			t.Errorf("plan 12 changed by a mixed replace: %+v -> %+v", st12, after12)
+		}
+		if _, err := s.ReplacePlans(ctx, []scenarios.PlanReplace{{Key: uk(12), ExpectedVersion: st12.Version, Plan: layout(12, []int64{1, 2})}}); err != nil {
+			t.Fatal(err)
+		}
+		afterM, _ := s.Get(ctx, mixedKey)
+		if at, _ := tableOf(afterM.Plan); len(at) != 1 || at[6] != 1 {
+			t.Errorf("mixed plan changed by a plan 12 replace: %+v", afterM)
 		}
 	})
 }
@@ -274,7 +317,7 @@ func mustList(t *testing.T, s *Scenarios) []scenarios.PlanState {
 }
 
 func plansEqual(a, b seating.Plan) bool {
-	return a.Capacity == b.Capacity && slices.EqualFunc(a.Tables, b.Tables, func(x, y seating.Table) bool {
+	return a.Capacity == b.Capacity && a.Mixed == b.Mixed && slices.EqualFunc(a.Tables, b.Tables, func(x, y seating.Table) bool {
 		return x.Number == y.Number && slices.Equal(x.Seats, y.Seats)
 	})
 }
@@ -282,12 +325,12 @@ func plansEqual(a, b seating.Plan) bool {
 func TestScenariosSeatCluster(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newScenarios(t, 4)
-	if _, err := replaceOne(ctx, s, 11, 1, layout(11, []int64{1}, []int64{2}, nil)); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, uk(11), 1, layout(11, []int64{1}, []int64{2}, nil)); err != nil { // version 2
 		t.Fatal(err)
 	}
 
 	t.Run("upserts every member (moves seated, seats unseated) with the pin", func(t *testing.T) {
-		got, err := s.SeatCluster(ctx, 11, []int64{1, 3, 4}, 3, true)
+		got, err := s.SeatCluster(ctx, uk(11), []int64{1, 3, 4}, 3, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -304,7 +347,7 @@ func TestScenariosSeatCluster(t *testing.T) {
 	})
 
 	t.Run("seating again unpins when asked to", func(t *testing.T) {
-		got, err := s.SeatCluster(ctx, 11, []int64{1, 3, 4}, 3, false)
+		got, err := s.SeatCluster(ctx, uk(11), []int64{1, 3, 4}, 3, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -314,28 +357,28 @@ func TestScenariosSeatCluster(t *testing.T) {
 	})
 
 	t.Run("unknown table is ErrNotFound and changes nothing", func(t *testing.T) {
-		before, _ := s.Get(ctx, 11)
-		if _, err := s.SeatCluster(ctx, 11, []int64{1}, 9, false); !errors.Is(err, apperr.ErrNotFound) {
+		before, _ := s.Get(ctx, uk(11))
+		if _, err := s.SeatCluster(ctx, uk(11), []int64{1}, 9, false); !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		if after, _ := s.Get(ctx, 11); after.Version != before.Version {
+		if after, _ := s.Get(ctx, uk(11)); after.Version != before.Version {
 			t.Errorf("version %d -> %d", before.Version, after.Version)
 		}
 	})
 
 	t.Run("a table of another scenario is not a valid target (same number, other plan)", func(t *testing.T) {
 		// Scenario 10 has no tables at all, so table 1 does not exist there.
-		if _, err := s.SeatCluster(ctx, 10, []int64{1}, 1, false); !errors.Is(err, apperr.ErrNotFound) {
+		if _, err := s.SeatCluster(ctx, uk(10), []int64{1}, 1, false); !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
 	})
 
 	t.Run("unknown guest is ErrNotFound and rolls back the members already seated", func(t *testing.T) {
-		before, _ := s.Get(ctx, 11)
-		if _, err := s.SeatCluster(ctx, 11, []int64{2, 999}, 1, false); !errors.Is(err, apperr.ErrNotFound) {
+		before, _ := s.Get(ctx, uk(11))
+		if _, err := s.SeatCluster(ctx, uk(11), []int64{2, 999}, 1, false); !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		after, _ := s.Get(ctx, 11)
+		after, _ := s.Get(ctx, uk(11))
 		if at, _ := tableOf(after.Plan); at[2] != 2 || after.Version != before.Version {
 			t.Errorf("guest 2 moved or version bumped: %v v%d", at, after.Version)
 		}
@@ -347,10 +390,10 @@ func TestScenariosUnseatCluster(t *testing.T) {
 	s, _ := newScenarios(t, 3)
 	p := layout(10, []int64{1, 2}, []int64{3})
 	p.Tables[0].Seats[0].Pinned = true
-	if _, err := replaceOne(ctx, s, 10, 1, p); err != nil {
+	if _, err := replaceOne(ctx, s, uk(10), 1, p); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.UnseatCluster(ctx, 10, []int64{1, 2})
+	got, err := s.UnseatCluster(ctx, uk(10), []int64{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +402,7 @@ func TestScenariosUnseatCluster(t *testing.T) {
 		t.Errorf("state = %+v seats %v", got, at)
 	}
 	// idempotent: unseating the unseated still succeeds (and bumps the version)
-	got, err = s.UnseatCluster(ctx, 10, []int64{1, 2})
+	got, err = s.UnseatCluster(ctx, uk(10), []int64{1, 2})
 	if err != nil || got.Version != 4 {
 		t.Errorf("repeat = %+v, %v", got, err)
 	}
@@ -369,7 +412,7 @@ func TestScenariosAddTable(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newScenarios(t, 0)
 	for want := 1; want <= 3; want++ {
-		got, err := s.AddTable(ctx, 12)
+		got, err := s.AddTable(ctx, uk(12))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -377,7 +420,7 @@ func TestScenariosAddTable(t *testing.T) {
 			t.Fatalf("after add %d: %+v", want, got)
 		}
 	}
-	if _, err := s.AddTable(ctx, 8); !errors.Is(err, apperr.ErrNotFound) {
+	if _, err := s.AddTable(ctx, uk(8)); !errors.Is(err, apperr.ErrNotFound) {
 		t.Errorf("AddTable(8) err = %v, want ErrNotFound", err)
 	}
 }
@@ -387,11 +430,11 @@ func TestScenariosRemoveTableRenumbers(t *testing.T) {
 	s, _ := newScenarios(t, 5)
 	p := layout(10, []int64{1}, []int64{2, 3}, []int64{4}, []int64{5})
 	p.Tables[2].Seats[0].Pinned = true
-	if _, err := replaceOne(ctx, s, 10, 1, p); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, uk(10), 1, p); err != nil { // version 2
 		t.Fatal(err)
 	}
 
-	got, err := s.RemoveTable(ctx, 10, 2)
+	got, err := s.RemoveTable(ctx, uk(10), 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,17 +453,17 @@ func TestScenariosRemoveTableRenumbers(t *testing.T) {
 	}
 
 	t.Run("removing the last table needs no renumbering", func(t *testing.T) {
-		got, err := s.RemoveTable(ctx, 10, 3)
+		got, err := s.RemoveTable(ctx, uk(10), 3)
 		if err != nil || !slices.Equal(numbers(got.Plan), []int{1, 2}) {
 			t.Fatalf("got %+v, %v", got, err)
 		}
 	})
 	t.Run("unknown table is ErrNotFound and bumps nothing", func(t *testing.T) {
-		before, _ := s.Get(ctx, 10)
-		if _, err := s.RemoveTable(ctx, 10, 7); !errors.Is(err, apperr.ErrNotFound) {
+		before, _ := s.Get(ctx, uk(10))
+		if _, err := s.RemoveTable(ctx, uk(10), 7); !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		if after, _ := s.Get(ctx, 10); after.Version != before.Version {
+		if after, _ := s.Get(ctx, uk(10)); after.Version != before.Version {
 			t.Errorf("version %d -> %d", before.Version, after.Version)
 		}
 	})
@@ -431,13 +474,13 @@ func TestScenariosClearPlan(t *testing.T) {
 	s, db := newScenarios(t, 4)
 	p := layout(10, []int64{1, 2}, []int64{3})
 	p.Tables[0].Seats[1].Pinned = true
-	if _, err := replaceOne(ctx, s, 10, 1, p); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, uk(10), 1, p); err != nil { // version 2
 		t.Fatal(err)
 	}
-	if _, err := replaceOne(ctx, s, 11, 1, layout(11, []int64{4})); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, uk(11), 1, layout(11, []int64{4})); err != nil { // version 2
 		t.Fatal(err)
 	}
-	plan11Before, _ := s.Get(ctx, 11)
+	plan11Before, _ := s.Get(ctx, uk(11))
 
 	count := func(query string, args ...any) (n int) {
 		t.Helper()
@@ -446,16 +489,16 @@ func TestScenariosClearPlan(t *testing.T) {
 		}
 		return n
 	}
-	const perScenario = "(SELECT id FROM scenario WHERE capacity = ?)"
+	const perScenario = "(SELECT id FROM scenario WHERE capacity = ? AND mixed = 0)"
 
-	got, err := s.ClearPlan(ctx, 10)
+	got, err := s.ClearPlan(ctx, uk(10))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Version != 3 || got.Plan.Capacity != 10 || len(got.Plan.Tables) != 0 {
 		t.Fatalf("ClearPlan(10) = %+v, want an empty plan at version 3", got)
 	}
-	if fresh, _ := s.Get(ctx, 10); fresh.Version != 3 || len(fresh.Plan.Tables) != 0 {
+	if fresh, _ := s.Get(ctx, uk(10)); fresh.Version != 3 || len(fresh.Plan.Tables) != 0 {
 		t.Errorf("Get(10) = %+v", fresh)
 	}
 	// cascade: dining_table -> assignment (pins live on the assignment row)
@@ -467,14 +510,14 @@ func TestScenariosClearPlan(t *testing.T) {
 	}
 
 	t.Run("other scenarios are untouched", func(t *testing.T) {
-		plan11After, _ := s.Get(ctx, 11)
+		plan11After, _ := s.Get(ctx, uk(11))
 		if plan11After.Version != plan11Before.Version || !slices.Equal(numbers(plan11After.Plan), numbers(plan11Before.Plan)) {
 			t.Errorf("plan 11 changed: %+v -> %+v", plan11Before, plan11After)
 		}
 		if at, _ := tableOf(plan11After.Plan); at[4] != 1 || len(at) != 1 {
 			t.Errorf("plan 11 seats = %v", at)
 		}
-		if got, _ := s.Get(ctx, 12); got.Version != 1 {
+		if got, _ := s.Get(ctx, uk(12)); got.Version != 1 {
 			t.Errorf("plan 12 version = %d, want 1", got.Version)
 		}
 		if n := count("SELECT COUNT(*) FROM assignment WHERE scenario_id = "+perScenario, 11); n != 1 {
@@ -483,16 +526,67 @@ func TestScenariosClearPlan(t *testing.T) {
 	})
 
 	t.Run("an empty plan clears again; only the version moves", func(t *testing.T) {
-		again, err := s.ClearPlan(ctx, 10)
+		again, err := s.ClearPlan(ctx, uk(10))
 		if err != nil || again.Version != 4 || len(again.Plan.Tables) != 0 {
 			t.Errorf("repeat = %+v, %v", again, err)
 		}
 	})
 }
 
-func TestScenariosClearPlanUnknownCapacity(t *testing.T) {
+func TestScenariosMixedPlanIsIndependentOfPlan12(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newScenarios(t, 4)
+	mp := layout(12, []int64{1, 2}, []int64{3})
+	mp.Mixed = true
+	mp.Tables[0].Seats[0].Pinned = true
+	if _, err := replaceOne(ctx, s, mixedKey, 1, mp); err != nil { // mixed -> version 2
+		t.Fatal(err)
+	}
+	if _, err := replaceOne(ctx, s, uk(12), 1, layout(12, []int64{4})); err != nil { // plan 12 -> version 2
+		t.Fatal(err)
+	}
+	plan12 := func() scenarios.PlanState { st, _ := s.Get(ctx, uk(12)); return st }
+	want12 := plan12()
+
+	got, err := s.SeatCluster(ctx, mixedKey, []int64{3}, 1, true)
+	if err != nil || got.Version != 3 || !got.Plan.Mixed {
+		t.Fatalf("SeatCluster(mixed) = %+v, %v", got, err)
+	}
+	if at, _ := tableOf(got.Plan); at[3] != 1 {
+		t.Errorf("mixed seats = %v", at)
+	}
+	if got, err = s.UnseatCluster(ctx, mixedKey, []int64{3}); err != nil || got.Version != 4 {
+		t.Fatalf("UnseatCluster(mixed) = %+v, %v", got, err)
+	}
+	if got, err = s.AddTable(ctx, mixedKey); err != nil || got.Version != 5 || len(got.Plan.Tables) != 3 {
+		t.Fatalf("AddTable(mixed) = %+v, %v", got, err)
+	}
+	if got, err = s.RemoveTable(ctx, mixedKey, 3); err != nil || got.Version != 6 || len(got.Plan.Tables) != 2 {
+		t.Fatalf("RemoveTable(mixed) = %+v, %v", got, err)
+	}
+	if after := plan12(); after.Version != want12.Version || !plansEqual(after.Plan, want12.Plan) {
+		t.Fatalf("plan 12 changed by edits of the mixed plan: %+v -> %+v", want12, after)
+	}
+
+	got, err = s.ClearPlan(ctx, mixedKey)
+	if err != nil || got.Version != 7 || got.Key() != mixedKey || len(got.Plan.Tables) != 0 {
+		t.Fatalf("ClearPlan(mixed) = %+v, %v", got, err)
+	}
+	if after := plan12(); after.Version != want12.Version || !plansEqual(after.Plan, want12.Plan) {
+		t.Errorf("ClearPlan(mixed) touched plan 12: %+v -> %+v", want12, after)
+	}
+	// and the other way round
+	if _, err := s.ClearPlan(ctx, uk(12)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replaceOne(ctx, s, mixedKey, 7, mp); err != nil {
+		t.Fatalf("mixed plan lost its version through a plan 12 clear: %v", err)
+	}
+}
+
+func TestScenariosClearPlanUnknownPlan(t *testing.T) {
 	s, _ := newScenarios(t, 0)
-	if _, err := s.ClearPlan(context.Background(), 8); !errors.Is(err, apperr.ErrNotFound) {
+	if _, err := s.ClearPlan(context.Background(), uk(8)); !errors.Is(err, apperr.ErrNotFound) {
 		t.Errorf("ClearPlan(8) err = %v, want ErrNotFound", err)
 	}
 }
@@ -502,7 +596,7 @@ func TestScenariosTableMustBelongToTheAssignmentsScenario(t *testing.T) {
 	// scenario 10 must fail, whatever the store does.
 	ctx := context.Background()
 	s, db := newScenarios(t, 1)
-	if _, err := s.AddTable(ctx, 10); err != nil {
+	if _, err := s.AddTable(ctx, uk(10)); err != nil {
 		t.Fatal(err)
 	}
 	_, err := db.ExecContext(ctx, `INSERT INTO assignment (scenario_id, guest_id, table_id)
@@ -518,13 +612,13 @@ func TestScenariosDeletedGuestLeavesItsSeat(t *testing.T) {
 	mustCreate(t, gs, "A", nil)
 	mustCreate(t, gs, "B", nil)
 	s := NewScenarios(db)
-	if _, err := replaceOne(ctx, s, 10, 1, layout(10, []int64{1, 2})); err != nil {
+	if _, err := replaceOne(ctx, s, uk(10), 1, layout(10, []int64{1, 2})); err != nil {
 		t.Fatal(err)
 	}
 	if err := gs.Delete(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := s.Get(ctx, 10)
+	got, _ := s.Get(ctx, uk(10))
 	if at, _ := tableOf(got.Plan); len(at) != 1 || at[2] != 1 {
 		t.Errorf("seats = %v", at)
 	}

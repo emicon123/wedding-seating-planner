@@ -290,7 +290,7 @@ func TestBackupSubcommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cp.Close()
-	rows, err := cp.Query(`SELECT capacity FROM scenario ORDER BY capacity`)
+	rows, err := cp.Query(`SELECT capacity FROM scenario ORDER BY mixed, capacity`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,10 @@ func TestBackupSubcommand(t *testing.T) {
 		}
 		got = append(got, c)
 	}
-	if !slices.Equal(got, []int{9, 10, 11, 12}) {
-		t.Errorf("backup scenarios = %v, want [9 10 11 12]", got)
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []int{9, 10, 11, 12, 12}) {
+		t.Errorf("backup scenarios = %v, want [9 10 11 12 12] (the last is the mixed plan)", got)
 	}
 }

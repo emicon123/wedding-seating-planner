@@ -57,7 +57,7 @@ func TestStrictBodyRejectsMissingRequiredAndUnknownFields(t *testing.T) {
 		// A PlanTable-shaped table (extra fill/score/clusters) must be accepted by the decoder; the
 		// request then fails later (stale/unknown version is irrelevant here), never as bad_request.
 		rec := do(h, http.MethodPut, api+"/scenarios",
-			`{"plans":[{"capacity":10,"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,2],"fill":2,"score":0,"clusters":[]}]}]}`)
+			`{"plans":[{"key":"10","basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,2],"fill":2,"score":0,"clusters":[]}]}]}`)
 		if rec.Code == http.StatusBadRequest {
 			t.Fatalf("nested extra fields must not be rejected: %s", rec.Body)
 		}
