@@ -522,7 +522,7 @@ The size of a mixed-plan table as its fill changes is the state machine in [001-
 | Plan cards grid | `PlansPage` | Five cards in `PLAN_KEYS` order, mixed last: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5` (phones 1, tablets 2, laptops 3 + 2, wide screens 5 across). Header copy: "Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany". |
 | Card header | `PlanCard` | Uniform: unchanged (`TableGlyph seats={capacity}`, "{c} miejsc", "Stoły {c}-osobowe"). Mixed: two overlapping glyphs `TableGlyph seats={12}` + smaller `seats={9}`, title **"Mieszany"**, subline "Stoły 9–12-osobowe". `aria-label` from `planTitle`. Links `/plany/{key}`. |
 | Card body (all five) | `PlanCard` → new `TablesNeededLine` | Under `PlanFigures`: **"Potrzebne stoły: 5 × 12, 3 × 11, 1 × 9 (102 miejsca)"** with a tiny `TableGlyph seats={size}` before each group (icon + text). Uniform cards show "Potrzebne stoły: 9 × 12 (108 miejsc)". Hidden when the plan has no non-empty table. This is the comparison figure ("as visual as possible"): sizes and total seats side by side across the five cards. |
-| Mixed card, extra table | `PlanCard` (mixed only) | When `mixed.tableCount === plan12.tableCount + 1` **and** `isolatedCount(mixed) < isolatedCount(plan12)`: a calm note "1 stół więcej niż plan 12 — mniej osób bez znajomych ({a} zamiast {b})". Derived from the two cached scenarios; nothing when the condition is false (also after hand edits). **To be removed/replaced when the pending mixed-plan objective lands (§15, 03-seating-model § The mixed plan).** |
+| Mixed card, extra table | `PlanCard` (mixed only) | When `mixed.tableCount === plan12.tableCount + 1` **and** `isolatedCount(mixed) < isolatedCount(plan12)`: a calm note "1 stół więcej niż plan 12 — mniej osób bez znajomych ({a} zamiast {b})". Derived from the two cached scenarios; nothing when the condition is false (also after hand edits). **Removed in task 015 (§16): the mixed plan chooses its own table count.** |
 | Fill bars | `FillBars` | No change; for mixed it scales to `capacity` (12). |
 | Switcher | `PlanSwitcher` | Five entries from `PLAN_KEYS`: "9 miejsc" … "12 miejsc", **"Mieszany"**, each with its table count. On phones it may scroll horizontally inside its own box (`overflow-x-auto`), never the page. |
 | Detail header | `PlanDetailPage` | Title from `planName`; `TablesNeededLine` next to `PlanFigures`. Routes `plany/:planKey`, `druk/:planKey`; the route guard (`CapacityRoute` → **`PlanRoute`**) uses `parsePlanKey`; `/plany/8` and `/druk/8` still redirect to 9; anything else → `/`. URL of the mixed plan: `/wesele/plany/mixed`. |
@@ -532,7 +532,7 @@ The size of a mixed-plan table as its fill changes is the state machine in [001-
 | Delete one / all | `DeletePlanDialog`, `PlansPage` | Titles via `planTitle`: "Usunąć plan mieszany?"; "Usunąć wszystkie pięć planów?" with one line per plan (five lines). "Usuń wszystkie plany" = **five** `useResetPlan().mutate({key})` via `Promise.allSettled`; failures named by `planName` ("Nie udało się usunąć planu: Mieszany"). Toasts "Usunięto plan mieszany." / "Usunięto wszystkie plany." |
 | Generate / Cofnij | `useGeneratePlans`, `useUndoGenerate`, `domain/planView.ts` | Everything keyed by `key`: `toScenariosReplace(proposals.map(p => ({key: p.key, basedOnVersion: snapshot[p.key].version, plan: p.plan})))`, `versionsOf(): Record<PlanKey, number>` over `PLAN_KEYS`, `GenerateUndo.generatedVersions: Record<PlanKey, number>`, `canUndoGenerate` requires `scenarios.length === PLAN_KEYS.length`. Success toast **"Zapisano nowe plany: 9, 10, 11, 12 miejsc i mieszany."** (`GENERATE_SAVED_MESSAGE(keys)`). Running label unchanged ("Liczę i zapisuję plany…"; ~4–5 s now). |
 | Optimistic edits, add/remove table, pins | `api/scenarios.ts` hooks | Argument `{ key: PlanKey }` instead of `{ capacity }`; cache lookups/replacements by `scenario.key`; paths `'/scenarios/{planKey}/…'`. |
-| Isolation cue | §12 | Unchanged; the mixed card's isolated count is what the "1 stół więcej" note compares. |
+| Isolation cue | §12 | Unchanged (the "1 stół więcej" comparison is gone, §16). |
 
 ### 13.3 Copy (Polish, new or changed)
 
@@ -577,7 +577,7 @@ Pattern check: one conditional and three strings; no hook, no context, no contra
 
 Rules: [../03-seating-model.md](../03-seating-model.md) § Stranger pairs and § Missing-links report. **No contract shape change**: everything is derived from `SeatingPlan.guestScores` (`strangersAtTable`, adults only, 0 for children) and from `GET /guests` + `GET /clusters`. Only descriptions changed in `docs/openapi.yaml` (`GuestScore.strangersAtTable`, `PlanSummary`); regenerate `schema.d.ts` (comments only).
 
-> **Mixed plan (pending, not in this task's B2):** the user decided the mixed plan will maximise satisfaction with any table count; the exact rule is TBD (03-seating-model § The mixed plan, "Pending change"). The mixed card note "1 stół więcej niż plan 12 — mniej osób bez znajomych" (§13.2, `EXTRA_TABLE_NOTE`) becomes wrong then and will be removed or replaced in that task; **leave it as is in task 015**. No "z 1 stołem więcej: o N par obcych mniej" note is built (dropped).
+> **Mixed plan:** rewritten in the same task (floor 9, free table count, bilans) — §16. The "z 1 stołem więcej" note is not built (dropped).
 
 ### 15.1 Domain (pure TS, unit-tested)
 
@@ -593,6 +593,13 @@ export const tableStrangerPairs = (scores: readonly GuestScore[], tableNumber: n
 export const STRANGER_PAIRS_LABEL = 'Pary obcych'
 export const strangerPairsLabel = (n: number) => `${pluralPl(n, 'para', 'pary', 'par')} obcych` // "1 para obcych", "3 pary obcych", "5 par obcych"
 export const STRANGER_PAIRS_HINT = 'Pary dorosłych przy jednym stole, którzy się nie znają (ani grupa 0, ani 1, ani 2)'
+// domain/strangers.ts (also)
+export const STRANGER_PENALTY = 1                                   // λ, = seating.StrangerPenalty
+export const bilans = (plan: Pick<SeatingPlan, 'summary' | 'guestScores'>): number =>
+  plan.summary.score - 2 * STRANGER_PENALTY * strangerPairs(plan.guestScores)
+// labels.ts (also)
+export const BILANS_LABEL = 'Bilans'
+export const BILANS_HINT = 'Zadowolenie minus 2 za każdą parę obcych (każda z dwóch osób traci 1)'
 ```
 
 ### 15.2 Where the counts show
@@ -602,6 +609,7 @@ export const STRANGER_PAIRS_HINT = 'Pary dorosłych przy jednym stole, którzy s
 | Plan card | `PlanFigures` | New optional prop `strangerPairs?: number`; when defined: a small muted line **"Pary obcych: N"** (also for 0: it is the new comparison figure across the five cards), `title` = `STRANGER_PAIRS_HINT`, under the isolated line. Callers: `PlanCard` passes `strangerPairs(plan.guestScores)`. |
 | Plan detail header | `PlanDetailPage` `<dl>` | A `dt`/`dd` pair "Pary obcych" / N after the isolated pair, `…` while `saving` (like the score). |
 | Table card | `TableCard` | New prop `strangerPairs: number \| null` (null while a save is in flight, like `score`); when > 0, after "Zadowolenie N": **"· 3 pary obcych"** in muted text with `title` = hint. `FloorPlan` passes `settled ? tableStrangerPairs(plan.guestScores, table.number) : null`. |
+| Bilans (all five plans) | `PlanFigures`, `PlanDetailPage` | New optional prop `bilans?: number` next to `strangerPairs`: a muted line **"Bilans: B"** (`scoreLabel`, may be negative), `title` = `BILANS_HINT`. `bilans(plan) = plan.summary.score − 2 · STRANGER_PENALTY · strangerPairs(plan.guestScores)`, `STRANGER_PENALTY = 1` in `domain/strangers.ts` (mirrors the server constant; the `PlanSummary` description states it). On the mixed card the line is emphasised (font-medium): it is what that plan maximises. |
 | Guest details | `GuestDetailsPanel` | Unchanged ("Obcych dorosłych przy stole: N", task 014). |
 | Print | — | No change (YAGNI). |
 
@@ -661,3 +669,49 @@ flowchart TD
 ### 15.5 Pattern check
 
 Two pure modules and two small components; no hook, no context, no store, no library, no route, no contract field. Rejected: a server endpoint for the report (pure function of data the page holds), a suggestions engine ("dopisz X–Y", YAGNI: the help text and the "Razem z" names suffice), a contract field for stranger pairs (exact client derivation), approximating the clique greedily (exact is cheap at this size and never misleads).
+
+## 16. Mixed plan: floor 9, free table count, bilans (task 015 A2)
+
+Rule: [../03-seating-model.md](../03-seating-model.md) § The mixed plan. The mixed plan has **9–12 guests at every table** (floor 9; the uniform plans keep 8), **any number of tables**, and maximises the **bilans** (§15.2). No contract shape change (descriptions + the `ScenarioMixed` example only; regenerate `schema.d.ts`).
+
+### 16.1 Floor per plan (replaces the constant `MIN_TABLE_FILL`)
+
+```ts
+// domain/tableStatus.ts (or plans.ts)
+export const FLOOR = 8, MIXED_FLOOR = 9
+export const minTableFill = (s: Pick<Scenario, 'key'>): number => (isMixed(s) ? MIXED_FLOOR : FLOOR)
+export function fillStatus(fill: number, capacity: number, tableCount: number, floor: number): FillStatus
+```
+
+| Call site | Change |
+|---|---|
+| `fillStatus` (`TableCard`, `FillBars`, `printPlan.ts`) | new `floor` argument = `minTableFill(scenario)` |
+| `fillStatusLabel`, `violationLabel` (`under_floor`), `sourceUnderFloorLabel` | take `floor`, text "(minimum 9)" in the mixed plan; callers (`TableCard`, `RecalculationBanner`, `PrintView`, `PrintTableCard`, drop hint) pass it |
+| `dropPreview` (`underFloorSource`) | uses `minTableFill(scenario)` (the function already receives the plan; add the key) |
+| `FillBars` floor line | drawn at `minTableFill` (9 for mixed) |
+| `tableSize` / `tablesNeeded` | **unchanged** (fill ≤ 9 → 9; for a valid mixed table size = fill) |
+
+`MIN_TABLE_FILL` is removed (one source: `minTableFill`, DRY).
+
+### 16.2 Mixed card and detail
+
+| Place | Change |
+|---|---|
+| `PlanCard` (mixed) | Remove `extraTableNote` and `EXTRA_TABLE_NOTE`. Subline under "Mieszany": **"Stoły 9–12-osobowe, liczba stołów dobrana pod najlepszy bilans"**. `TablesNeededLine` stays (e.g. "Potrzebne stoły: 1 × 12, 1 × 10, 1 × 9 (31 miejsc)"). Bilans line emphasised (§15.2). |
+| `PlansPage` header copy | "Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany" (unchanged). |
+| `PlanDetailPage` (mixed) | Header shows the bilans pair after "Pary obcych". No other change. |
+| `GenerateButton` running label | "Liczę i zapisuję plany…" unchanged; the wait is now ≈ 7 s: add a muted hint under the button while running, **"To może potrwać kilka sekund."** |
+
+### 16.3 Tests (B2)
+
+- `minTableFill` (mixed 9, '12' 8); `fillStatus` with floor 9: fill 8 → 'under' (k > 1), 9 → 'ok'; with floor 8: 8 → 'ok'.
+- `violationLabel` / `fillStatusLabel` / `sourceUnderFloorLabel` with floor 9 → "(minimum 9)".
+- `dropPreview` in a mixed plan: leaving a table of 10 with a cluster of 2 → `underFloorSource` true (8 < 9); the same in plan 12 → false.
+- `bilans` (score 64, pairs 3 → 58; negative result formats as "-4").
+- `PlanCard`: mixed shows the new subline and no "1 stół więcej" text whatever the table counts; "Bilans: N" on all five cards.
+- Fixtures: the mixed fixture's fills 12, 9, 10 (as the contract example); remove the extra-table fixtures/tests.
+- Typecheck, lint, test, build green.
+
+### 16.4 Pattern check
+
+One function replaces one constant; one note removed; one line added. Rejected: a contract field for the floor (a rule of the plan kind, like the table size); showing per-k alternatives (the server returns one plan per key).

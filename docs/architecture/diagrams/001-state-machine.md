@@ -241,9 +241,10 @@ stateDiagram-v2
     Size10 --> Size9: fill 9 or less
     Size9 --> NoSize: fill 0
     note right of Size9
-        fill below 8 with more than one table:
-        still size 9, plus the server's
-        under_floor violation
+        valid only at fill 9 (floor 9 in the
+        mixed plan, task 015); fill 1..8 with
+        more than one table: still size 9,
+        plus the server's under_floor violation
     end note
     note right of Over12
         size 12, red overflow seats and the
@@ -251,4 +252,4 @@ stateDiagram-v2
     end note
 ```
 
-*Legend:* the size of one **mixed-plan** table (seats the venue must provide) as a function of its live fill. Moves can jump several states at once (a cluster of 3 takes 9 → 12); the size is always `min{s ∈ 9..12 : s ≥ fill}` (12 above 12), `NoSize` for an empty table. It follows every optimistic move at once, because `applyMove` recomputes `fill`. In a uniform plan the size is constant (`capacity`) for every non-empty table. A pure function of server data, never stored and not a State pattern; violations and scores still come from the server.
+*Legend:* the size of one **mixed-plan** table (seats the venue must provide) as a function of its live fill. Moves can jump several states at once (a cluster of 3 takes 9 → 12); the size is always `min{s ∈ 9..12 : s ≥ fill}` (12 above 12), `NoSize` for an empty table. It follows every optimistic move at once, because `applyMove` recomputes `fill`. For a valid mixed table (9–12 guests, task 015) the size equals the fill. In a uniform plan the size is constant (`capacity`) for every non-empty table. A pure function of server data, never stored and not a State pattern; violations and scores still come from the server.

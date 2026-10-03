@@ -5,8 +5,9 @@ post:
   description: |
     Pure computation — nothing is stored. Runs auto-seating for the plans 9, 10, 11, 12 and mixed
     from the current guests, links and each plan's own pins (pinned clusters stay at their table,
-    `pinned: true`). The mixed plan uses the fewest tables of at most 12 guests, or one table more
-    when that strictly lowers the number of guests sitting without anyone from their groups 1/2
+    `pinned: true`). The uniform plans use the fewest tables (8 to capacity guests each). The mixed
+    plan has 9–12 guests at every table and any number of tables: the layout with the highest
+    bilans (satisfaction minus 2 per stranger pair, see `PlanSummary`), fewer tables on ties
     (docs/architecture/03-seating-model.md § The mixed plan). "Generuj plany" stores the five results
     straight away: the SPA sends them unchanged to `PUT /scenarios` (one atomic call,
     version-checked) without showing a preview.

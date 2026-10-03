@@ -649,8 +649,9 @@ paths:
       description: |
         Pure computation — nothing is stored. Runs auto-seating for the plans 9, 10, 11, 12 and mixed
         from the current guests, links and each plan's own pins (pinned clusters stay at their table,
-        `pinned: true`). The mixed plan uses the fewest tables of at most 12 guests, or one table more
-        when that strictly lowers the number of guests sitting without anyone from their groups 1/2
+        `pinned: true`). The uniform plans use the fewest tables (8 to capacity guests each). The mixed
+        plan has 9–12 guests at every table and any number of tables: the layout with the highest
+        bilans (satisfaction minus 2 per stranger pair, see `PlanSummary`), fewer tables on ties
         (docs/architecture/03-seating-model.md § The mixed plan). "Generuj plany" stores the five results
         straight away: the SPA sends them unchanged to `PUT /scenarios` (one atomic call,
         version-checked) without showing a preview.
@@ -1560,14 +1561,16 @@ components:
         - 12
       description: |
         Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
-        exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
-        9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
-        no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+        exactly this many seats; floor 8 guests per table. The mixed plan: always 12, floor **9** guests
+        per table (task 015), any number of tables; each of its tables has the smallest size of 9, 10,
+        11, 12 that holds its fill (a valid table has 9–12 guests, so its size equals its fill; fill < 9
+        → 9 and the table is `under_floor`, > 12 → 12 and `over_capacity`; an empty table has no size and
+        is not needed). The client derives those sizes and the "potrzebne stoły" summary from
         `PlanTable.fill`; no size is stored or sent.
       example: 10
     PlanSummary:
       type: object
-      description: 'Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly from `SeatingPlan.guestScores`.'
+      description: 'Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly from `SeatingPlan.guestScores`. The **bilans** (net satisfaction) = `score` − 2 · stranger pairs (each adult of a stranger pair loses 1; task 015) is also derived by the client; it is what the mixed plan maximises.'
       required:
         - tableCount
         - seatedCount
@@ -1710,6 +1713,7 @@ components:
           example: under_floor
         message:
           type: string
+          description: 'Human-readable. `under_floor`: fewer than 8 guests at a table of a uniform plan, fewer than 9 in the mixed plan (task 015), only when the plan has more than one table.'
           example: Table 3 has 6 guests (minimum 8).
         tableNumber:
           type:
@@ -2096,10 +2100,10 @@ components:
         meta:
           requestId: 01JB8Z6Q0K3N
     ScenarioMixed:
-      summary: The mixed plan (key "mixed", at most 12 guests per table; table sizes are derived by the client from fill)
+      summary: The mixed plan (key "mixed", 9–12 guests per table; table sizes are derived by the client from fill)
       description: |
-        Table 1 (fill 12) is a 12-seat table, table 2 (fill 8) a 9-seat table, table 3 (fill 11) an
-        11-seat table, so the client shows "potrzebne stoły: 1 × 12, 1 × 11, 1 × 9".
+        Table 1 (fill 12) is a 12-seat table, table 2 (fill 9) a 9-seat table, table 3 (fill 10) a
+        10-seat table, so the client shows "potrzebne stoły: 1 × 12, 1 × 10, 1 × 9".
       value:
         data:
           key: mixed
@@ -2134,7 +2138,7 @@ components:
                       - 15
                     pinned: false
               - number: 2
-                fill: 8
+                fill: 9
                 score: 12
                 clusters:
                   - clusterKey: 16
@@ -2147,14 +2151,14 @@ components:
                       - 21
                       - 22
                       - 23
+                      - 24
                     pinned: false
               - number: 3
-                fill: 11
+                fill: 10
                 score: 22
                 clusters:
-                  - clusterKey: 24
+                  - clusterKey: 25
                     guestIds:
-                      - 24
                       - 25
                       - 26
                       - 27

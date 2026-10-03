@@ -130,10 +130,10 @@ ScenarioEmpty:
     meta:
       requestId: 01JB8Z6Q0K3N
 ScenarioMixed:
-  summary: The mixed plan (key "mixed", at most 12 guests per table; table sizes are derived by the client from fill)
+  summary: The mixed plan (key "mixed", 9–12 guests per table; table sizes are derived by the client from fill)
   description: |
-    Table 1 (fill 12) is a 12-seat table, table 2 (fill 8) a 9-seat table, table 3 (fill 11) an
-    11-seat table, so the client shows "potrzebne stoły: 1 × 12, 1 × 11, 1 × 9".
+    Table 1 (fill 12) is a 12-seat table, table 2 (fill 9) a 9-seat table, table 3 (fill 10) a
+    10-seat table, so the client shows "potrzebne stoły: 1 × 12, 1 × 10, 1 × 9".
   value:
     data:
       key: mixed
@@ -156,18 +156,18 @@ ScenarioMixed:
                 guestIds: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
                 pinned: false
           - number: 2
-            fill: 8
+            fill: 9
             score: 12
             clusters:
               - clusterKey: 16
-                guestIds: [16, 17, 18, 19, 20, 21, 22, 23]
+                guestIds: [16, 17, 18, 19, 20, 21, 22, 23, 24]
                 pinned: false
           - number: 3
-            fill: 11
+            fill: 10
             score: 22
             clusters:
-              - clusterKey: 24
-                guestIds: [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
+              - clusterKey: 25
+                guestIds: [25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
                 pinned: true
         unseated: []
         guestScores:

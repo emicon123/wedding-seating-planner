@@ -831,7 +831,7 @@ flowchart LR
 
 ### 9.2 `internal/seating`
 
-> Pending (§11.7): the mixed plan's table-count rule below (k0 / k0 + 1) will be replaced by a choice over k ∈ [k0, ⌊N/8⌋]; the objective is TBD. Unchanged until then.
+> **Superseded in task 015 (§12):** the k0 / k0 + 1 rule and `proposeMixed` below are replaced by floor 9, a free table count and the bilans objective. The rest of §9 (identity, `Key`, store, httpapi) stands.
 
 ```go
 type Plan struct { Capacity int; Mixed bool; Tables []Table }   // Mixed only changes Propose; Evaluate ignores it
@@ -889,6 +889,8 @@ func proposeMixed(g Graph, current Plan) Plan
 Generate = five `Propose` calls in parallel; the mixed one does one or two solves (§ The mixed plan, "Time budget"). Expected on the Pi: **≈ 4.0 s** on the live list (mixed: one solve, its k0 layout has 0 isolated), **≈ 4.8 s** worst case; target ≲ 5 s. The two solves stay sequential. Re-measure in B1: `BenchmarkProposeTight` (unchanged) + a timing of `Service.Calculate` on `STOLIKI_TUNE_INPUT` (five plans), and record the numbers in 03-seating-model § Auto-seating.
 
 ### 9.7 Tests (B1) — real SQLite, no mocks
+
+> M1–M8 below test the replaced k0 / k0 + 1 rule; they are rewritten per §12.6 (M9, M10 and the scenarios/store/httpapi tests stand).
 
 **seating** (`propose_test.go` / new `mixed_test.go`):
 
@@ -1041,7 +1043,7 @@ Audit: SRP kept (seats vs weights are two arrays with two names, `size` / `adult
 
 ## 11. Task 015 — Avoid strangers (stranger pairs, rule 6) + missing-links report
 
-Rules and worked examples I–K: [../03-seating-model.md](../03-seating-model.md) § Stranger pairs (authoritative). In one line: **the optimiser compares (isolated adults ↑, stranger pairs ↑, score ↓)**, lexicographically, everywhere it compared (isolated, score). No migration, no API shape change (descriptions only: `GuestScore.strangersAtTable`, `PlanSummary`), no new package. Only `internal/seating` changes (plus test inputs). The missing-links report is frontend-only (no Go code). The **mixed plan's table-count rule is untouched by this task** (still k0 / k0 + 1, isolation-only, `proposeMixed` unchanged); its replacement is pending a user decision (§11.7).
+Rules and worked examples I–K: [../03-seating-model.md](../03-seating-model.md) § Stranger pairs (authoritative). In one line: **the optimiser compares (isolated adults ↑, stranger pairs ↑, score ↓)**, lexicographically, everywhere it compared (isolated, score). No migration, no API shape change (descriptions only: `GuestScore.strangersAtTable`, `PlanSummary`), no new package. Only `internal/seating` changes (plus test inputs). The missing-links report is frontend-only (no Go code). The four uniform plans use the triple; the **mixed plan** (rewritten in the same task) uses one scalar, the bilans, with floor 9 and a free table count (§12).
 
 ### 11.1 Definitions in code terms
 
@@ -1131,12 +1133,12 @@ flowchart TD
 - **Skip condition:** `hasAffinity(movable)` is replaced by **`hasWeight(movable)`** = some movable item has `adults ≥ 1`. Without any affinity the stranger term still varies (example J: 12 + 8 → 10 + 10), so the anneal must run; a layout whose movable items are all children-only still skips (objective constant).
 - **`improve`:** unchanged code shape; `improves()` is the triple. Guarantee (testable): no single feasible move/swap lowers isolated adults, or keeps them and lowers stranger pairs, or keeps both and raises the score.
 - **k selection, best-effort fallback, `pack`:** unchanged.
-- **`proposeMixed`:** unchanged — compares `objective().iso` only (k0 vs k0 + 1). Each of its solves optimises the triple.
+- **Mixed plan:** every comparison above uses the scalar bilans order instead of the triple (§12.3); the formulas of §11.3 provide its `str` component unchanged.
 
 ### 11.5 Diagnostic and time
 
-- `TestDiagnoseIsolation` (test-only, §8.6): add `strangers=N` to every line (from `Evaluate(...).Summary.StrangerPairs`). Phase C uses it plus `POST /scenarios/calculate`. **The product diagnostic "z 1 stołem więcej: o N par obcych mniej" is dropped**: it would cost a sixth solve (≈ +0.9 s on 4 saturated cores) and a contract field available only on the proposal (gone after reload), and the pending mixed-plan change (§11.7) makes it moot.
-- **Time:** per step one more O(1) term; `place`/`unplace` update one more m × k matrix in the loop they already run; `clone` copies it. Expected +5–15% per solve (Generate ≈ 4.7–5.2 s live). Do **not** cut `annealRestarts`/steps to stay under 5 s (user: time is not a problem; the mixed-plan change raises the target to ≲ 8–10 s). Measure `BenchmarkProposeTight` `generate5` before/after on the same machine and a live `POST /scenarios/calculate` in Phase C; record both in 03-seating-model § Auto-seating (replace the "Expected after task 015" paragraph).
+- `TestDiagnoseIsolation` (test-only, §8.6): add `strangers=N` to every line (from `Evaluate(...).Summary.StrangerPairs`). Phase C uses it plus `POST /scenarios/calculate`. **The product diagnostic "z 1 stołem więcej: o N par obcych mniej" is dropped**: it would cost a sixth solve (≈ +0.9 s on 4 saturated cores) and a contract field available only on the proposal (gone after reload), and the mixed plan now chooses its own table count (§12) — the question is moot.
+- **Time:** per step one more O(1) term; `place`/`unplace` update one more m × k matrix in the loop they already run; `clone` copies it. Expected +5–15% per solve (Generate ≈ 4.7–5.2 s live). Do **not** cut `annealRestarts`/steps to stay under 5 s (user: time is not a problem; the mixed plan's solve per k raises the target to ≲ 8–10 s, §12.5). Measure `BenchmarkProposeTight` `generate5` before/after on the same machine and a live `POST /scenarios/calculate` in Phase C; record both in 03-seating-model § Auto-seating (replace the "Expected after task 015" paragraph).
 
 ### 11.6 Tests (B1) — real code paths, no mocks
 
@@ -1164,12 +1166,12 @@ S-D1 move `a` from a table of strangers to a table of acquaintances (Δstr = −
 - S-P4 *brute-force oracle*: random instances of ≤ 8 items, capacity 12, k ≤ 3 (all feasible assignments enumerated, ≤ 3⁸): Propose's objective equals the lexicographic minimum of the triple (iso and str exactly; score too, the search is exhaustive enough at this size — if one seed differs, show it and assert iso, str only). This is where "strangers first, isolation before strangers" is checked against ground truth.
 - S-P5 *never worse*: on generated inputs `objective(result)` is not worse than the pack/repair start in the triple order (extends P5/P6); local optimality as in §11.4.
 - S-P6 determinism: run twice, identical plans (all fixtures above + the tight fixture + a children fixture).
-- S-P7 mixed plan rule unchanged: M1–M10 still pass; a k0 + 1 layout with fewer stranger pairs but equal isolated adults does **not** add the table.
+- S-P7 the mixed plan: §12.6.
 - **Existing expectations:** an expected plan may change only where the stranger term now decides (e.g. fixtures without links now get evened fills, example J; fixtures whose old optimum had avoidable strangers). Each changed expectation is justified in the commit message with the before/after triple; nothing is weakened (never compare scores across the order change as a regression: a lower score with fewer stranger pairs is correct).
 
-### 11.7 Pending: mixed plan objective and table count (TBD)
+### 11.7 Mixed plan
 
-Rules side: [../03-seating-model.md](../03-seating-model.md) § The mixed plan, "Pending change". **Not part of task 015 B1.** When decided, `proposeMixed` becomes a loop over k ∈ [k0, ⌊N/8⌋] — coarse solve per k (`feasibleAt` with a reduced, constant budget: an `optimiseWith(l, 8, annealSteps(m)/4, seedBase(k))`-style call), full solve (`optimise`) for the best one or two, winner by the chosen comparison (option A: the triple; option B: displayed score, then stranger pairs, then fewer tables), ties by smaller k; deterministic seeds per k. M1–M7 and the frontend's "1 stół więcej niż plan 12" note are replaced then. Expected Generate ≈ 6–7 s (≲ 8–10 s target).
+Decided after the first Phase A commit (user, 2026-10-03): see §12. The TBD options A/B are void.
 
 ### 11.8 Pattern evaluation and audit (task 015)
 
@@ -1180,8 +1182,121 @@ Rules side: [../03-seating-model.md](../03-seating-model.md) § The mixed plan, 
 | `knowTo` + `adultsAt` incremental state | **adopted** | O(1) deltas; `know` reuses the `gain > 0` adjacency (DRY). |
 | Recompute stranger pairs per step from table member lists | rejected | O(items at two tables) per step × 47M steps per Generate. |
 | Strangers as a violation / hard rule | rejected | Infeasible on the live data (example K); the user chose "maksymalnie unikać". |
-| Product diagnostic "z 1 stołem więcej: o N par obcych mniej" | dropped | Sixth solve + proposal-only contract field; superseded by the pending mixed-plan objective. |
+| Product diagnostic "z 1 stołem więcej: o N par obcych mniej" | dropped | Sixth solve + proposal-only contract field; moot since the mixed plan chooses its own k (§12). |
 | Contract field `summary.strangerPairs` | rejected | `½ · Σ strangersAtTable` is exact and already in the payload. |
 | Missing-links report as an endpoint | rejected | Pure function of `GET /guests` + `GET /clusters`, ≈ 50 nodes; the client already holds both. |
 
 Audit: SRP kept (`seating` only); no new package or dependency; determinism and fixed budgets unchanged; one new walk-only constant (`annealStrangerWeight`).
+
+## 12. Task 015 (A2) — The mixed plan: floor 9, free table count, bilans
+
+Rules, rationale and worked examples L–O: [../03-seating-model.md](../03-seating-model.md) § The mixed plan (authoritative). Replaces §9.2's `proposeMixed` (k0 / k0 + 1) and tests M1–M8. **No migration, no API shape change** (descriptions only: `Capacity`, `Violation.message`, `PlanSummary`, `POST /scenarios/calculate`, example `ScenarioMixed`; bundled + linted). Only `internal/seating` changes.
+
+### 12.1 Constants and the floor
+
+```go
+const Floor = 8          // uniform plans (unchanged)
+const MixedFloor = 9     // the mixed plan (task 015)
+const StrangerPenalty = 1 // λ: satisfaction each adult of a stranger pair loses in the bilans (mixed plan only); integer
+
+// FloorOf is the floor of a plan with more than one table. One function, used by Evaluate and newItems (DRY).
+func FloorOf(p Plan) int { if p.Mixed { return MixedFloor }; return Floor }
+```
+
+- `Evaluate`: `case k > 1 && te.Fill < FloorOf(p)` → `under_floor`; message "(minimum 9)" for the mixed plan.
+- `items` gets `floor int` (set from `FloorOf`), and every use of the constant `Floor` in `propose.go` / `anneal.go` / `packexact.go` reads `l.it.floor` / `it.floor` instead (`repairFloor`, `liftByMove`, `liftBySwap`, `improve`, `layout.floor()`, `packExact`'s `s.floor`, `solve`'s `(k+1)·floor > total`). Uniform plans: `floor = 8`, behaviour identical.
+
+### 12.2 One order field, two orders
+
+```go
+type order uint8
+const (lexOrder order = iota /* uniform: (iso ↑, str ↑, score ↓), §11 */; netOrder /* mixed: bilans ↓ */)
+type items struct { /* … */ floor int; order order }
+
+func (o objective) net() int { return o.score - 2*StrangerPenalty*o.str }  // the bilans
+func (d delta) net() int     { return d.score - 2*StrangerPenalty*d.str }
+
+// the comparison sites call these instead of objective.better / delta.improves / …:
+func (r order) better(a, b objective) bool   // lex: §11.3; net: a.net() > b.net()
+func (r order) improves(d delta) bool        // lex: §11.3; net: d.net() > 0
+func (r order) notWorse(d delta) bool        // lex: §11.3; net: d.net() >= 0
+func (r order) stepBetter(d, e delta) bool   // repairFloor's candidate choice; net: d.net() > e.net()
+func (r order) energy(d delta) float64       // anneal's exponent numerator for a worse step:
+                                              //   lex: d.score − annealIsoWeight·d.iso − annealStrangerWeight·d.str
+                                              //   net: float64(d.net())  (the true objective, no extra knob)
+```
+
+Deltas (`moveDelta`, `swapDelta`) are **unchanged** and still return the full `(iso, str, score)`; the bilans of a step is `d.net()`. Integer throughout (λ integer).
+
+```mermaid
+flowchart LR
+    D["moveDelta / swapDelta → (iso, str, score)"] --> O{"items.order"}
+    O -- lexOrder (9, 10, 11, 12) --> L["triple, §11.3"]
+    O -- netOrder (mixed) --> N["net = score − 2λ·str"]
+    L --> U["repairFloor · anneal · optimise winner · improve"]
+    N --> U
+```
+
+*Legend:* one value object (`objective` / `delta`), one order field read at the ~6 comparison sites. **Strategy considered and rejected**: two fixed orders, no third in sight; an interface with two implementations would add indirection in the hot loop for nothing (KISS). The order is chosen once in `newItems` from `Plan.Mixed`.
+
+### 12.3 `proposeMixed`
+
+```go
+// proposeMixed: capacity 12, floor 9, netOrder. N = it.total.
+//   lo, hi := minTables(N, 12), N / MixedFloor;  if N <= 12 { lo, hi = 1, 1 }
+//   if p := maxPinnedTable(pins) + 1; p > lo && p <= hi { lo = p }     // pins: 0-based tables
+//   var best *layout
+//   for k := lo; k <= hi; k++ {                                      // ascending; sequential
+//       if l, _ := feasibleAt(it, k, pins); l != nil && (best == nil || l.objective().net() > best.objective().net()) { best = l }
+//   }
+//   if best != nil { return best.toPlan() }
+//   return bestEffort(g, it, pins, lo)   // fewest violations among the greedy tries at k = lo (floor 9), as solve's fallback
+func proposeMixed(g Graph, it items, pins map[int]int) Plan
+```
+
+- Strict `>` while k ascends ⇒ ties keep the smaller k (fewer tables), deterministic.
+- `lo > hi` (N = 13–17, 25–26): no loop iteration, best-effort at k = ⌈N/12⌉.
+- `feasibleAt` → `optimise` unchanged in shape; inside, every comparison uses `it.order`. Seeds are the existing constants (same for each k; fine, the layouts differ).
+- `solve` (uniform) is unchanged except for reading `it.floor`. The best-effort helper is extracted from `solve` (DRY) if convenient.
+- `Propose` sets `it.floor`/`it.order` via `newItems(g, capacity, mixed)`; `pinTargets`, `ExpandDisabled`, `Evaluate`'s scoring: unchanged.
+
+### 12.4 Evaluate fields
+
+`Summary.StrangerPairs` (§11.2) serves the mixed plan's tests too; the bilans is `int(Summary.Score) − 2·StrangerPenalty·StrangerPairs` (no new field; Score is a whole number). Postcondition (testable): for a layout built by Propose, `Evaluate(toPlan).bilans == l.objective().net()`.
+
+### 12.5 Time
+
+k values = ⌊N/9⌋ − ⌈N/12⌉ + 1 (live list: 9, 10, 11). Each is a full solve, sequential. Generate ≈ 4 uniform + 3 mixed solves ≈ 6.5–7.5 s (target ≲ 8–10 s). B1: measure `BenchmarkProposeTight` `generate5` and a five-plan `Service.Calculate` on `STOLIKI_TUNE_INPUT`; record in 03-seating-model § Auto-seating. Only if > 10 s: a coarse pass per k (`optimiseWith(l, 8, annealSteps(m)/4, 0)`) and a full solve for the best two (deterministic; not built before).
+
+### 12.6 Tests (B1) — real code paths, no mocks
+
+| # | Case | Expected |
+|---|---|---|
+| X1 | example L (N = 36, two groups of six [3]) mixed | 4 tables of 9, `StrangerPairs 0`, bilans 216; plan 12 on the same input: 3 tables, 36 stranger pairs |
+| X2 | example L with a test-only λ = 0 path (call the k loop with a net function parameter, or compute the k = 3 / k = 4 layouts with `feasibleAt` and compare scores) | k = 3 has the higher score (252 > 216): the penalty is what chooses k = 4 |
+| X3 | example M (groups of 9, 12, 10, N = 31) | fills {9, 10, 12}, 0 stranger pairs |
+| X4 | tie: two k with equal best bilans (e.g. no links, all children-only clusters → bilans 0 everywhere) | the smaller k |
+| X5 | N = 8 | one table, no violation |
+| X6 | N = 13 and N = 25 | best-effort, `under_floor` present, `Mixed` true, no panic |
+| X7 | every result with k > 1 | every fill in [9, 12] |
+| X8 | pins: a cluster pinned to table 4 when the best unpinned k is 3 | k ≥ 4 and the pin kept; pinned to table 12 when ⌊N/9⌋ = 11 → range kept, pin released |
+| X9 | **brute-force oracle**: random instances of ≤ 8 items (sizes 1–5, N in 18–40, random links incl. level 2 and children), all k in range, all assignments enumerated (hard rules: fills 9–12) | Propose's bilans == the maximum; its k == the smallest k reaching that maximum (if a seed misses, print it; the search is a heuristic, but at this size it must match) |
+| X10 | Evaluate: a stored mixed plan with a table of 8 | `under_floor` "(minimum 9)", `NeedsRecalculation`; the same fills in plan 12 → no violation |
+| X11 | property: for mixed items, `objective().net()` == `Evaluate` score − 2·StrangerPairs; deltas' `net()` == recomputed difference (reuses §11.6 generator) | — |
+| X12 | determinism: X1–X9 run twice | identical plans |
+| X13 | uniform plans unchanged by this section | every §11.6 expectation; `FloorOf(Plan{Capacity: 12}) == 8` |
+
+**scenarios / httpapi:** `POST /scenarios/calculate` on a fixture → the mixed proposal has every fill in [9, 12]; `GET /scenarios` with a stored mixed table of 8 → `under_floor`. Existing M9/M10 and the scenario/store/httpapi tests of §9.7 stand; M1–M8 are deleted or rewritten as X-tests (say which in the commit message).
+
+### 12.7 Pattern evaluation and audit (task 015 A2)
+
+| Candidate | Verdict | Reason |
+|---|---|---|
+| `order` field with two values, methods on it | **adopted** | Two orders, ~6 call sites; no indirection in the hot loop. |
+| Strategy interface for objectives | rejected | Two fixed variants (YAGNI); see §12.2 legend. |
+| Lexicographic triple across k for the mixed plan | rejected | Always picks the most tables (strangers first) — contradicts "priorytetem maksymalizacja zadowolenia". |
+| Bilans as a contract field | rejected | `score − 2·½Σ strangersAtTable` is exact on the client; λ is documented in `PlanSummary`. |
+| Parallel solves per k | rejected | Each solve already saturates the cores. |
+| Coarse + full solves per k | deferred | Only if Generate > 10 s. |
+
+Audit: SRP kept (`seating` decides; nothing else knows about k ranges). DRY: one `FloorOf`, one delta pair, one order. No new package or dependency; deterministic.

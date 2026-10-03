@@ -432,9 +432,11 @@ Capacity:
   enum: [9, 10, 11, 12]
   description: |
     Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
-    exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
-    9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
-    no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+    exactly this many seats; floor 8 guests per table. The mixed plan: always 12, floor **9** guests
+    per table (task 015), any number of tables; each of its tables has the smallest size of 9, 10,
+    11, 12 that holds its fill (a valid table has 9–12 guests, so its size equals its fill; fill < 9
+    → 9 and the table is `under_floor`, > 12 → 12 and `over_capacity`; an empty table has no size and
+    is not needed). The client derives those sizes and the "potrzebne stoły" summary from
     `PlanTable.fill`; no size is stored or sent.
   example: 10
 ClusterPlacement:
@@ -535,6 +537,9 @@ Violation:
       example: under_floor
     message:
       type: string
+      description: >-
+        Human-readable. `under_floor`: fewer than 8 guests at a table of a uniform plan, fewer than 9
+        in the mixed plan (task 015), only when the plan has more than one table.
       example: Table 3 has 6 guests (minimum 8).
     tableNumber:
       type: [integer, 'null']
@@ -550,7 +555,9 @@ PlanSummary:
   description: >-
     Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger
     pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly
-    from `SeatingPlan.guestScores`.
+    from `SeatingPlan.guestScores`. The **bilans** (net satisfaction) = `score` − 2 · stranger pairs
+    (each adult of a stranger pair loses 1; task 015) is also derived by the client; it is what the
+    mixed plan maximises.
   required: [tableCount, seatedCount, unseatedCount, score, violationCount, needsRecalculation]
   properties:
     tableCount:

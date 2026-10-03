@@ -35,7 +35,7 @@ sequenceDiagram
     S->>P: List(ctx)
     par plans 9, 10, 11, 12, mixed (goroutines, one read-only Graph)
         S->>C: Propose(graph, current plan) then Evaluate
-        Note over C: mixed: solve at capacity 12 (k0); if isolated > 0 and (k0+1)*8 <= N, also k0+1; keep k0+1 only if strictly fewer isolated
+        Note over C: mixed (task 015): for k = ceil(N/12) .. floor(N/9) solve with 9-12 guests per table; keep the highest bilans (score - 2 x stranger pairs), ties fewer tables
     end
     H-->>Q: 200 ProposalListResponse (5, ordered 9, 10, 11, 12, mixed)
     Q->>H: PUT /scenarios {plans: 5 x (key, basedOnVersion = snapshot version, tables + pinnedGuestIds)}
