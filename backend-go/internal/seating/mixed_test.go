@@ -209,8 +209,8 @@ func TestMixedX8Pins(t *testing.T) {
 	})
 }
 
-// X9: Propose maximises the bilans over all k and layouts, ties to the smaller k, checked
-// against full enumeration on small random instances (with children).
+// X9: Propose minimises the isolated adults, then maximises the bilans, over all k and layouts,
+// ties to the smaller k, checked against full enumeration on small random instances (with children).
 func TestMixedX9MatchesBruteForce(t *testing.T) {
 	checked, multiK := 0, 0
 	for seed := int64(1); seed <= 40; seed++ {
@@ -219,12 +219,14 @@ func TestMixedX9MatchesBruteForce(t *testing.T) {
 		g := BuildGraph(guests, ls)
 		it := newItems(g, 12, true)
 		lo, hi := minTables(it.total, 12), it.total/MixedFloor
-		bestK, bestNet, found := 0, 0, false
+		bestK, found := 0, false
+		var bestO objective
 		for k := lo; k <= hi; k++ {
-			if o, ok := bruteBest(it, k); ok && (!found || o.net() > bestNet) {
-				bestK, bestNet, found = k, o.net(), true
+			if o, ok := bruteBest(it, k); ok && (!found || it.order.better(o, bestO)) {
+				bestK, bestO, found = k, o, true
 			}
 		}
+		bestNet := bestO.net()
 		if !found {
 			continue
 		}
@@ -234,13 +236,36 @@ func TestMixedX9MatchesBruteForce(t *testing.T) {
 		}
 		p := Propose(g, mixedPlan())
 		ev := assertHardRules(t, g, p)
-		if got := bilansOf(ev); got != bestNet || tableCounts(p) != bestK {
-			t.Errorf("seed %d (N=%d, k in [%d, %d]): Propose bilans %d with %d tables, brute force %d with %d tables",
-				seed, it.total, lo, hi, got, tableCounts(p), bestNet, bestK)
+		if got := bilansOf(ev); ev.Summary.Isolated != bestO.iso || got != bestNet || tableCounts(p) != bestK {
+			t.Errorf("seed %d (N=%d, k in [%d, %d]): Propose isolated %d, bilans %d with %d tables, brute force %d, %d with %d tables",
+				seed, it.total, lo, hi, ev.Summary.Isolated, got, tableCounts(p), bestO.iso, bestNet, bestK)
 		}
 	}
 	if checked < 12 || multiK < 6 {
 		t.Errorf("%d instances checked, %d with more than one k", checked, multiK)
+	}
+}
+
+// X9b: a family is not left with none of its acquaintances for the sake of the bilans. On these
+// instances (found by search) the best bilans alone has 24 / 19 isolated adults, the best
+// (isolated, bilans) order 17 / 14; Propose reaches the latter.
+func TestMixedX9bIsolationFirst(t *testing.T) {
+	for _, seed := range []int64{57, 293} {
+		r := rand.New(rand.NewSource(seed))
+		guests, ls := bruteInstance(r, 30, 60, 2, 9)
+		g := BuildGraph(guests, ls)
+		it := newItems(g, 12, true)
+		var best objective
+		found := false
+		for k := minTables(it.total, 12); k <= it.total/MixedFloor; k++ {
+			if o, ok := bruteBest(it, k); ok && (!found || it.order.better(o, best)) {
+				best, found = o, true
+			}
+		}
+		ev := assertHardRules(t, g, Propose(g, mixedPlan()))
+		if !found || ev.Summary.Isolated != best.iso || bilansOf(ev) != best.net() {
+			t.Errorf("seed %d: Propose isolated %d, bilans %d; brute force %d, %d", seed, ev.Summary.Isolated, bilansOf(ev), best.iso, best.net())
+		}
 	}
 }
 

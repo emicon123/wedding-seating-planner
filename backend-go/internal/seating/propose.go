@@ -35,7 +35,9 @@ type order uint8
 const (
 	// lexOrder: (isolated adults, stranger pairs) lower first, then a higher score: the four uniform plans.
 	lexOrder order = iota
-	// netOrder: a higher bilans = score - 2*StrangerPenalty*stranger pairs: the mixed plan.
+	// netOrder: fewer isolated adults first (a table where a family sits with none of its
+	// acquaintances is avoided whenever any layout avoids it), then a higher bilans =
+	// score - 2*StrangerPenalty*stranger pairs: the mixed plan.
 	netOrder
 )
 
@@ -195,12 +197,13 @@ func (d delta) better(e delta) bool {
 }
 
 // The comparison sites call these instead of the lexicographic methods above, so the
-// mixed plan's scalar bilans is read in exactly one place per site (design §12.2).
+// mixed plan's order (isolated adults, then the scalar bilans) is read in exactly one place per
+// site (design §12.2).
 
 // better: o is a better layout than p.
 func (r order) better(o, p objective) bool {
 	if r == netOrder {
-		return o.net() > p.net()
+		return o.iso < p.iso || (o.iso == p.iso && o.net() > p.net())
 	}
 	return o.better(p)
 }
@@ -208,7 +211,7 @@ func (r order) better(o, p objective) bool {
 // improves: the step strictly improves the layout.
 func (r order) improves(d delta) bool {
 	if r == netOrder {
-		return d.net() > 0
+		return d.iso < 0 || (d.iso == 0 && d.net() > 0)
 	}
 	return d.improves()
 }
@@ -216,7 +219,7 @@ func (r order) improves(d delta) bool {
 // notWorse: the step does not worsen the layout.
 func (r order) notWorse(d delta) bool {
 	if r == netOrder {
-		return d.net() >= 0
+		return d.iso < 0 || (d.iso == 0 && d.net() >= 0)
 	}
 	return d.notWorse()
 }
@@ -224,16 +227,17 @@ func (r order) notWorse(d delta) bool {
 // stepBetter: step d is a better candidate than e (repairFloor's choice).
 func (r order) stepBetter(d, e delta) bool {
 	if r == netOrder {
-		return d.net() > e.net()
+		return d.iso < e.iso || (d.iso == e.iso && d.net() > e.net())
 	}
 	return d.better(e)
 }
 
 // energy is the exponent numerator of the annealing acceptance of a worse step d:
-// the lexicographic walk uses the weighted knobs, the bilans walk its true objective.
+// the lexicographic walk uses the weighted knobs, the bilans walk the true bilans plus the
+// same isolation knob.
 func (r order) energy(d delta) float64 {
 	if r == netOrder {
-		return float64(d.net())
+		return float64(d.net()) - annealIsoWeight*float64(d.iso)
 	}
 	return float64(d.score) - annealIsoWeight*float64(d.iso) - annealStrangerWeight*float64(d.str)
 }
@@ -711,7 +715,7 @@ func proposeMixed(g Graph, it items, pins map[int]int) Plan {
 			bestEffort, bestViolations = fewestViolations(g, tries, bestEffort, bestViolations)
 			continue
 		}
-		if best == nil || l.objective().net() > best.objective().net() {
+		if best == nil || it.order.better(l.objective(), best.objective()) {
 			best = l
 		}
 	}
