@@ -902,3 +902,76 @@ func TestMixedPlanEndpoints(t *testing.T) {
 		}
 	})
 }
+
+// Task 014: a child takes a seat (fill) but is not scored: zeros for the child, adults-only
+// scores for everybody else; PATCH isChild changes scores, never fill or violations.
+func TestChildrenAreSeatedButNotScoredOverHTTP(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 24)
+	for i := 1; i < 5; i++ { // family {1..5}: adults 1, 2; children 3, 4, 5
+		expect(t, do(h, http.MethodPut, fmt.Sprintf("%s/guest-links/%d-%d", api, i, i+1), `{"level":0}`), http.StatusOK, "")
+	}
+	putLink(t, h, "1-6", 1) // adult 1 prefers the single guest 6
+	setChild := func(id int64, child bool) {
+		t.Helper()
+		list := decode[oapi.GuestListResponse](t, do(h, http.MethodGet, api+"/guests", ""))
+		for _, g := range list.Data {
+			if *g.Id == id {
+				expect(t, do(h, http.MethodPatch, fmt.Sprintf("%s/guests/%d", api, id), fmt.Sprintf(`{"version":%d,"isChild":%v}`, *g.Version, child)), http.StatusOK, "")
+				return
+			}
+		}
+		t.Fatalf("guest %d not listed", id)
+	}
+	for i := int64(3); i <= 5; i++ {
+		setChild(i, true)
+	}
+
+	sc := acceptLayout(t, h, oapi.Seats10, rangeIDs(1, 8), rangeIDs(9, 16), rangeIDs(17, 24))
+	score := func(s oapi.Scenario, id int64) oapi.GuestScore {
+		for _, gs := range s.Plan.GuestScores {
+			if gs.GuestId == id {
+				return gs
+			}
+		}
+		t.Fatalf("no score for %d", id)
+		return oapi.GuestScore{}
+	}
+	if sc.Plan.Tables[0].Fill != 8 || len(sc.Plan.Violations) != 0 || sc.Plan.Summary.NeedsRecalculation {
+		t.Fatalf("fill %d, violations %v: children must take seats", sc.Plan.Tables[0].Fill, violationCodes(sc))
+	}
+	for _, id := range []int64{3, 4, 5} {
+		gs := score(sc, id)
+		if gs.Satisfaction != 0 || gs.PreferredTotal != 0 || gs.PreferredAtTable != 0 || gs.FallbackAtTable != 0 || gs.StrangersAtTable != 0 {
+			t.Errorf("child %d = %+v, want all zeros", id, gs)
+		}
+	}
+	if score(sc, 1).Satisfaction != 1 || score(sc, 6).Satisfaction != 2 || sc.Plan.Tables[0].Score != 4 || sc.Plan.Summary.Score != 4 {
+		t.Errorf("adults 1/6 = %v/%v, table score %v, plan score %v, want 1/2/4/4", score(sc, 1).Satisfaction, score(sc, 6).Satisfaction, sc.Plan.Tables[0].Score, sc.Plan.Summary.Score)
+	}
+
+	// calculate: the child stays seated with its family and unscored
+	for _, p := range calculate(t, h).Data {
+		for _, id := range []int64{3, 4, 5} {
+			var found bool
+			for _, gs := range p.Plan.GuestScores {
+				if gs.GuestId == id {
+					found = true
+					if gs.Satisfaction != 0 || gs.TableNumber == nil {
+						t.Errorf("plan %v child %d = %+v, want seated and 0", p.Key, id, gs)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("plan %v: no score for child %d", p.Key, id)
+			}
+		}
+	}
+
+	// un-flag child 3: the score changes, fill and violations do not
+	setChild(3, false)
+	after := scenarioOf(t, listScenarios(t, h), oapi.Seats10)
+	if after.Plan.Tables[0].Fill != 8 || len(after.Plan.Violations) != 0 || score(after, 6).Satisfaction != 3 {
+		t.Errorf("after un-flagging: fill %d violations %v satisfaction of 6 = %v, want 8, none, 3", after.Plan.Tables[0].Fill, violationCodes(after), score(after, 6).Satisfaction)
+	}
+}

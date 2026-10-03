@@ -123,12 +123,13 @@ func TestToSeating(t *testing.T) {
 	gs := []Guest{
 		{ID: 2, Enabled: true, CreatedAt: time.Time{}},
 		{ID: 1, Enabled: false},
+		{ID: 3, Enabled: true, IsChild: true},
 	}
 	ls := []Link{{A: 1, B: 2, Level: 0}, {A: 2, B: 3, Level: 2}}
 	sg, sl := ToSeating(gs, ls)
-	wantG := []seating.Guest{{ID: 2, Enabled: true}, {ID: 1, Enabled: false}}
+	wantG := []seating.Guest{{ID: 2, Enabled: true}, {ID: 1, Enabled: false}, {ID: 3, Enabled: true, Child: true}}
 	wantL := []seating.Link{{A: 1, B: 2, Level: seating.Must}, {A: 2, B: 3, Level: seating.Acceptable}}
-	if len(sg) != 2 || sg[0] != wantG[0] || sg[1] != wantG[1] {
+	if len(sg) != 3 || sg[0] != wantG[0] || sg[1] != wantG[1] || sg[2] != wantG[2] {
 		t.Errorf("guests = %+v, want %+v", sg, wantG)
 	}
 	if len(sl) != 2 || sl[0] != wantL[0] || sl[1] != wantL[1] {

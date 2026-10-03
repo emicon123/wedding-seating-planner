@@ -51,6 +51,9 @@ func Weight(l LinkLevel) float64 {
 type Guest struct {
 	ID      GuestID
 	Enabled bool
+	// Child: takes a seat (fill, capacity, floor, integrity) but is not scored: it
+	// neither receives nor gives satisfaction and is never isolated (task 014).
+	Child bool
 }
 
 // Link is an undirected relation between two guests.
@@ -64,10 +67,15 @@ type Cluster struct {
 	Key     GuestID   // smallest member id
 	Members []GuestID // all members, sorted
 	Enabled []GuestID // enabled members, sorted
+	Adults  []GuestID // enabled members that are not children, sorted (task 014)
 }
 
 // SeatedSize is the number of seats the cluster takes (enabled members).
 func (c Cluster) SeatedSize() int { return len(c.Enabled) }
+
+// AdultSize is the cluster's weight wherever satisfaction or isolation is counted:
+// its enabled adults. Seats (SeatedSize) are what fill, capacity and floor count.
+func (c Cluster) AdultSize() int { return len(c.Adults) }
 
 // WarningCode identifies a kind of data warning.
 type WarningCode string
@@ -92,6 +100,7 @@ type Graph struct {
 	keyOf    map[GuestID]GuestID // guest id -> cluster key
 	index    map[GuestID]int     // cluster key -> position in clusters
 	enabled  map[GuestID]bool
+	child    map[GuestID]bool
 	affinity map[pairKey]LinkLevel
 	warnings []DataWarning
 }
@@ -103,12 +112,14 @@ type Graph struct {
 // depend on the order of the inputs.
 func BuildGraph(guests []Guest, links []Link) Graph {
 	enabled := make(map[GuestID]bool, len(guests))
+	child := make(map[GuestID]bool, len(guests))
 	ids := make([]GuestID, 0, len(guests))
 	for _, gu := range guests {
 		if _, dup := enabled[gu.ID]; dup {
 			continue
 		}
 		enabled[gu.ID] = gu.Enabled
+		child[gu.ID] = gu.Child
 		ids = append(ids, gu.ID)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -146,6 +157,7 @@ func BuildGraph(guests []Guest, links []Link) Graph {
 		keyOf:    make(map[GuestID]GuestID, len(ids)),
 		index:    map[GuestID]int{},
 		enabled:  enabled,
+		child:    child,
 		affinity: map[pairKey]LinkLevel{},
 	}
 	for _, id := range ids { // ids ascending, so members come out sorted
@@ -161,6 +173,9 @@ func BuildGraph(guests []Guest, links []Link) Graph {
 		c.Members = append(c.Members, id)
 		if enabled[id] {
 			c.Enabled = append(c.Enabled, id)
+			if !child[id] {
+				c.Adults = append(c.Adults, id)
+			}
 		}
 	}
 	// Clusters were created in order of their smallest member = key, so they

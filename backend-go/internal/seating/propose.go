@@ -13,12 +13,13 @@ type items struct {
 	capacity int
 	keys     []GuestID   // cluster key per item
 	members  [][]GuestID // enabled members per item
-	size     []int
-	gain     [][]int // gain[a][b] = score of a and b sharing a table = 2*size_a*size_b*Weight(affinity)
+	size     []int       // seats: fill, capacity, floor, pack order
+	adults   []int       // enabled adults: the weight in gain and isolation (task 014)
+	gain     [][]int     // gain[a][b] = score of a and b sharing a table = 2*adults_a*adults_b*Weight(affinity)
 	idx      map[GuestID]int
 	total    int // seats needed by all items
-	// hasPartner[a]: item a's cluster has a group-1/2 partner cluster with an
-	// enabled member. Counts partners that are not items too (oversized ones).
+	// hasPartner[a]: item a has an enabled adult and a group-1/2 partner cluster with an
+	// enabled adult. Counts partners that are not items too (oversized ones).
 	hasPartner []bool
 	// nbr[a]: indices b with gain[a][b] > 0, ascending (adjacency list for the deltas).
 	nbr [][]int
@@ -34,13 +35,14 @@ func newItems(g Graph, capacity int) items {
 		it.keys = append(it.keys, c.Key)
 		it.members = append(it.members, c.Enabled)
 		it.size = append(it.size, c.SeatedSize())
+		it.adults = append(it.adults, c.AdultSize())
 		it.total += c.SeatedSize()
 	}
 	m := len(it.keys)
 	partners := g.hasPartners()
 	it.hasPartner = make([]bool, m)
 	for a, key := range it.keys {
-		it.hasPartner[a] = partners[key]
+		it.hasPartner[a] = partners[key] && it.adults[a] > 0
 	}
 	it.gain = make([][]int, m)
 	for i := range it.gain {
@@ -52,7 +54,7 @@ func newItems(g Graph, capacity int) items {
 		if !okA || !okB {
 			continue
 		}
-		v := int(2 * Weight(lvl) * float64(it.size[a]*it.size[b])) // always an integer: weights are 1 or 1/2
+		v := int(2 * Weight(lvl) * float64(it.adults[a]*it.adults[b])) // always an integer: weights are 1 or 1/2
 		it.gain[a][b], it.gain[b][a] = v, v
 	}
 	it.nbr = make([][]int, m)
@@ -163,7 +165,7 @@ func (l *layout) objective() objective {
 		}
 		twice += l.affTo[a][t]
 		if l.it.hasPartner[a] && l.affTo[a][t] == 0 {
-			iso += l.it.size[a]
+			iso += l.it.adults[a]
 		}
 	}
 	// each pair is counted from both of its ends
@@ -189,14 +191,14 @@ func (l *layout) moveDelta(a, tb int) delta {
 	pair := l.affTo[a][tb] - l.affTo[a][ta]
 	dI := 0
 	if l.it.hasPartner[a] {
-		dI += l.it.size[a] * (b2i(l.affTo[a][tb] == 0) - b2i(l.affTo[a][ta] == 0))
+		dI += l.it.adults[a] * (b2i(l.affTo[a][tb] == 0) - b2i(l.affTo[a][ta] == 0))
 	}
 	for _, c := range l.it.nbr[a] {
 		switch l.assign[c] {
 		case ta: // a leaves: c is isolated if a was its only partner there
-			dI += l.it.size[c] * b2i(l.affTo[c][ta] == l.it.gain[c][a])
+			dI += l.it.adults[c] * b2i(l.affTo[c][ta] == l.it.gain[c][a])
 		case tb: // a arrives: c stops being isolated
-			dI -= l.it.size[c] * b2i(l.affTo[c][tb] == 0)
+			dI -= l.it.adults[c] * b2i(l.affTo[c][tb] == 0)
 		}
 	}
 	return delta{iso: dI, score: pair - IsolationPenalty*dI}
@@ -210,10 +212,10 @@ func (l *layout) swapDelta(a, b int) delta {
 	pair := (l.affTo[a][tb] - g) - l.affTo[a][ta] + (l.affTo[b][ta] - g) - l.affTo[b][tb]
 	dI := 0
 	if l.it.hasPartner[a] {
-		dI += l.it.size[a] * (b2i(l.affTo[a][tb]-g == 0) - b2i(l.affTo[a][ta] == 0))
+		dI += l.it.adults[a] * (b2i(l.affTo[a][tb]-g == 0) - b2i(l.affTo[a][ta] == 0))
 	}
 	if l.it.hasPartner[b] {
-		dI += l.it.size[b] * (b2i(l.affTo[b][ta]-g == 0) - b2i(l.affTo[b][tb] == 0))
+		dI += l.it.adults[b] * (b2i(l.affTo[b][ta]-g == 0) - b2i(l.affTo[b][tb] == 0))
 	}
 	// others: a third item c at ta or tb whose sum changes; each counted once
 	other := func(c int) {
@@ -228,7 +230,7 @@ func (l *layout) swapDelta(a, b int) delta {
 		default:
 			return
 		}
-		dI += l.it.size[c] * (b2i(after == 0) - b2i(before == 0))
+		dI += l.it.adults[c] * (b2i(after == 0) - b2i(before == 0))
 	}
 	for _, c := range l.it.nbr[a] {
 		if c != b {

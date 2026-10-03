@@ -35,7 +35,7 @@ type Summary struct {
 	TableCount, Seated, Unseated, ViolationCount int
 	Score                                        float64
 	NeedsRecalculation                           bool
-	// Isolated counts the seated enabled guests who are isolated (see
+	// Isolated counts the seated enabled adults who are isolated (see
 	// GuestScore.Isolated). Go only: the API derives it from satisfaction < 0.
 	Isolated int
 }
@@ -47,12 +47,13 @@ type TableEval struct {
 	Clusters     []Placement
 }
 
-// GuestScore is the satisfaction of one enabled guest. Table 0 means unseated.
+// GuestScore is the satisfaction of one enabled guest. Table 0 means unseated. A child
+// (task 014) has all numbers 0 and Isolated false; for adults every count is adults only.
 type GuestScore struct {
 	Guest            GuestID
 	Table            int
 	Satisfaction     float64
-	PreferredTotal   int // enabled guests in clusters with a group-1 affinity to the guest's cluster
+	PreferredTotal   int // enabled adults in clusters with a group-1 affinity to the guest's cluster
 	PreferredAtTable int
 	FallbackAtTable  int
 	StrangersAtTable int
@@ -121,7 +122,7 @@ func Evaluate(g Graph, p Plan) Evaluation {
 				if o == k {
 					continue
 				}
-				n := len(atTable[ti][o])
+				n := g.adultsOf(atTable[ti][o]) // children give nothing (task 014)
 				switch lvl, ok := g.Affinity(k, o); {
 				case ok && lvl == Preferred:
 					prefAt += n
@@ -138,6 +139,10 @@ func Evaluate(g Graph, p Plan) Evaluation {
 				sat -= IsolationPenalty
 			}
 			for _, gid := range sortedIDs(atTable[ti][k]) {
+				if g.child[gid] { // seated, not scored: all zeros, never isolated, adds nothing
+					scores = append(scores, GuestScore{Guest: gid, Table: t.Number})
+					continue
+				}
 				scores = append(scores, GuestScore{
 					Guest: gid, Table: t.Number, Satisfaction: sat,
 					PreferredTotal: preferredTotal[k], PreferredAtTable: prefAt,
@@ -170,6 +175,10 @@ func Evaluate(g Graph, p Plan) Evaluation {
 		ev.Unseated = append(ev.Unseated, Placement{ClusterKey: c.Key, Guests: loose})
 		unseatedAll = append(unseatedAll, loose...)
 		for _, id := range loose {
+			if g.child[id] {
+				scores = append(scores, GuestScore{Guest: id})
+				continue
+			}
 			scores = append(scores, GuestScore{Guest: id, PreferredTotal: preferredTotal[c.Key]})
 		}
 	}
@@ -221,7 +230,18 @@ func (g Graph) violations(p Plan, tables []TableEval, tableOf map[GuestID]int, u
 	return vs
 }
 
-// preferredTotals: cluster key -> number of enabled guests in clusters that have
+// adultsOf counts the guests of ids that are not children (all of them are enabled).
+func (g Graph) adultsOf(ids []GuestID) int {
+	n := 0
+	for _, id := range ids {
+		if !g.child[id] {
+			n++
+		}
+	}
+	return n
+}
+
+// preferredTotals: cluster key -> number of enabled adults in clusters that have
 // a group-1 affinity to it.
 func (g Graph) preferredTotals() map[GuestID]int {
 	out := map[GuestID]int{}
@@ -229,21 +249,21 @@ func (g Graph) preferredTotals() map[GuestID]int {
 		if lvl != Preferred {
 			continue
 		}
-		out[pk.lo] += g.clusters[g.index[pk.hi]].SeatedSize()
-		out[pk.hi] += g.clusters[g.index[pk.lo]].SeatedSize()
+		out[pk.lo] += g.clusters[g.index[pk.hi]].AdultSize()
+		out[pk.hi] += g.clusters[g.index[pk.lo]].AdultSize()
 	}
 	return out
 }
 
-// hasPartners: cluster key -> true when some OTHER cluster with at least one
-// enabled member has a group-1/2 affinity to it. Used by Evaluate and newItems.
+// hasPartners: cluster key -> true when the cluster has at least one enabled adult itself
+// and some OTHER cluster with at least one enabled adult has a group-1/2 affinity to it
+// (a children-only cluster is never isolated, a children-only partner is no partner). Used by Evaluate and newItems.
 func (g Graph) hasPartners() map[GuestID]bool {
 	out := map[GuestID]bool{}
 	for pk := range g.affinity {
-		if g.clusters[g.index[pk.hi]].SeatedSize() > 0 {
+		lo, hi := g.clusters[g.index[pk.lo]], g.clusters[g.index[pk.hi]]
+		if hi.AdultSize() > 0 && lo.AdultSize() > 0 {
 			out[pk.lo] = true
-		}
-		if g.clusters[g.index[pk.lo]].SeatedSize() > 0 {
 			out[pk.hi] = true
 		}
 	}

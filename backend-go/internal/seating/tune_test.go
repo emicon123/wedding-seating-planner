@@ -87,6 +87,7 @@ func loadIDsGraph(tb testing.TB, path string) Graph {
 		Guests []struct {
 			ID      GuestID `json:"id"`
 			Enabled bool    `json:"enabled"`
+			Child   bool    `json:"child"` // optional (task 014); default false
 		} `json:"guests"`
 		Links []struct {
 			A     GuestID   `json:"a"`
@@ -99,7 +100,7 @@ func loadIDsGraph(tb testing.TB, path string) Graph {
 	}
 	var guests []Guest
 	for _, x := range in.Guests {
-		guests = append(guests, Guest{ID: x.ID, Enabled: x.Enabled})
+		guests = append(guests, Guest{ID: x.ID, Enabled: x.Enabled, Child: x.Child})
 	}
 	var ls []Link
 	for _, x := range in.Links {

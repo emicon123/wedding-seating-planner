@@ -376,11 +376,13 @@ type Guest struct {
 	DisplayName *string `json:"displayName,omitempty"`
 
 	// Enabled Disabled guests stay on the list but are ignored by all five plans.
-	Enabled   bool                      `json:"enabled"`
-	FirstName string                    `json:"firstName"`
-	Id        *int64                    `json:"id,omitempty"`
-	IsChild   bool                      `json:"isChild"`
-	LastName  nullable.Nullable[string] `json:"lastName"`
+	Enabled   bool   `json:"enabled"`
+	FirstName string `json:"firstName"`
+	Id        *int64 `json:"id,omitempty"`
+
+	// IsChild A child takes a seat like any guest (fill, capacity, floor of 8, cluster integrity) but is not scored: a child's satisfaction is 0, a child at the table adds nothing to anyone's satisfaction, and a child is never isolated (task 014).
+	IsChild  bool                      `json:"isChild"`
+	LastName nullable.Nullable[string] `json:"lastName"`
 
 	// Links All links touching this guest (each link appears on both guests).
 	Links     *[]GuestLinkRef `json:"links,omitempty"`
@@ -459,16 +461,21 @@ type GuestResponse struct {
 
 // GuestScore defines model for GuestScore.
 type GuestScore struct {
-	FallbackAtTable  int   `json:"fallbackAtTable"`
-	GuestId          int64 `json:"guestId"`
-	PreferredAtTable int   `json:"preferredAtTable"`
+	// FallbackAtTable Enabled adult group-2 companions at the guest's table. 0 for a child.
+	FallbackAtTable int   `json:"fallbackAtTable"`
+	GuestId         int64 `json:"guestId"`
 
-	// PreferredTotal Enabled effective group-1 companions in the whole guest list.
+	// PreferredAtTable Enabled adult group-1 companions at the guest's table. 0 for a child.
+	PreferredAtTable int `json:"preferredAtTable"`
+
+	// PreferredTotal Enabled adult effective group-1 companions in the whole guest list (children are not counted, task 014). 0 for a child.
 	PreferredTotal int `json:"preferredTotal"`
 
-	// Satisfaction Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5), minus 1 when the guest is isolated: seated, with at least one enabled group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests.
-	Satisfaction     float32 `json:"satisfaction"`
-	StrangersAtTable int     `json:"strangersAtTable"`
+	// Satisfaction For an adult: Σ w(affinity) over enabled ADULT table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5; children at the table add nothing), minus 1 when the guest is isolated: seated, with at least one enabled adult group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests. Always 0 for a child (`Guest.isChild`, task 014): children are not scored and never isolated.
+	Satisfaction float32 `json:"satisfaction"`
+
+	// StrangersAtTable Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child.
+	StrangersAtTable int `json:"strangersAtTable"`
 
 	// TableNumber Null when unseated.
 	TableNumber nullable.Nullable[int] `json:"tableNumber"`
@@ -575,7 +582,7 @@ type PlanSummary struct {
 	// regenerates on its own. False for a freshly generated plan without violations.
 	NeedsRecalculation bool `json:"needsRecalculation"`
 
-	// Score Sum of the table scores (a whole number; negative possible).
+	// Score Sum of the table scores (a whole number; negative possible): adults' satisfaction only, children are not scored (task 014). Not comparable with scores from before 2026-10-03 (task 014), which included children.
 	Score          float32 `json:"score"`
 	SeatedCount    int     `json:"seatedCount"`
 	TableCount     int     `json:"tableCount"`
@@ -592,7 +599,7 @@ type PlanTable struct {
 	Fill   int `json:"fill"`
 	Number int `json:"number"`
 
-	// Score Sum of the guests' satisfaction (a whole number; negative possible).
+	// Score Sum of the guests' satisfaction (a whole number; negative possible). Only adults contribute: children's satisfaction is 0 (task 014).
 	Score float32 `json:"score"`
 }
 
@@ -690,7 +697,7 @@ type ScenariosReplace struct {
 
 // SeatingPlan Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
 type SeatingPlan struct {
-	// GuestScores One entry per enabled guest.
+	// GuestScores One entry per enabled guest, children included (a child's entry has tableNumber as for anyone else and 0 in every number).
 	GuestScores []GuestScore `json:"guestScores"`
 	Summary     PlanSummary  `json:"summary"`
 	Tables      []PlanTable  `json:"tables"`

@@ -125,7 +125,7 @@ func parseID(s string) (int64, error) {
 func ToSeating(gs []Guest, ls []Link) ([]seating.Guest, []seating.Link) {
 	sg := make([]seating.Guest, len(gs))
 	for i, g := range gs {
-		sg[i] = seating.Guest{ID: g.ID, Enabled: g.Enabled}
+		sg[i] = seating.Guest{ID: g.ID, Enabled: g.Enabled, Child: g.IsChild}
 	}
 	sl := make([]seating.Link, len(ls))
 	for i, l := range ls {
