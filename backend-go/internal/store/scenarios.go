@@ -17,7 +17,7 @@ type Scenarios struct{ db *sql.DB }
 
 func NewScenarios(db *sql.DB) *Scenarios { return &Scenarios{db: db} }
 
-// List returns the three plans ordered by capacity.
+// List returns the four plans ordered by capacity.
 func (s *Scenarios) List(ctx context.Context) ([]scenarios.PlanState, error) {
 	var out []scenarios.PlanState
 	err := withTx(ctx, s.db, func(q *sqlcgen.Queries) (err error) {
@@ -179,7 +179,7 @@ func bump(ctx context.Context, q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
 	return err
 }
 
-// loadStates reads all three plans: scenarios, then tables and seats grouped by scenario.
+// loadStates reads all four plans: scenarios, then tables and seats grouped by scenario.
 // Tables are ordered by number, seats by guest id; an empty table has no seats.
 func loadStates(ctx context.Context, q *sqlcgen.Queries) ([]scenarios.PlanState, error) {
 	scs, err := q.ListScenarios(ctx)

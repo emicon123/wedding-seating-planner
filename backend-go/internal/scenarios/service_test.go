@@ -56,6 +56,15 @@ func newEnv(t *testing.T, n int) *env {
 	return e
 }
 
+// startVersion is the version of an untouched plan on a fresh database: migration 00002 bumps
+// the plan it converts from 8 to 9 seats (also when the database is new).
+func startVersion(capacity int) int64 {
+	if capacity == 9 {
+		return 2
+	}
+	return 1
+}
+
 func (e *env) link(t *testing.T, a, b int64, level seating.LinkLevel) {
 	t.Helper()
 	if _, err := e.guests.SetLink(context.Background(), a, b, level); err != nil {
@@ -124,18 +133,18 @@ func wantValidation(t *testing.T, err error, field string) {
 	}
 }
 
-func TestListReturnsThreeEvaluatedEmptyPlans(t *testing.T) {
+func TestListReturnsFourEvaluatedEmptyPlans(t *testing.T) {
 	e := newEnv(t, 7)
 	got, err := e.plans.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("List = %d, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("List = %d, want 4", len(got))
 	}
-	for i, c := range []int{8, 10, 12} {
+	for i, c := range []int{9, 10, 11, 12} {
 		ev := got[i]
-		if ev.State.Plan.Capacity != c || ev.State.Version != 1 {
+		if ev.State.Plan.Capacity != c || ev.State.Version != startVersion(c) {
 			t.Errorf("plan %d = %+v", i, ev.State)
 		}
 		// an empty plan with 7 enabled guests: they are all unseated, which needs recalculation
@@ -156,15 +165,16 @@ func TestCalculate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if e.source.lists != 1 {
-		t.Errorf("guest list read %d times, want 1 (one graph for all three capacities)", e.source.lists)
+		t.Errorf("guest list read %d times, want 1 (one graph for all four capacities)", e.source.lists)
 	}
-	if len(props) != 3 {
-		t.Fatalf("Calculate = %d proposals, want 3", len(props))
+	if len(props) != 4 {
+		t.Fatalf("Calculate = %d proposals, want 4", len(props))
 	}
-	wantTables := map[int]int{8: 3, 10: 3, 12: 2}
-	for i, c := range []int{8, 10, 12} {
+	// 24 guests, floor 8: three tables of 8 at capacities 9, 10 and 11; two of 12 at capacity 12
+	wantTables := map[int]int{9: 3, 10: 3, 11: 3, 12: 2}
+	for i, c := range []int{9, 10, 11, 12} {
 		p := props[i]
-		if p.Plan.Capacity != c || p.BasedOnVersion != 1 {
+		if p.Plan.Capacity != c || p.BasedOnVersion != startVersion(c) {
 			t.Errorf("proposal %d = capacity %d basedOn %d", i, p.Plan.Capacity, p.BasedOnVersion)
 		}
 		if len(p.Plan.Tables) != wantTables[c] || p.Eval.Summary.NeedsRecalculation || p.Eval.Summary.Seated != 24 {
@@ -179,7 +189,7 @@ func TestCalculate(t *testing.T) {
 
 	t.Run("stores nothing", func(t *testing.T) {
 		for _, ev := range mustList(t, e) {
-			if ev.State.Version != 1 || len(ev.State.Plan.Tables) != 0 {
+			if ev.State.Version != startVersion(ev.State.Plan.Capacity) || len(ev.State.Plan.Tables) != 0 {
 				t.Errorf("plan %d changed: %+v", ev.State.Plan.Capacity, ev.State)
 			}
 		}
@@ -263,7 +273,7 @@ func TestAcceptValidation(t *testing.T) {
 	})
 
 	t.Run("unknown capacity is not found", func(t *testing.T) {
-		if _, err := e.plans.Accept(ctx, 9, 1, nil); !errors.Is(err, apperr.ErrNotFound) {
+		if _, err := e.plans.Accept(ctx, 8, 1, nil); !errors.Is(err, apperr.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
 	})
@@ -272,14 +282,14 @@ func TestAcceptValidation(t *testing.T) {
 func TestAcceptVersionConflict(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 6)
-	if _, err := e.plans.Accept(ctx, 8, 1, []seating.Table{table(1, 1, 2)}); err != nil { // -> version 2
+	if _, err := e.plans.Accept(ctx, 11, 1, []seating.Table{table(1, 1, 2)}); err != nil { // -> version 2
 		t.Fatal(err)
 	}
-	_, err := e.plans.Accept(ctx, 8, 1, []seating.Table{table(1, 3)}) // stale
+	_, err := e.plans.Accept(ctx, 11, 1, []seating.Table{table(1, 3)}) // stale
 	if !errors.Is(err, apperr.ErrVersionConflict) {
 		t.Fatalf("err = %v, want ErrVersionConflict", err)
 	}
-	if ev := plan(t, e, 8); ev.State.Version != 2 {
+	if ev := plan(t, e, 11); ev.State.Version != 2 {
 		t.Errorf("version = %d, want 2", ev.State.Version)
 	}
 	// the other plans are independent
@@ -389,8 +399,8 @@ func TestSeatMovesWholeClusterIncludingDisabled(t *testing.T) {
 	})
 
 	t.Run("other plans are untouched", func(t *testing.T) {
-		if ev := plan(t, e, 8); ev.State.Version != 1 {
-			t.Errorf("plan 8 version = %d", ev.State.Version)
+		if ev := plan(t, e, 11); ev.State.Version != startVersion(11) {
+			t.Errorf("plan 11 version = %d", ev.State.Version)
 		}
 	})
 }
@@ -411,7 +421,7 @@ func TestSeatErrors(t *testing.T) {
 		if _, err := e.plans.Seat(ctx, 10, 999, 1, false); !errors.Is(err, apperr.ErrNotFound) {
 			t.Errorf("unknown guest: %v", err)
 		}
-		if _, err := e.plans.Seat(ctx, 9, 1, 1, false); !errors.Is(err, apperr.ErrNotFound) {
+		if _, err := e.plans.Seat(ctx, 8, 1, 1, false); !errors.Is(err, apperr.ErrNotFound) {
 			t.Errorf("unknown capacity: %v", err)
 		}
 		if _, err := e.plans.Unseat(ctx, 10, 999); !errors.Is(err, apperr.ErrNotFound) {
@@ -423,14 +433,14 @@ func TestSeatErrors(t *testing.T) {
 func TestSeatOverfillIsAllowedAndReported(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 10)
-	if _, err := e.plans.Accept(ctx, 8, 1, []seating.Table{table(1, rng(1, 8)...), table(2, 9, 10)}); err != nil {
+	if _, err := e.plans.Accept(ctx, 9, startVersion(9), []seating.Table{table(1, rng(1, 9)...), table(2, 10)}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := e.plans.Seat(ctx, 8, 9, 1, false) // table 1 is full (8/8)
+	got, err := e.plans.Seat(ctx, 9, 10, 1, false) // table 1 is full (9/9)
 	if err != nil {
 		t.Fatalf("overfilling must not be blocked: %v", err)
 	}
-	if !hasViolation(got.Eval, seating.ViolOverCapacity) || !got.Eval.Summary.NeedsRecalculation || got.Eval.Tables[0].Fill != 9 {
+	if !hasViolation(got.Eval, seating.ViolOverCapacity) || !got.Eval.Summary.NeedsRecalculation || got.Eval.Tables[0].Fill != 10 {
 		t.Errorf("summary %+v violations %+v", got.Eval.Summary, got.Eval.Violations)
 	}
 }
@@ -503,8 +513,8 @@ func TestAddAndRemoveTable(t *testing.T) {
 	if _, err := e.plans.RemoveTable(ctx, 10, 9); !errors.Is(err, apperr.ErrNotFound) {
 		t.Errorf("RemoveTable(9) err = %v, want ErrNotFound", err)
 	}
-	if _, err := e.plans.AddTable(ctx, 9); !errors.Is(err, apperr.ErrNotFound) {
-		t.Errorf("AddTable(9) err = %v, want ErrNotFound", err)
+	if _, err := e.plans.AddTable(ctx, 8); !errors.Is(err, apperr.ErrNotFound) {
+		t.Errorf("AddTable(8) err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -512,30 +522,30 @@ func TestAddAndRemoveTable(t *testing.T) {
 // plan then needs recalculation, and nothing regenerates by itself.
 func TestReEnabledGuestOverfillsTableAndNeedsRecalculation(t *testing.T) {
 	ctx := context.Background()
-	e := newEnv(t, 9)
+	e := newEnv(t, 10)
 	e.link(t, 1, 2, seating.Must)
 	e.link(t, 1, 3, seating.Must) // cluster {1,2,3}
 	e.toggle(t, false, 3)
 
-	// 8 enabled guests at table 1 of the 8-seat plan: the plan is complete (no violations)
+	// 9 enabled guests at table 1 of the 9-seat plan: the plan is complete (no violations)
 	// and the disabled child 3 rides along via ExpandDisabled.
-	got, err := e.plans.Accept(ctx, 8, 1, []seating.Table{table(1, 1, 2, 4, 5, 6, 7, 8, 9)})
+	got, err := e.plans.Accept(ctx, 9, startVersion(9), []seating.Table{table(1, 1, 2, 4, 5, 6, 7, 8, 9, 10)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Eval.Summary.NeedsRecalculation || got.Eval.Tables[0].Fill != 8 {
+	if got.Eval.Summary.NeedsRecalculation || got.Eval.Tables[0].Fill != 9 {
 		t.Fatalf("precondition: fill %d summary %+v", got.Eval.Tables[0].Fill, got.Eval.Summary)
 	}
 
 	e.toggle(t, true, 3)
-	after := plan(t, e, 8)
+	after := plan(t, e, 9)
 	if after.State.Version != got.State.Version {
 		t.Errorf("toggling a guest must not touch the plan (version %d -> %d)", got.State.Version, after.State.Version)
 	}
 	if tb, _, ok := tableOf(after.State.Plan, 3); !ok || tb != 1 {
 		t.Fatalf("re-enabled guest 3 at table %d (seated %v), want table 1", tb, ok)
 	}
-	if after.Eval.Tables[0].Fill != 9 || !hasViolation(after.Eval, seating.ViolOverCapacity) || !after.Eval.Summary.NeedsRecalculation {
+	if after.Eval.Tables[0].Fill != 10 || !hasViolation(after.Eval, seating.ViolOverCapacity) || !after.Eval.Summary.NeedsRecalculation {
 		t.Errorf("fill %d, summary %+v, violations %+v", after.Eval.Tables[0].Fill, after.Eval.Summary, after.Eval.Violations)
 	}
 
@@ -568,7 +578,7 @@ func TestResetEmptiesThePlanAndNeedsRecalculation(t *testing.T) {
 	if _, pinned, ok := tableOf(seated.State.Plan, 3); !ok || !pinned {
 		t.Fatalf("precondition: disabled guest 3 pinned %v seated %v", pinned, ok)
 	}
-	other := plan(t, e, 8) // an untouched plan, to prove the reset is per scenario
+	other := plan(t, e, 11) // an untouched plan, to prove the reset is per scenario
 
 	got, err := e.plans.Reset(ctx, 10)
 	if err != nil {
@@ -586,8 +596,8 @@ func TestResetEmptiesThePlanAndNeedsRecalculation(t *testing.T) {
 	if want := []seating.GuestID{1, 2, 4, 5, 6, 7, 8}; !slices.Equal(got.Eval.Violations[0].Guests, want) {
 		t.Errorf("unseated guests = %v, want every enabled guest %v", got.Eval.Violations[0].Guests, want)
 	}
-	if after := plan(t, e, 8); after.State.Version != other.State.Version {
-		t.Errorf("plan 8 version %d -> %d", other.State.Version, after.State.Version)
+	if after := plan(t, e, 11); after.State.Version != other.State.Version {
+		t.Errorf("plan 11 version %d -> %d", other.State.Version, after.State.Version)
 	}
 
 	t.Run("pins are gone: the next proposal is free of them", func(t *testing.T) {
@@ -628,8 +638,8 @@ func TestResetWithNoEnabledGuestsHasNoViolation(t *testing.T) {
 	if len(got.State.Plan.Tables) != 0 || len(got.Eval.Violations) != 0 || got.Eval.Summary.NeedsRecalculation {
 		t.Errorf("state %+v summary %+v violations %+v, want an empty plan without violations", got.State, got.Eval.Summary, got.Eval.Violations)
 	}
-	if _, err := e.plans.Reset(ctx, 9); !errors.Is(err, apperr.ErrNotFound) {
-		t.Errorf("Reset(9) err = %v, want ErrNotFound", err)
+	if _, err := e.plans.Reset(ctx, 8); !errors.Is(err, apperr.ErrNotFound) {
+		t.Errorf("Reset(8) err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -651,5 +661,47 @@ func TestResetMakesOlderProposalsStale(t *testing.T) {
 	}
 	if _, err := e.plans.Accept(ctx, 10, p.BasedOnVersion, p.Plan.Tables); !errors.Is(err, apperr.ErrVersionConflict) {
 		t.Fatalf("Accept after Reset err = %v, want ErrVersionConflict", err)
+	}
+}
+
+// BenchmarkCalculate100 measures the whole Calculate path (one graph, four proposals, real
+// SQLite reads) for ~100 guests in families of 1..5 with partner links. Task 006 budget: well
+// under a second on the Pi.
+func BenchmarkCalculate100(b *testing.B) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(b.TempDir(), "stoliki.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { db.Close() })
+	if err := store.Migrate(ctx, db); err != nil {
+		b.Fatal(err)
+	}
+	gstore := store.NewGuests(db)
+	gs := guests.NewService(gstore)
+	svc := scenarios.NewService(store.NewScenarios(db), gstore)
+	for i := 1; i <= 100; i++ {
+		if _, err := gs.Create(ctx, guests.NewGuest{FirstName: fmt.Sprintf("G%03d", i), Enabled: true}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	for first := int64(1); first <= 100; first += 4 { // families of 4 (group 0), every 3rd family linked to the next (group 1)
+		for m := first + 1; m < first+4 && m <= 100; m++ {
+			if _, err := gs.SetLink(ctx, first, m, seating.Must); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if first%3 == 1 && first+4 <= 100 {
+			if _, err := gs.SetLink(ctx, first, first+4, seating.Preferred); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		props, err := svc.Calculate(ctx)
+		if err != nil || len(props) != 4 {
+			b.Fatalf("Calculate = %d proposals, %v", len(props), err)
+		}
 	}
 }

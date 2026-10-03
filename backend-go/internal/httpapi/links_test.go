@@ -172,18 +172,39 @@ func TestClusterOverviewFullyDisabledClusterHasEmptyArrays(t *testing.T) {
 }
 
 func TestClusterOverviewSizeWarnings(t *testing.T) {
-	h := newAPI(t)
-	for i := 0; i < 9; i++ {
-		createGuest(t, h, `{"firstName":"G`+strconv.Itoa(i)+`"}`)
+	tests := []struct {
+		name string
+		size int
+		want []oapi.DataWarningCode
+	}{
+		{"fits the 9-seat plan", 9, nil},
+		{"too big for 9, fits 12", 10, []oapi.DataWarningCode{oapi.ClusterExceeds9}},
+		{"still fits 12", 12, []oapi.DataWarningCode{oapi.ClusterExceeds9}},
+		{"fits no plan", 13, []oapi.DataWarningCode{oapi.ClusterExceeds9, oapi.ClusterExceeds12}},
 	}
-	for i := 2; i <= 9; i++ { // chain 1-2, 1-3 ... one cluster of 9
-		putLink(t, h, "1-"+strconv.Itoa(i), 0)
-	}
-	ov := overview(t, h)
-	if len(ov.Clusters) != 1 || *ov.Clusters[0].SeatedSize != 9 {
-		t.Fatalf("clusters = %+v", ov.Clusters)
-	}
-	if len(ov.Warnings) != 1 || ov.Warnings[0].Code != oapi.ClusterExceeds8 || len(ov.Warnings[0].GuestIds) != 9 {
-		t.Errorf("warnings = %+v", ov.Warnings)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newAPI(t)
+			for i := 0; i < tc.size; i++ {
+				createGuest(t, h, `{"firstName":"G`+strconv.Itoa(i)+`"}`)
+			}
+			for i := 2; i <= tc.size; i++ { // 1-2, 1-3 ... one cluster of tc.size
+				putLink(t, h, "1-"+strconv.Itoa(i), 0)
+			}
+			ov := overview(t, h)
+			if len(ov.Clusters) != 1 || *ov.Clusters[0].SeatedSize != tc.size {
+				t.Fatalf("clusters = %+v", ov.Clusters)
+			}
+			var got []oapi.DataWarningCode
+			for _, w := range ov.Warnings {
+				got = append(got, w.Code)
+				if len(w.GuestIds) != tc.size {
+					t.Errorf("warning %s lists %d guests, want %d", w.Code, len(w.GuestIds), tc.size)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("warnings = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

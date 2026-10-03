@@ -277,9 +277,9 @@ func TestGuestsDeleteCascades(t *testing.T) {
 	if _, err := s.UpsertLink(ctx, guests.Link{A: a.ID, B: b.ID, Level: 0}); err != nil {
 		t.Fatal(err)
 	}
-	// A seat in the 8-seat plan (assignments are written by B-09; raw SQL here only to prove the cascade).
+	// A seat in the 9-seat plan (assignments are written by B-09; raw SQL here only to prove the cascade).
 	for _, q := range []string{
-		`INSERT INTO dining_table (scenario_id, number) SELECT id, 1 FROM scenario WHERE capacity = 8`,
+		`INSERT INTO dining_table (scenario_id, number) SELECT id, 1 FROM scenario WHERE capacity = 9`,
 		`INSERT INTO assignment (scenario_id, guest_id, table_id) SELECT scenario_id, ` + strconv.FormatInt(a.ID, 10) + `, id FROM dining_table`,
 	} {
 		if _, err := db.Exec(q); err != nil {

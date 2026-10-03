@@ -6,7 +6,7 @@ import (
 	"github.com/wojtekrpi/stoliki/backend-go/internal/httpapi/oapi"
 )
 
-// ListScenarios implements listScenarios: the three plans, evaluated on every read.
+// ListScenarios implements listScenarios: the four plans, evaluated on every read.
 func (s *Server) ListScenarios(ctx context.Context, _ oapi.ListScenariosRequestObject) (oapi.ListScenariosResponseObject, error) {
 	all, err := s.plans.List(ctx)
 	if err != nil {
@@ -20,7 +20,7 @@ func (s *Server) ListScenarios(ctx context.Context, _ oapi.ListScenariosRequestO
 	return oapi.ListScenarios200JSONResponse{Data: data, Meta: metaOf(ctx), Page: oapi.Page{Total: &total}}, nil
 }
 
-// CalculateProposals implements calculateProposals: three proposals, nothing stored.
+// CalculateProposals implements calculateProposals: four proposals, nothing stored.
 func (s *Server) CalculateProposals(ctx context.Context, _ oapi.CalculateProposalsRequestObject) (oapi.CalculateProposalsResponseObject, error) {
 	props, err := s.plans.Calculate(ctx)
 	if err != nil {

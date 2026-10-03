@@ -27,7 +27,7 @@ const (
 
 // Floor is the minimum number of enabled guests at a table when the plan has
 // more than one table.
-const Floor = 6
+const Floor = 8
 
 // Weight is the satisfaction a table-mate of the given affinity level adds.
 func Weight(l LinkLevel) float64 {
@@ -67,7 +67,7 @@ func (c Cluster) SeatedSize() int { return len(c.Enabled) }
 type WarningCode string
 
 const (
-	WarnClusterExceeds8       WarningCode = "cluster_exceeds_8"
+	WarnClusterExceeds9       WarningCode = "cluster_exceeds_9"
 	WarnClusterExceeds12      WarningCode = "cluster_exceeds_12"
 	WarnConflictingLinkLevels WarningCode = "conflicting_link_levels"
 )
@@ -222,8 +222,8 @@ func (g *Graph) buildAffinity(links []Link) {
 func (g *Graph) buildWarnings() {
 	var oversize []DataWarning
 	for _, c := range g.clusters {
-		if c.SeatedSize() > 8 {
-			oversize = append(oversize, DataWarning{Code: WarnClusterExceeds8, Guests: append([]GuestID(nil), c.Enabled...)})
+		if c.SeatedSize() > 9 {
+			oversize = append(oversize, DataWarning{Code: WarnClusterExceeds9, Guests: append([]GuestID(nil), c.Enabled...)})
 		}
 		if c.SeatedSize() > 12 {
 			oversize = append(oversize, DataWarning{Code: WarnClusterExceeds12, Guests: append([]GuestID(nil), c.Enabled...)})
@@ -269,6 +269,6 @@ func (g Graph) Affinity(a, b GuestID) (LinkLevel, bool) {
 // IsEnabled reports whether the guest exists and is enabled.
 func (g Graph) IsEnabled(id GuestID) bool { return g.enabled[id] }
 
-// Warnings lists data warnings: cluster_exceeds_8 / _12 in cluster order, then
+// Warnings lists data warnings: cluster_exceeds_9 / _12 in cluster order, then
 // conflicting_link_levels in cluster-pair order.
 func (g Graph) Warnings() []DataWarning { return g.warnings }

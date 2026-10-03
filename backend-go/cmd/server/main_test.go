@@ -195,7 +195,7 @@ func TestBackupSubcommand(t *testing.T) {
 		}
 		got = append(got, c)
 	}
-	if !slices.Equal(got, []int{8, 10, 12}) {
-		t.Errorf("backup scenarios = %v, want [8 10 12]", got)
+	if !slices.Equal(got, []int{9, 10, 11, 12}) {
+		t.Errorf("backup scenarios = %v, want [9 10 11 12]", got)
 	}
 }

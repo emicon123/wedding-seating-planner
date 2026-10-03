@@ -21,8 +21,9 @@ import (
 // Defines values for Capacity.
 const (
 	N10 Capacity = 10
+	N11 Capacity = 11
 	N12 Capacity = 12
-	N8  Capacity = 8
+	N9  Capacity = 9
 )
 
 // Valid indicates whether the value is a known member of the Capacity enum.
@@ -30,9 +31,11 @@ func (e Capacity) Valid() bool {
 	switch e {
 	case N10:
 		return true
+	case N11:
+		return true
 	case N12:
 		return true
-	case N8:
+	case N9:
 		return true
 	default:
 		return false
@@ -60,7 +63,7 @@ func (e ClusterAffinityLevel) Valid() bool {
 // Defines values for DataWarningCode.
 const (
 	ClusterExceeds12      DataWarningCode = "cluster_exceeds_12"
-	ClusterExceeds8       DataWarningCode = "cluster_exceeds_8"
+	ClusterExceeds9       DataWarningCode = "cluster_exceeds_9"
 	ConflictingLinkLevels DataWarningCode = "conflicting_link_levels"
 )
 
@@ -69,7 +72,7 @@ func (e DataWarningCode) Valid() bool {
 	switch e {
 	case ClusterExceeds12:
 		return true
-	case ClusterExceeds8:
+	case ClusterExceeds9:
 		return true
 	case ConflictingLinkLevels:
 		return true
@@ -245,7 +248,7 @@ type AssignmentSet struct {
 	TableNumber int  `json:"tableNumber"`
 }
 
-// Capacity Seats per table; identifies one of the three plans.
+// Capacity Seats per table; identifies one of the four plans.
 type Capacity int
 
 // Cluster Connected component of group-0 links over ALL guests (derived, never stored).
@@ -295,12 +298,17 @@ type ClusterPlacement struct {
 
 // DataWarning defines model for DataWarning.
 type DataWarning struct {
+	// Code `cluster_exceeds_9`: a group-0 cluster of 10–12 enabled guests does not fit the smallest
+	// (9-seat) plan. `cluster_exceeds_12`: 13+ enabled guests, fits no plan.
+	// `conflicting_link_levels`: two clusters are linked at both level 1 and level 2.
 	Code     DataWarningCode `json:"code"`
 	GuestIds []int64         `json:"guestIds"`
 	Message  string          `json:"message"`
 }
 
-// DataWarningCode defines model for DataWarning.Code.
+// DataWarningCode `cluster_exceeds_9`: a group-0 cluster of 10–12 enabled guests does not fit the smallest
+// (9-seat) plan. `cluster_exceeds_12`: 13+ enabled guests, fits no plan.
+// `conflicting_link_levels`: two clusters are linked at both level 1 and level 2.
 type DataWarningCode string
 
 // ErrorCode defines model for ErrorCode.
@@ -332,7 +340,7 @@ type Guest struct {
 	// DisplayName firstName + optional " " + lastName; unique ignoring case.
 	DisplayName *string `json:"displayName,omitempty"`
 
-	// Enabled Disabled guests stay on the list but are ignored by all three plans.
+	// Enabled Disabled guests stay on the list but are ignored by all four plans.
 	Enabled   bool                      `json:"enabled"`
 	FirstName string                    `json:"firstName"`
 	Id        *int64                    `json:"id,omitempty"`
@@ -550,7 +558,7 @@ type Proposal struct {
 	// BasedOnVersion Scenario version the proposal was computed from; send it back when accepting.
 	BasedOnVersion int `json:"basedOnVersion"`
 
-	// Capacity Seats per table; identifies one of the three plans.
+	// Capacity Seats per table; identifies one of the four plans.
 	Capacity Capacity `json:"capacity"`
 
 	// Plan Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
@@ -559,7 +567,7 @@ type Proposal struct {
 
 // ProposalListResponse defines model for ProposalListResponse.
 type ProposalListResponse struct {
-	// Data Always exactly three proposals, ordered 8, 10, 12.
+	// Data Always exactly four proposals, ordered 9, 10, 11, 12.
 	Data []Proposal `json:"data"`
 
 	// Meta Response metadata.
@@ -571,7 +579,7 @@ type ProposalListResponse struct {
 
 // Scenario defines model for Scenario.
 type Scenario struct {
-	// Capacity Seats per table; identifies one of the three plans.
+	// Capacity Seats per table; identifies one of the four plans.
 	Capacity Capacity `json:"capacity"`
 
 	// Plan Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
@@ -661,7 +669,7 @@ type UnprocessableEntity = ErrorResponse
 // ImportGuestsParams defines parameters for ImportGuests.
 type ImportGuestsParams struct {
 	// DryRun `true` (default) only validates and returns the report. `false` commits:
-	// replaces ALL guests and links and clears all three plans.
+	// replaces ALL guests and links and clears all four plans.
 	DryRun *DryRun `form:"dryRun,omitempty" json:"dryRun,omitempty"`
 }
 
@@ -715,10 +723,10 @@ type ServerInterface interface {
 	// GetHealth Liveness check (DB reachable)
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
-	// ListScenarios The three plans (8, 10, 12) with their evaluations (UC-09, UC-14)
+	// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
 	// (GET /scenarios)
 	ListScenarios(w http.ResponseWriter, r *http.Request)
-	// CalculateProposals Generate proposals for all three plans (UC-10)
+	// CalculateProposals Generate proposals for all four plans (UC-10)
 	// (POST /scenarios/calculate)
 	CalculateProposals(w http.ResponseWriter, r *http.Request)
 	// AcceptProposal Accept a proposal — replace the plan's tables and assignments (UC-10)
@@ -805,13 +813,13 @@ func (_ Unimplemented) GetHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// ListScenarios The three plans (8, 10, 12) with their evaluations (UC-09, UC-14)
+// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
 // (GET /scenarios)
 func (_ Unimplemented) ListScenarios(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// CalculateProposals Generate proposals for all three plans (UC-10)
+// CalculateProposals Generate proposals for all four plans (UC-10)
 // (POST /scenarios/calculate)
 func (_ Unimplemented) CalculateProposals(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -2664,10 +2672,10 @@ type StrictServerInterface interface {
 	// GetHealth Liveness check (DB reachable)
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
-	// ListScenarios The three plans (8, 10, 12) with their evaluations (UC-09, UC-14)
+	// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
 	// (GET /scenarios)
 	ListScenarios(ctx context.Context, request ListScenariosRequestObject) (ListScenariosResponseObject, error)
-	// CalculateProposals Generate proposals for all three plans (UC-10)
+	// CalculateProposals Generate proposals for all four plans (UC-10)
 	// (POST /scenarios/calculate)
 	CalculateProposals(ctx context.Context, request CalculateProposalsRequestObject) (CalculateProposalsResponseObject, error)
 	// AcceptProposal Accept a proposal — replace the plan's tables and assignments (UC-10)

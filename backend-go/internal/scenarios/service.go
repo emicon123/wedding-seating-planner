@@ -41,10 +41,10 @@ type Proposal struct {
 	Eval           seating.Evaluation
 }
 
-// Capacities are the three plans, in the order they are listed and proposed.
-var Capacities = [3]int{8, 10, 12}
+// Capacities are the four plans, in the order they are listed and proposed.
+var Capacities = [4]int{9, 10, 11, 12}
 
-// Service evaluates, proposes, accepts and edits the three plans. It holds no state: every
+// Service evaluates, proposes, accepts and edits the four plans. It holds no state: every
 // call reads what it needs, so evaluations are never stale (nothing derived is stored).
 type Service struct {
 	plans  Store
@@ -53,7 +53,7 @@ type Service struct {
 
 func NewService(p Store, g GuestSource) *Service { return &Service{plans: p, guests: g} }
 
-// List returns the three plans (8, 10, 12) with their evaluations.
+// List returns the four plans (9, 10, 11, 12) with their evaluations.
 func (s *Service) List(ctx context.Context) ([]Evaluated, error) {
 	g, err := s.graph(ctx)
 	if err != nil {
@@ -70,7 +70,7 @@ func (s *Service) List(ctx context.Context) ([]Evaluated, error) {
 	return out, nil
 }
 
-// Calculate runs auto-seating for all three capacities from ONE graph and the current pins.
+// Calculate runs auto-seating for all four capacities from ONE graph and the current pins.
 // It writes nothing.
 func (s *Service) Calculate(ctx context.Context) ([]Proposal, error) {
 	g, err := s.graph(ctx)

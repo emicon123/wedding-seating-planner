@@ -201,30 +201,30 @@ func TestBuildGraphWarnings(t *testing.T) {
 		links  []Link
 		want   []DataWarning
 	}{
-		{name: "8 is fine", guests: enabledRange(1, 8), links: chain(rng(1, 8)...)},
+		{name: "9 is fine", guests: enabledRange(1, 9), links: chain(rng(1, 9)...)},
 		{
-			name: "9 exceeds 8", guests: enabledRange(1, 9), links: chain(rng(1, 9)...),
-			want: []DataWarning{{Code: WarnClusterExceeds8, Guests: rng(1, 9)}},
+			name: "10 exceeds 9", guests: enabledRange(1, 10), links: chain(rng(1, 10)...),
+			want: []DataWarning{{Code: WarnClusterExceeds9, Guests: rng(1, 10)}},
 		},
-		{name: "12 exceeds 8 only", guests: enabledRange(1, 12), links: chain(rng(1, 12)...),
-			want: []DataWarning{{Code: WarnClusterExceeds8, Guests: rng(1, 12)}}},
+		{name: "12 exceeds 9 only", guests: enabledRange(1, 12), links: chain(rng(1, 12)...),
+			want: []DataWarning{{Code: WarnClusterExceeds9, Guests: rng(1, 12)}}},
 		{
-			name: "13 exceeds 8 and 12", guests: enabledRange(1, 13), links: chain(rng(1, 13)...),
+			name: "13 exceeds 9 and 12", guests: enabledRange(1, 13), links: chain(rng(1, 13)...),
 			want: []DataWarning{
-				{Code: WarnClusterExceeds8, Guests: rng(1, 13)},
+				{Code: WarnClusterExceeds9, Guests: rng(1, 13)},
 				{Code: WarnClusterExceeds12, Guests: rng(1, 13)},
 			},
 		},
 		{
 			name:   "only enabled members count; warning lists enabled guests",
-			guests: cat(off(1), enabledRange(2, 9)), links: chain(rng(1, 9)...),
+			guests: cat(off(1), enabledRange(2, 10)), links: chain(rng(1, 10)...),
 		},
 		{
 			name:   "two oversized clusters are reported in key order",
-			guests: enabledRange(1, 20), links: links(chain(rng(1, 9)...), chain(rng(10, 19)...)),
+			guests: enabledRange(1, 21), links: links(chain(rng(1, 10)...), chain(rng(11, 21)...)),
 			want: []DataWarning{
-				{Code: WarnClusterExceeds8, Guests: rng(1, 9)},
-				{Code: WarnClusterExceeds8, Guests: rng(10, 19)},
+				{Code: WarnClusterExceeds9, Guests: rng(1, 10)},
+				{Code: WarnClusterExceeds9, Guests: rng(11, 21)},
 			},
 		},
 	}

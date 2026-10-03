@@ -22,6 +22,15 @@ func seedGuests(t *testing.T, h http.Handler, n int) {
 	seed(t, h, names...)
 }
 
+// startVer is the version of an untouched plan on a fresh database: migration 00002 bumps the
+// plan it converts from 8 to 9 seats (also when the database is new).
+func startVer(capacity oapi.Capacity) int {
+	if capacity == 9 {
+		return 2
+	}
+	return 1
+}
+
 func listScenarios(t *testing.T, h http.Handler) oapi.ScenarioListResponse {
 	t.Helper()
 	rec := do(h, http.MethodGet, api+"/scenarios", "")
@@ -110,12 +119,12 @@ func TestListScenarios(t *testing.T) {
 	rec := do(h, http.MethodGet, api+"/scenarios", "")
 	expect(t, rec, http.StatusOK, "")
 	list := decode[oapi.ScenarioListResponse](t, rec)
-	if list.Meta.RequestId == nil || list.Page.Total == nil || *list.Page.Total != 3 || len(list.Data) != 3 {
+	if list.Meta.RequestId == nil || list.Page.Total == nil || *list.Page.Total != 4 || len(list.Data) != 4 {
 		t.Fatalf("envelope = %+v", list)
 	}
-	for i, c := range []oapi.Capacity{8, 10, 12} {
+	for i, c := range []oapi.Capacity{9, 10, 11, 12} {
 		s := list.Data[i]
-		if s.Capacity != c || s.Version == nil || *s.Version != 1 {
+		if s.Capacity != c || s.Version == nil || *s.Version != startVer(c) {
 			t.Errorf("scenario %d = %d v%v", i, s.Capacity, s.Version)
 		}
 		sum := s.Plan.Summary
@@ -161,10 +170,10 @@ func TestListScenarios(t *testing.T) {
 	})
 }
 
-// Flow 1: calculate stores nothing; accepting all three fills the plans; a stale accept is 409.
-func TestCalculateThenAcceptAllThree(t *testing.T) {
+// Flow 1: calculate stores nothing; accepting all four fills the plans; a stale accept is 409.
+func TestCalculateThenAcceptAllFour(t *testing.T) {
 	h := newAPI(t)
-	seedGuests(t, h, 30)
+	seedGuests(t, h, 36)
 	putLink(t, h, "1-2", 0) // cluster {1,2,3}
 	putLink(t, h, "2-3", 0)
 	putLink(t, h, "4-5", 0) // cluster {4,5}
@@ -172,17 +181,18 @@ func TestCalculateThenAcceptAllThree(t *testing.T) {
 	putLink(t, h, "6-7", 2)
 
 	props := calculate(t, h)
-	if props.Meta.RequestId == nil || props.Page.Total == nil || *props.Page.Total != 3 || len(props.Data) != 3 {
+	if props.Meta.RequestId == nil || props.Page.Total == nil || *props.Page.Total != 4 || len(props.Data) != 4 {
 		t.Fatalf("envelope = %+v", props)
 	}
-	wantTables := map[oapi.Capacity]int{8: 4, 10: 3, 12: 3}
-	for i, c := range []oapi.Capacity{8, 10, 12} {
+	// 36 guests, floor 8: four tables of 9 at capacities 9, 10 and 11; three of 12 at capacity 12
+	wantTables := map[oapi.Capacity]int{9: 4, 10: 4, 11: 4, 12: 3}
+	for i, c := range []oapi.Capacity{9, 10, 11, 12} {
 		p := props.Data[i]
-		if p.Capacity != c || p.BasedOnVersion != 1 {
+		if p.Capacity != c || p.BasedOnVersion != startVer(c) {
 			t.Errorf("proposal %d = %d basedOn %d", i, p.Capacity, p.BasedOnVersion)
 		}
 		sum := p.Plan.Summary
-		if sum.TableCount != wantTables[c] || sum.SeatedCount != 30 || sum.UnseatedCount != 0 || sum.NeedsRecalculation || sum.ViolationCount != 0 {
+		if sum.TableCount != wantTables[c] || sum.SeatedCount != 36 || sum.UnseatedCount != 0 || sum.NeedsRecalculation || sum.ViolationCount != 0 {
 			t.Errorf("capacity %d summary = %+v", c, sum)
 		}
 		for _, sc := range p.Plan.GuestScores {
@@ -194,7 +204,7 @@ func TestCalculateThenAcceptAllThree(t *testing.T) {
 
 	t.Run("calculate stored nothing", func(t *testing.T) {
 		for _, s := range listScenarios(t, h).Data {
-			if *s.Version != 1 || len(s.Plan.Tables) != 0 {
+			if *s.Version != startVer(s.Capacity) || len(s.Plan.Tables) != 0 {
 				t.Errorf("scenario %d changed: v%d, %d tables", s.Capacity, *s.Version, len(s.Plan.Tables))
 			}
 		}
@@ -203,8 +213,8 @@ func TestCalculateThenAcceptAllThree(t *testing.T) {
 	for _, p := range props.Data {
 		t.Run(fmt.Sprintf("accept %d", p.Capacity), func(t *testing.T) {
 			got := scenarioResponse(t, accept(t, h, int(p.Capacity), acceptBody(t, p)), http.StatusOK)
-			if *got.Version != 2 || got.Plan.Summary.TableCount != p.Plan.Summary.TableCount ||
-				got.Plan.Summary.NeedsRecalculation || got.Plan.Summary.SeatedCount != 30 {
+			if *got.Version != startVer(p.Capacity)+1 || got.Plan.Summary.TableCount != p.Plan.Summary.TableCount ||
+				got.Plan.Summary.NeedsRecalculation || got.Plan.Summary.SeatedCount != 36 {
 				t.Errorf("accepted = v%d %+v", *got.Version, got.Plan.Summary)
 			}
 			if got.Plan.Summary.Score != p.Plan.Summary.Score {
@@ -215,7 +225,7 @@ func TestCalculateThenAcceptAllThree(t *testing.T) {
 
 	t.Run("GET /scenarios now returns the accepted plans", func(t *testing.T) {
 		for _, s := range listScenarios(t, h).Data {
-			if *s.Version != 2 || s.Plan.Summary.TableCount != wantTables[s.Capacity] {
+			if *s.Version != startVer(s.Capacity)+1 || s.Plan.Summary.TableCount != wantTables[s.Capacity] {
 				t.Errorf("scenario %d = v%d, %d tables", s.Capacity, *s.Version, s.Plan.Summary.TableCount)
 			}
 		}
@@ -242,7 +252,7 @@ func TestAcceptErrors(t *testing.T) {
 		{"unknown guest", 10, `{"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,99]}]}`, 422, oapi.ErrorCodeValidationFailed, "tables"},
 		{"stale version", 10, `{"basedOnVersion":5,"tables":[]}`, 409, oapi.ErrorCodeVersionConflict, "version"},
 		{"basedOnVersion below 1", 10, `{"basedOnVersion":0,"tables":[]}`, 400, oapi.ErrorCodeBadRequest, "basedOnVersion"},
-		{"unknown capacity", 9, `{"basedOnVersion":1,"tables":[]}`, 404, oapi.ErrorCodeNotFound, ""},
+		{"unknown capacity (8 was removed)", 8, `{"basedOnVersion":1,"tables":[]}`, 404, oapi.ErrorCodeNotFound, ""},
 		{"malformed body", 10, `{"basedOnVersion":`, 400, oapi.ErrorCodeBadRequest, ""},
 	}
 	for _, tc := range cases {
@@ -257,7 +267,7 @@ func TestAcceptErrors(t *testing.T) {
 		})
 	}
 	for _, s := range listScenarios(t, h).Data {
-		if *s.Version != 1 {
+		if *s.Version != startVer(s.Capacity) {
 			t.Errorf("a rejected accept bumped scenario %d to v%d", s.Capacity, *s.Version)
 		}
 	}
@@ -320,15 +330,19 @@ func TestMovePinAndUnseatCluster(t *testing.T) {
 	})
 
 	t.Run("overfilling is allowed: 200 with over_capacity and needsRecalculation", func(t *testing.T) {
-		acceptLayout(t, h, 8, rangeIDs(1, 2), rangeIDs(4, 10))                                                               // plan 8: fills 2 and 7
-		got := scenarioResponse(t, do(h, http.MethodPut, seatPath(8, 1), `{"tableNumber":2,"pinned":false}`), http.StatusOK) // 7 + cluster{1,2} = 9 > 8
+		h := newAPI(t) // own data: here the whole cluster {1,2,3} is enabled
+		seedGuests(t, h, 10)
+		putLink(t, h, "1-2", 0)
+		putLink(t, h, "2-3", 0)
+		acceptLayout(t, h, 9, rangeIDs(1, 3), rangeIDs(4, 10))                                                               // plan 9: fills 3 and 7
+		got := scenarioResponse(t, do(h, http.MethodPut, seatPath(9, 1), `{"tableNumber":2,"pinned":false}`), http.StatusOK) // 7 + cluster{1,2,3} = 10 > 9
 		var over *oapi.Violation
 		for i, v := range got.Plan.Violations {
 			if v.Code == oapi.OverCapacity {
 				over = &got.Plan.Violations[i]
 			}
 		}
-		if over == nil || over.TableNumber.IsNull() || over.TableNumber.MustGet() != 2 || got.Plan.Tables[1].Fill != 9 || !got.Plan.Summary.NeedsRecalculation {
+		if over == nil || over.TableNumber.IsNull() || over.TableNumber.MustGet() != 2 || got.Plan.Tables[1].Fill != 10 || !got.Plan.Summary.NeedsRecalculation {
 			t.Errorf("fill %d violations %+v", got.Plan.Tables[1].Fill, got.Plan.Violations)
 		}
 	})
@@ -345,7 +359,7 @@ func TestMovePinAndUnseatCluster(t *testing.T) {
 
 	t.Run("404 unknown guest or capacity, 400 bad id", func(t *testing.T) {
 		expect(t, do(h, http.MethodPut, seatPath(10, 999), `{"tableNumber":1,"pinned":false}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
-		expect(t, do(h, http.MethodPut, seatPath(9, 1), `{"tableNumber":1,"pinned":false}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
+		expect(t, do(h, http.MethodPut, seatPath(8, 1), `{"tableNumber":1,"pinned":false}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
 		expect(t, do(h, http.MethodDelete, seatPath(10, 999), ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 		expect(t, do(h, http.MethodPut, api+"/scenarios/10/assignments/abc", `{"tableNumber":1,"pinned":false}`), http.StatusBadRequest, oapi.ErrorCodeBadRequest)
 	})
@@ -398,12 +412,12 @@ func TestAddAndDeleteTable(t *testing.T) {
 
 	expect(t, do(h, http.MethodDelete, api+"/scenarios/12/tables/9", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 	expect(t, do(h, http.MethodDelete, api+"/scenarios/12/tables/x", ""), http.StatusBadRequest, oapi.ErrorCodeBadRequest)
-	expect(t, do(h, http.MethodPost, api+"/scenarios/9/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
+	expect(t, do(h, http.MethodPost, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 }
 
 func TestResetPlan(t *testing.T) {
 	h := newAPI(t)
-	seedGuests(t, h, 30)
+	seedGuests(t, h, 36)
 	putLink(t, h, "1-2", 0)
 	props := calculate(t, h)
 	for _, p := range props.Data {
@@ -422,7 +436,7 @@ func TestResetPlan(t *testing.T) {
 		t.Errorf("plan.tables must be an empty array, body: %s", rec.Body)
 	}
 	if got.Capacity != 10 || len(got.Plan.Tables) != 0 || got.Plan.Summary.TableCount != 0 ||
-		got.Plan.Summary.SeatedCount != 0 || got.Plan.Summary.UnseatedCount != 30 || !got.Plan.Summary.NeedsRecalculation {
+		got.Plan.Summary.SeatedCount != 0 || got.Plan.Summary.UnseatedCount != 36 || !got.Plan.Summary.NeedsRecalculation {
 		t.Errorf("reset plan = capacity %d summary %+v", got.Capacity, got.Plan.Summary)
 	}
 	if !slices.Contains(violationCodes(got), oapi.UnseatedGuests) {
@@ -432,15 +446,15 @@ func TestResetPlan(t *testing.T) {
 		t.Errorf("version = %d, want %d", *got.Version, *old10.Version+1)
 	}
 
-	t.Run("GET /scenarios still lists three plans; the others are unchanged", func(t *testing.T) {
+	t.Run("GET /scenarios still lists four plans; the others are unchanged", func(t *testing.T) {
 		after := listScenarios(t, h)
-		if len(after.Data) != 3 {
-			t.Fatalf("scenarios = %d, want 3", len(after.Data))
+		if len(after.Data) != 4 {
+			t.Fatalf("scenarios = %d, want 4", len(after.Data))
 		}
 		if s := scenarioOf(t, after, 10); len(s.Plan.Tables) != 0 || *s.Version != *got.Version {
 			t.Errorf("plan 10 = v%d, %d tables", *s.Version, len(s.Plan.Tables))
 		}
-		for _, c := range []int{8, 12} {
+		for _, c := range []int{9, 11, 12} {
 			b, a := scenarioOf(t, before, c), scenarioOf(t, after, c)
 			if *a.Version != *b.Version || a.Plan.Summary != b.Plan.Summary || len(a.Plan.Tables) != len(b.Plan.Tables) || len(a.Plan.Tables) == 0 {
 				t.Errorf("plan %d changed: v%d -> v%d, %d -> %d tables", c, *b.Version, *a.Version, len(b.Plan.Tables), len(a.Plan.Tables))
@@ -460,7 +474,7 @@ func TestResetPlan(t *testing.T) {
 	})
 
 	t.Run("errors", func(t *testing.T) {
-		expect(t, do(h, http.MethodDelete, api+"/scenarios/9/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
+		expect(t, do(h, http.MethodDelete, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 		rec := do(h, http.MethodDelete, api+"/scenarios/abc/tables", "")
 		expect(t, rec, http.StatusBadRequest, oapi.ErrorCodeBadRequest)
 		if f, err := decodeError(t, rec).Errors[0].Field.Get(); err != nil || f != "capacity" {
@@ -473,25 +487,25 @@ func TestResetPlan(t *testing.T) {
 // then shows the overfill with needsRecalculation, and nothing was regenerated.
 func TestReEnabledGuestNeedsRecalculation(t *testing.T) {
 	h := newAPI(t)
-	seedGuests(t, h, 9)
+	seedGuests(t, h, 10)
 	putLink(t, h, "1-2", 0)
 	putLink(t, h, "1-3", 0) // cluster {1,2,3}
 	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":false}`), http.StatusOK, "")
 
-	acc := acceptLayout(t, h, 8, []int64{1, 2, 4, 5, 6, 7, 8, 9}) // 8/8 enabled; child 3 rides along
-	if acc.Plan.Summary.NeedsRecalculation || acc.Plan.Tables[0].Fill != 8 {
+	acc := acceptLayout(t, h, 9, []int64{1, 2, 4, 5, 6, 7, 8, 9, 10}) // 9/9 enabled; child 3 rides along
+	if acc.Plan.Summary.NeedsRecalculation || acc.Plan.Tables[0].Fill != 9 {
 		t.Fatalf("precondition: %+v", acc.Plan.Summary)
 	}
 
 	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":true}`), http.StatusOK, "")
-	got := scenarioOf(t, listScenarios(t, h), 8)
+	got := scenarioOf(t, listScenarios(t, h), 9)
 	if *got.Version != *acc.Version {
 		t.Errorf("plan version %d -> %d: re-enabling must not touch plans", *acc.Version, *got.Version)
 	}
 	if tb, _, ok := tableOfGuest(got, 3); !ok || tb != 1 {
 		t.Errorf("guest 3 at table %d (seated %v), want table 1", tb, ok)
 	}
-	if got.Plan.Tables[0].Fill != 9 || !got.Plan.Summary.NeedsRecalculation || !slices.Contains(violationCodes(got), oapi.OverCapacity) {
+	if got.Plan.Tables[0].Fill != 10 || !got.Plan.Summary.NeedsRecalculation || !slices.Contains(violationCodes(got), oapi.OverCapacity) {
 		t.Errorf("fill %d summary %+v codes %v", got.Plan.Tables[0].Fill, got.Plan.Summary, violationCodes(got))
 	}
 	// the other plans have no tables: they need recalculation too, because everyone is unseated
@@ -499,10 +513,82 @@ func TestReEnabledGuestNeedsRecalculation(t *testing.T) {
 		t.Error("plan 10 should need recalculation")
 	}
 
-	// regenerate: 9 guests fit one 12-seat table (for 8 seats no table count satisfies the floor
-	// of 6, so that proposal is best-effort with violations; the UI shows them)
-	prop := calculate(t, h).Data[2]
-	if prop.Capacity != 12 || prop.Plan.Summary.NeedsRecalculation || prop.Plan.Summary.SeatedCount != 9 {
+	// regenerate: 10 guests fit one 12-seat table (the floor is waived for one table); at 9 seats
+	// no table count satisfies the floor of 8, so that proposal is best-effort with violations
+	prop := calculate(t, h).Data[3]
+	if prop.Capacity != 12 || prop.Plan.Summary.NeedsRecalculation || prop.Plan.Summary.SeatedCount != 10 {
 		t.Errorf("proposal summary = %+v", prop.Plan.Summary)
+	}
+}
+
+// Floor 8: proposals never fail. When no table count satisfies the floor (12 guests at 9 seats),
+// the best-effort layout is returned with under_floor; a single table waives the floor.
+func TestCalculateFloorCases(t *testing.T) {
+	tests := []struct {
+		name         string
+		guests       int
+		capacity     int
+		wantTables   int
+		wantUnder    bool // under_floor violation expected
+		wantComplete bool // no violations at all
+	}{
+		{"12 guests at 9: infeasible, best effort", 12, 9, 2, true, false},
+		{"10 guests at 12: one table, floor waived", 10, 12, 1, false, true},
+		{"28 guests at 12: three tables of at least 8", 28, 12, 3, false, true},
+		{"24 guests at 10: three tables of 8", 24, 10, 3, false, true},
+		{"23 guests at 11: infeasible, best effort", 23, 11, 3, true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newAPI(t)
+			seedGuests(t, h, tc.guests)
+			var prop *oapi.Proposal
+			for _, p := range calculate(t, h).Data {
+				if int(p.Capacity) == tc.capacity {
+					prop = &p
+				}
+			}
+			if prop == nil {
+				t.Fatalf("no proposal for capacity %d", tc.capacity)
+			}
+			sum := prop.Plan.Summary
+			if sum.SeatedCount != tc.guests || sum.UnseatedCount != 0 {
+				t.Errorf("seated %d unseated %d, want everyone seated", sum.SeatedCount, sum.UnseatedCount)
+			}
+			if tc.wantTables != 0 && sum.TableCount != tc.wantTables {
+				t.Errorf("tables = %d, want %d", sum.TableCount, tc.wantTables)
+			}
+			codes := make([]oapi.ViolationCode, 0, len(prop.Plan.Violations))
+			for _, v := range prop.Plan.Violations {
+				codes = append(codes, v.Code)
+			}
+			if tc.wantUnder && !slices.Contains(codes, oapi.UnderFloor) {
+				t.Errorf("violations = %v, want under_floor", codes)
+			}
+			if tc.wantComplete && (len(codes) != 0 || sum.NeedsRecalculation) {
+				t.Errorf("violations = %v, want none", codes)
+			}
+			if sum.TableCount > 1 && !tc.wantUnder {
+				for _, tb := range prop.Plan.Tables {
+					if tb.Fill < 8 && len(codes) == 0 {
+						t.Errorf("table %d has %d guests, below the floor, without a violation", tb.Number, tb.Fill)
+					}
+				}
+			}
+		})
+	}
+}
+
+// GET/PUT/DELETE on capacity 8 (removed by task 006) is 404, not a validation error.
+func TestRemovedCapacity8IsNotFound(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 3)
+	expect(t, do(h, http.MethodDelete, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
+	expect(t, do(h, http.MethodPost, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
+	expect(t, accept(t, h, 8, `{"basedOnVersion":1,"tables":[]}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
+	for _, s := range listScenarios(t, h).Data {
+		if s.Capacity == 8 {
+			t.Error("capacity 8 listed")
+		}
 	}
 }

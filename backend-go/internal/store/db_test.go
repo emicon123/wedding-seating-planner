@@ -48,10 +48,10 @@ func capacities(t *testing.T, db *sql.DB) []int {
 	return out
 }
 
-func TestOpenMigrateSeedsThreeScenarios(t *testing.T) {
+func TestOpenMigrateSeedsFourScenarios(t *testing.T) {
 	db := openMigrated(t)
-	if got := capacities(t, db); !slices.Equal(got, []int{8, 10, 12}) {
-		t.Fatalf("scenarios = %v, want [8 10 12]", got)
+	if got := capacities(t, db); !slices.Equal(got, []int{9, 10, 11, 12}) {
+		t.Fatalf("scenarios = %v, want [9 10 11 12]", got)
 	}
 }
 
@@ -85,8 +85,8 @@ func TestMigrateTwiceIsANoOp(t *testing.T) {
 	if err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
-	if got := capacities(t, db); !slices.Equal(got, []int{8, 10, 12}) {
-		t.Fatalf("scenarios after second Migrate = %v, want [8 10 12]", got)
+	if got := capacities(t, db); !slices.Equal(got, []int{9, 10, 11, 12}) {
+		t.Fatalf("scenarios after second Migrate = %v, want [9 10 11 12]", got)
 	}
 }
 
@@ -106,8 +106,8 @@ func TestBackupWritesAnOpenableCopy(t *testing.T) {
 		t.Fatalf("open backup: %v", err)
 	}
 	defer copyDB.Close()
-	if got := capacities(t, copyDB); !slices.Equal(got, []int{8, 10, 12}) {
-		t.Errorf("backup scenarios = %v, want [8 10 12]", got)
+	if got := capacities(t, copyDB); !slices.Equal(got, []int{9, 10, 11, 12}) {
+		t.Errorf("backup scenarios = %v, want [9 10 11 12]", got)
 	}
 	var guests int
 	if err := copyDB.QueryRow(`SELECT count(*) FROM guest`).Scan(&guests); err != nil || guests != 1 {
@@ -127,7 +127,7 @@ func TestMapErr(t *testing.T) {
 		t.Fatal(err)
 	}
 	dupName := exec(`INSERT INTO guest (first_name, last_name, name_key) VALUES ('Ania', 'Kowalska', 'ania kowalska')`)
-	dupCapacity := exec(`INSERT INTO scenario (capacity) VALUES (8)`)
+	dupCapacity := exec(`INSERT INTO scenario (capacity) VALUES (9)`)
 	badFK := exec(`INSERT INTO guest_link (guest_a_id, guest_b_id, level) VALUES (100, 200, 1)`)
 	if dupName == nil || dupCapacity == nil || badFK == nil {
 		t.Fatalf("expected three constraint errors, got %v / %v / %v", dupName, dupCapacity, badFK)
@@ -182,7 +182,7 @@ func TestWithTx(t *testing.T) {
 		if err != nil {
 			t.Fatalf("withTx: %v", err)
 		}
-		if !slices.Equal(got, []int64{8, 10, 12}) {
+		if !slices.Equal(got, []int64{9, 10, 11, 12}) {
 			t.Errorf("capacities = %v", got)
 		}
 	})

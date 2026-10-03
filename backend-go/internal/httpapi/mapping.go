@@ -105,8 +105,8 @@ func toDataWarning(w seating.DataWarning) oapi.DataWarning {
 	var code oapi.DataWarningCode
 	var msg string
 	switch w.Code {
-	case seating.WarnClusterExceeds8:
-		code, msg = oapi.ClusterExceeds8, "A group-0 cluster of enabled guests does not fit the 8-seat plan."
+	case seating.WarnClusterExceeds9:
+		code, msg = oapi.ClusterExceeds9, "A group-0 cluster of enabled guests does not fit the 9-seat plan."
 	case seating.WarnClusterExceeds12:
 		code, msg = oapi.ClusterExceeds12, "A group-0 cluster of enabled guests does not fit the 12-seat plan."
 	case seating.WarnConflictingLinkLevels:

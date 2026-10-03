@@ -26,7 +26,7 @@ type Server struct {
 	plans  *scenarios.Service
 }
 
-// NewServer wires the HTTP adapter: the guest list and the three plans.
+// NewServer wires the HTTP adapter: the guest list and the four plans.
 func NewServer(db Pinger, g *guests.Service, p *scenarios.Service) *Server {
 	return &Server{db: db, guests: g, plans: p}
 }

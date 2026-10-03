@@ -1,6 +1,7 @@
 package seating
 
 import (
+	"fmt"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -85,7 +86,7 @@ func seatedAtSameTable(p Plan, a, b GuestID) bool {
 func TestMinTables(t *testing.T) {
 	tests := []struct{ seats, capacity, want int }{
 		{0, 10, 0}, {1, 10, 1}, {5, 8, 1}, {8, 8, 1}, {9, 8, 2},
-		{24, 10, 3}, {92, 8, 12}, {92, 10, 10}, {92, 12, 8}, {100, 12, 9},
+		{24, 10, 3}, {92, 9, 11}, {92, 10, 10}, {92, 11, 9}, {92, 12, 8}, {100, 12, 9}, {19, 9, 3}, {23, 11, 3},
 	}
 	for _, tc := range tests {
 		if got := minTables(tc.seats, tc.capacity); got != tc.want {
@@ -181,22 +182,22 @@ func TestRepairFloor(t *testing.T) {
 		}
 		for _, f := range l.fill {
 			if f < Floor || f > 10 {
-				t.Errorf("fills %v out of [6,10]", l.fill)
+				t.Errorf("fills %v out of [8,10]", l.fill)
 			}
 		}
 		if got := l.fill[0] + l.fill[1] + l.fill[2]; got != 24 {
 			t.Errorf("seated %d, want 24", got)
 		}
 	})
-	t.Run("needs a swap: donor 5+5, receiver 4 singles", func(t *testing.T) {
-		g := BuildGraph(enabledRange(1, 14), links(chain(1, 2, 3, 4, 5), chain(6, 7, 8, 9, 10)))
+	t.Run("needs a swap: donor 5+5, receiver 3+3", func(t *testing.T) {
+		// no single move helps (5 -> 11 > 10, 3 -> 13 > 10); swapping a 5 with a 3 gives 8 + 8
+		g := BuildGraph(enabledRange(1, 16), links(chain(1, 2, 3, 4, 5), chain(6, 7, 8, 9, 10), chain(11, 12, 13), chain(14, 15, 16)))
 		it := newItems(g, 10)
 		l := newLayout(it, 2)
 		l.place(it.idx[1], 0)
 		l.place(it.idx[6], 0)
-		for id := GuestID(11); id <= 14; id++ {
-			l.place(it.idx[id], 1)
-		}
+		l.place(it.idx[11], 1)
+		l.place(it.idx[14], 1)
 		if !repairFloor(l) {
 			t.Fatalf("repair failed, fills %v", l.fill)
 		}
@@ -204,7 +205,7 @@ func TestRepairFloor(t *testing.T) {
 			t.Errorf("fills %v", l.fill)
 		}
 	})
-	t.Run("unfixable: two tables of 5", func(t *testing.T) {
+	t.Run("unfixable: two tables of 5 (below the floor of 8)", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 10), links(chain(1, 2, 3, 4, 5), chain(6, 7, 8, 9, 10)))
 		it := newItems(g, 10)
 		l := newLayout(it, 2)
@@ -254,17 +255,17 @@ func TestImprove(t *testing.T) {
 		}
 	})
 	t.Run("respects capacity, floor and pins", func(t *testing.T) {
-		g := BuildGraph(enabledRange(1, 14), clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8))
-		it := newItems(g, 8)
+		g := BuildGraph(enabledRange(1, 18), clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8))
+		it := newItems(g, 10)
 		l := newLayout(it, 2)
-		for id := GuestID(1); id <= 14; id++ {
-			l.place(it.idx[id], int(id%2)) // 7 + 7 split
+		for id := GuestID(1); id <= 18; id++ {
+			l.place(it.idx[id], int(id%2)) // 9 + 9 split
 		}
 		l.pinned[it.idx[2]] = true // 2 stays at table 0
 		improve(l, maxPasses)
 		for _, f := range l.fill {
-			if f < Floor || f > 8 {
-				t.Errorf("fills %v out of [6,8]", l.fill)
+			if f < Floor || f > 10 {
+				t.Errorf("fills %v out of [8,10]", l.fill)
 			}
 		}
 		if l.assign[it.idx[2]] != 0 {
@@ -289,7 +290,7 @@ func TestImprove(t *testing.T) {
 // ---- worked examples -------------------------------------------------------
 
 func TestProposeExamples(t *testing.T) {
-	t.Run("24 singles at capacity 10 give 3 tables, none below 6 (no 10+10+4)", func(t *testing.T) {
+	t.Run("24 singles at capacity 10 give 3 tables, none below 8 (no 10+10+4)", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 24), nil)
 		ev := assertHardRules(t, g, Propose(g, emptyPlan(10)))
 		if len(ev.Tables) != 3 {
@@ -302,9 +303,9 @@ func TestProposeExamples(t *testing.T) {
 		}
 	})
 
-	t.Run("92 singles: 12 / 10 / 8 tables at capacity 8 / 10 / 12", func(t *testing.T) {
+	t.Run("92 singles: 11 / 10 / 9 / 8 tables at capacity 9 / 10 / 11 / 12", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 92), nil)
-		for capacity, want := range map[int]int{8: 12, 10: 10, 12: 8} {
+		for capacity, want := range map[int]int{9: 11, 10: 10, 11: 9, 12: 8} {
 			ev := assertHardRules(t, g, Propose(g, emptyPlan(capacity)))
 			if len(ev.Tables) != want {
 				t.Errorf("capacity %d: %d tables, want %d", capacity, len(ev.Tables), want)
@@ -321,11 +322,11 @@ func TestProposeExamples(t *testing.T) {
 			{"no guests", nil, 0},
 			{"all disabled", off(1, 2, 3), 0},
 			{"5 guests: one table, floor waived", enabledRange(1, 5), 1},
-			{"exactly capacity", enabledRange(1, 8), 1},
+			{"exactly capacity", enabledRange(1, 9), 1},
 		}
 		for _, tc := range tests {
 			g := BuildGraph(tc.guests, nil)
-			ev := assertHardRules(t, g, Propose(g, emptyPlan(8)))
+			ev := assertHardRules(t, g, Propose(g, emptyPlan(9)))
 			if len(ev.Tables) != tc.wantTables {
 				t.Errorf("%s: %d tables, want %d", tc.name, len(ev.Tables), tc.wantTables)
 			}
@@ -334,7 +335,7 @@ func TestProposeExamples(t *testing.T) {
 
 	t.Run("Rafał's cluster of 5 stays together at every capacity", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 40), star(1, Must, 2, 3, 4, 5))
-		for _, capacity := range []int{8, 10, 12} {
+		for _, capacity := range []int{9, 10, 11, 12} {
 			p := Propose(g, emptyPlan(capacity))
 			assertHardRules(t, g, p)
 			for id := GuestID(2); id <= 5; id++ {
@@ -368,31 +369,61 @@ func TestProposeExamples(t *testing.T) {
 		}
 	})
 
-	t.Run("10+10+4 rebalances minimally to 10+8+6", func(t *testing.T) {
-		// Cliques X=1..10 and Y=11..20 want to stay whole; 21..24 are strangers.
+	t.Run("10+10+4 at floor 8 can only be 8+8+8", func(t *testing.T) {
+		// Cliques X=1..10 and Y=11..20 want to stay whole; 21..24 are strangers. A table of 6 is no
+		// longer allowed, so each clique loses two members to the third table.
 		g := BuildGraph(enabledRange(1, 24), links(clique(Preferred, rng(1, 10)...), clique(Preferred, rng(11, 20)...)))
 		ev := assertHardRules(t, g, Propose(g, emptyPlan(10)))
-		if got := sortedDesc(fills(ev)); !reflect.DeepEqual(got, []int{10, 8, 6}) {
-			t.Errorf("fills = %v, want 10+8+6", got)
+		if got := sortedDesc(fills(ev)); !reflect.DeepEqual(got, []int{8, 8, 8}) {
+			t.Errorf("fills = %v, want 8+8+8", got)
 		}
-		if ev.Summary.Score != 148 { // 90 (whole clique) + 56 + 2
-			t.Errorf("score = %v, want 148", ev.Summary.Score)
+		if ev.Summary.Score != 116 { // 56 + 56 (8 of X, 8 of Y) + 2 + 2 (two of X, two of Y at the third table)
+			t.Errorf("score = %v, want 116", ev.Summary.Score)
+		}
+	})
+
+	t.Run("12+12+4 at capacity 12 rebalances minimally to 12+8+8", func(t *testing.T) {
+		g := BuildGraph(enabledRange(1, 28), links(clique(Preferred, rng(1, 12)...), clique(Preferred, rng(13, 24)...)))
+		ev := assertHardRules(t, g, Propose(g, emptyPlan(12)))
+		if got := sortedDesc(fills(ev)); !reflect.DeepEqual(got, []int{12, 8, 8}) {
+			t.Errorf("fills = %v, want 12+8+8", got)
+		}
+		if ev.Summary.Score != 200 { // 132 (whole clique) + 56 (8 of the other) + 12 (its other 4)
+			t.Errorf("score = %v, want 200", ev.Summary.Score)
+		}
+	})
+
+	t.Run("odd capacities 9 and 11", func(t *testing.T) {
+		tests := []struct{ guests, capacity, wantTables int }{
+			{36, 9, 4},  // 9+9+9+9
+			{26, 9, 3},  // 9+9+8
+			{33, 11, 3}, // 11+11+11
+			{25, 11, 3}, // 9+8+8: the minimum table count, floor kept
+			{16, 11, 2}, // 8+8: one table would be 16 > 11
+			{11, 11, 1},
+		}
+		for _, tc := range tests {
+			g := BuildGraph(enabledRange(1, GuestID(tc.guests)), nil)
+			ev := assertHardRules(t, g, Propose(g, emptyPlan(tc.capacity)))
+			if len(ev.Tables) != tc.wantTables {
+				t.Errorf("%d singles at capacity %d: %d tables (fills %v), want %d", tc.guests, tc.capacity, len(ev.Tables), fills(ev), tc.wantTables)
+			}
 		}
 	})
 
 	t.Run("oversized cluster stays unseated with violations; the rest is planned without it", func(t *testing.T) {
-		g := BuildGraph(enabledRange(1, 23), chain(rng(1, 9)...)) // 9 > 8, plus 14 singles
-		p := Propose(g, emptyPlan(8))
+		g := BuildGraph(enabledRange(1, 26), chain(rng(1, 10)...)) // 10 > 9, plus 16 singles
+		p := Propose(g, emptyPlan(9))
 		assertWellFormed(t, g, p)
 		ev := Evaluate(g, p)
 		if got := codes(ev.Violations); !reflect.DeepEqual(got, []ViolationCode{ViolOversizedCluster, ViolUnseated}) {
 			t.Fatalf("violations = %v", got)
 		}
-		if !reflect.DeepEqual(ev.Violations[1].Guests, rng(1, 9)) {
+		if !reflect.DeepEqual(ev.Violations[1].Guests, rng(1, 10)) {
 			t.Errorf("unseated guests = %v", ev.Violations[1].Guests)
 		}
-		if len(ev.Tables) != 2 || ev.Summary.Seated != 14 { // 14 singles -> 2 tables of 7
-			t.Errorf("tables=%d seated=%d, want 2 and 14", len(ev.Tables), ev.Summary.Seated)
+		if len(ev.Tables) != 2 || ev.Summary.Seated != 16 { // 16 singles -> 2 tables of 8
+			t.Errorf("tables=%d seated=%d, want 2 and 16", len(ev.Tables), ev.Summary.Seated)
 		}
 		if !ev.Summary.NeedsRecalculation {
 			t.Error("NeedsRecalculation must be true with violations")
@@ -400,17 +431,64 @@ func TestProposeExamples(t *testing.T) {
 	})
 
 	t.Run("infeasible floor returns best effort plus violations instead of failing", func(t *testing.T) {
-		g := BuildGraph(enabledRange(1, 9), nil) // 9 guests, capacity 8: 2 tables would need >= 12
-		p := Propose(g, emptyPlan(8))
-		assertWellFormed(t, g, p)
-		ev := Evaluate(g, p)
-		if ev.Summary.Seated != 9 || len(ev.Tables) != 2 {
-			t.Errorf("tables=%d seated=%d", len(ev.Tables), ev.Summary.Seated)
+		tests := []struct {
+			name             string
+			guests, capacity int
+			wantTables       int
+		}{
+			{"12 guests at 9: two tables would need >= 16", 12, 9, 2},
+			{"19 guests at 9: three tables would need >= 24", 19, 9, 3},
+			{"23 guests at 11: three tables would need >= 24", 23, 11, 3},
+			{"14 guests at 12: two tables would need >= 16", 14, 12, 2},
 		}
-		if !ev.Summary.NeedsRecalculation {
-			t.Error("best effort plan must report its violations")
+		for _, tc := range tests {
+			g := BuildGraph(enabledRange(1, GuestID(tc.guests)), nil)
+			p := Propose(g, emptyPlan(tc.capacity))
+			assertWellFormed(t, g, p)
+			ev := Evaluate(g, p)
+			if ev.Summary.Seated != tc.guests || len(ev.Tables) != tc.wantTables {
+				t.Errorf("%s: tables=%d seated=%d", tc.name, len(ev.Tables), ev.Summary.Seated)
+			}
+			if !ev.Summary.NeedsRecalculation || !slicesContains(codes(ev.Violations), ViolUnderFloor) {
+				t.Errorf("%s: best effort plan must report under_floor, got %v", tc.name, codes(ev.Violations))
+			}
+			for _, tb := range ev.Tables {
+				if tb.Fill > tc.capacity {
+					t.Errorf("%s: table %d over capacity (%d)", tc.name, tb.Number, tb.Fill)
+				}
+			}
 		}
 	})
+
+	t.Run("one table waives the floor", func(t *testing.T) {
+		g := BuildGraph(enabledRange(1, 10), nil)
+		ev := assertHardRules(t, g, Propose(g, emptyPlan(12)))
+		if len(ev.Tables) != 1 || ev.Tables[0].Fill != 10 {
+			t.Errorf("fills = %v, want one table of 10", fills(ev))
+		}
+	})
+
+	t.Run("28 guests at capacity 12: three tables, each at least 8", func(t *testing.T) {
+		g := BuildGraph(enabledRange(1, 28), nil)
+		ev := assertHardRules(t, g, Propose(g, emptyPlan(12)))
+		if len(ev.Tables) != 3 {
+			t.Fatalf("tables = %d (fills %v), want 3", len(ev.Tables), fills(ev))
+		}
+		for _, f := range fills(ev) {
+			if f < Floor {
+				t.Errorf("fills %v below the floor", fills(ev))
+			}
+		}
+	})
+}
+
+func slicesContains(in []ViolationCode, c ViolationCode) bool {
+	for _, x := range in {
+		if x == c {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- companions: Maciek / Karolina -----------------------------------------
@@ -427,10 +505,12 @@ func TestProposeMaciekKarolinaGroupOneList(t *testing.T) {
 	g := BuildGraph(enabledRange(1, 20), ls)
 
 	// With the pair's table holding c couples (capacity C = 2 + 2c): score = c * 2*2*2*1 = 8c.
+	// 20 guests with floor 8: two tables (10+10 or 12+8); nine seats at capacity 9 would need
+	// three tables of >= 8, which 20 guests cannot fill, so that capacity is not part of this case.
 	tests := []struct {
 		capacity, wantTables, wantCouples int
 	}{
-		{8, 3, 3}, {10, 2, 4}, {12, 2, 5},
+		{10, 2, 4}, {11, 2, 4}, {12, 2, 5},
 	}
 	for _, tc := range tests {
 		p := Propose(g, emptyPlan(tc.capacity))
@@ -456,23 +536,24 @@ func TestProposeMaciekKarolinaGroupOneList(t *testing.T) {
 }
 
 func TestProposeCompanionOrdering(t *testing.T) {
-	// A's cluster (size 4) can sit with only one of the other clusters (size 3 each, capacity 8, 13 guests).
-	// 1..4 = A, 5..7 = X, 8..10 = Y, 11..13 = Z
-	base := links(chain(1, 2, 3, 4), chain(5, 6, 7), chain(8, 9, 10), chain(11, 12, 13))
+	// A's cluster (size 4) can sit with only one of the other clusters (size 4 each): 16 guests
+	// are two tables of 8 at capacity 12 (floor 8).
+	// 1..4 = A, 5..8 = X, 9..12 = Y, 13..16 = Z
+	base := links(chain(1, 2, 3, 4), chain(5, 6, 7, 8), chain(9, 10, 11, 12), chain(13, 14, 15, 16))
 	tests := []struct {
 		name         string
 		extra        []Link
 		wantWithA    GuestID // a member of the cluster expected at A's table
 		wantNotWithA GuestID
 	}{
-		{"group 1 beats group 2", []Link{lk(1, 5, Preferred), lk(1, 8, Acceptable)}, 5, 8},
-		{"group 2 beats a stranger", []Link{lk(1, 8, Acceptable)}, 8, 5},
-		{"group 1 beats a stranger", []Link{lk(1, 11, Preferred)}, 11, 5},
+		{"group 1 beats group 2", []Link{lk(1, 5, Preferred), lk(1, 9, Acceptable)}, 5, 9},
+		{"group 2 beats a stranger", []Link{lk(1, 9, Acceptable)}, 9, 5},
+		{"group 1 beats a stranger", []Link{lk(1, 13, Preferred)}, 13, 5},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			g := BuildGraph(enabledRange(1, 13), links(base, tc.extra))
-			p := Propose(g, emptyPlan(8))
+			g := BuildGraph(enabledRange(1, 16), links(base, tc.extra))
+			p := Propose(g, emptyPlan(12))
 			assertHardRules(t, g, p)
 			if !seatedAtSameTable(p, 1, tc.wantWithA) {
 				t.Errorf("A should sit with %d: %+v", tc.wantWithA, p.Tables)
@@ -487,7 +568,7 @@ func TestProposeCompanionOrdering(t *testing.T) {
 // ---- pins, determinism, expand ---------------------------------------------
 
 func TestProposeKeepsPins(t *testing.T) {
-	g := BuildGraph(cat(enabledRange(1, 23), off(24)), chain(5, 6, 24)) // cluster {5,6,24}: 24 is disabled
+	g := BuildGraph(cat(enabledRange(1, 26), off(27)), chain(5, 6, 27)) // cluster {5,6,27}: 27 is disabled; 26 enabled = 8+8+10
 	tests := []struct {
 		name       string
 		current    Plan
@@ -502,7 +583,7 @@ func TestProposeKeepsPins(t *testing.T) {
 		},
 		{
 			name:       "a pin on any member (even disabled) pins the whole cluster",
-			current:    Plan{Capacity: 10, Tables: []Table{tbl(1), pinnedTbl(2, []GuestID{24}, 5, 24)}},
+			current:    Plan{Capacity: 10, Tables: []Table{tbl(1), pinnedTbl(2, []GuestID{27}, 5, 27)}},
 			wantTable:  map[GuestID]int{5: 2, 6: 2},
 			wantPinned: []GuestID{5, 6},
 		},
@@ -672,7 +753,7 @@ func TestProposeInvariantsOnGeneratedInputs(t *testing.T) {
 				sizes = append(sizes, c.SeatedSize())
 			}
 		}
-		for _, capacity := range []int{8, 10, 12} {
+		for _, capacity := range []int{9, 10, 11, 12} {
 			p := Propose(g, emptyPlan(capacity))
 			assertWellFormed(t, g, p)
 			ev := Evaluate(g, p)
@@ -702,7 +783,7 @@ func TestProposeInvariantsOnGeneratedInputs(t *testing.T) {
 }
 
 func TestProposeScaleHundredGuests(t *testing.T) {
-	// ~100 guests: families (clusters) with partner links; all three capacities, deterministic, hard rules hold.
+	// ~100 guests: families (clusters) with partner links; all four capacities, deterministic, hard rules hold.
 	r := rand.New(rand.NewSource(2026))
 	var guests []Guest
 	var ls []Link
@@ -725,7 +806,7 @@ func TestProposeScaleHundredGuests(t *testing.T) {
 		ls = append(ls, lk(a, b, LinkLevel(1+r.Intn(2))))
 	}
 	g := BuildGraph(guests, ls)
-	for _, capacity := range []int{8, 10, 12} {
+	for _, capacity := range []int{9, 10, 11, 12} {
 		p := Propose(g, emptyPlan(capacity))
 		ev := assertHardRules(t, g, p)
 		if got := Propose(g, emptyPlan(capacity)); !reflect.DeepEqual(got, p) {
@@ -787,8 +868,8 @@ func BenchmarkPropose100(b *testing.B) {
 		ls = append(ls, lk(GuestID(1+r.Intn(110)), GuestID(1+r.Intn(110)), LinkLevel(1+r.Intn(2))))
 	}
 	g := BuildGraph(guests, ls)
-	for _, capacity := range []int{8, 10, 12} {
-		b.Run(map[int]string{8: "cap8", 10: "cap10", 12: "cap12"}[capacity], func(b *testing.B) {
+	for _, capacity := range []int{9, 10, 11, 12} {
+		b.Run(fmt.Sprintf("cap%d", capacity), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				Propose(g, emptyPlan(capacity))
 			}
@@ -852,7 +933,8 @@ func TestPackExact(t *testing.T) {
 			{"too many seats", []int{5, 5, 5}, 1, 12, true},
 			{"four 5s need four tables of 8", []int{5, 5, 5, 5}, 3, 8, true},
 			{"floor cannot be met", []int{5, 5}, 2, 10, true},
-			{"feasible", []int{5, 1, 5, 1}, 2, 10, false},
+			{"floor cannot be met, 12 seats", []int{5, 1, 5, 1}, 2, 10, true},
+			{"feasible", []int{5, 3, 5, 3}, 2, 10, false},
 		}
 		for _, tc := range tests {
 			l := packExact(itemsOfSizes(tc.sizes, tc.c), tc.k, nil)

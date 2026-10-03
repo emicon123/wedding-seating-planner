@@ -110,30 +110,30 @@ func TestEvaluateViolations(t *testing.T) {
 	}{
 		{
 			name:   "clean plan",
-			guests: enabledRange(1, 12),
-			plan:   Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 6)...), tbl(2, rng(7, 12)...)}},
+			guests: enabledRange(1, 16),
+			plan:   Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 8)...), tbl(2, rng(9, 16)...)}},
 		},
 		{
 			name:       "re-enabled child at a full table gives 11/10",
-			guests:     enabledRange(1, 17), // 1..10 are the family, 11 the re-enabled child (same cluster)
+			guests:     enabledRange(1, 19), // 1..10 are the family, 11 the re-enabled child (same cluster)
 			links:      chain(1, 11),
-			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 11)...), tbl(2, rng(12, 17)...)}},
+			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 11)...), tbl(2, rng(12, 19)...)}},
 			wantCodes:  []ViolationCode{ViolOverCapacity},
 			wantTable:  []int{1},
 			wantGuests: [][]GuestID{rng(1, 11)},
 		},
 		{
 			name:       "under floor with k > 1",
-			guests:     enabledRange(1, 11),
-			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 6)...), tbl(2, rng(7, 11)...)}},
+			guests:     enabledRange(1, 15),
+			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 8)...), tbl(2, rng(9, 15)...)}},
 			wantCodes:  []ViolationCode{ViolUnderFloor},
 			wantTable:  []int{2},
-			wantGuests: [][]GuestID{rng(7, 11)},
+			wantGuests: [][]GuestID{rng(9, 15)},
 		},
 		{
-			name:   "5 guests with k = 1 is no violation",
-			guests: enabledRange(1, 5),
-			plan:   Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 5)...)}},
+			name:   "7 guests with k = 1 is no violation (floor waived)",
+			guests: enabledRange(1, 7),
+			plan:   Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 7)...)}},
 		},
 		{
 			name:       "an empty extra table is under the floor",
@@ -145,12 +145,12 @@ func TestEvaluateViolations(t *testing.T) {
 		},
 		{
 			name:       "cluster split over two tables",
-			guests:     enabledRange(1, 12),
-			links:      chain(1, 7),
-			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 6)...), tbl(2, rng(7, 12)...)}},
+			guests:     enabledRange(1, 16),
+			links:      chain(1, 9),
+			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 8)...), tbl(2, rng(9, 16)...)}},
 			wantCodes:  []ViolationCode{ViolClusterSplit},
 			wantTable:  []int{0},
-			wantGuests: [][]GuestID{{1, 7}},
+			wantGuests: [][]GuestID{{1, 9}},
 		},
 		{
 			name:       "unseated guests",
@@ -163,33 +163,33 @@ func TestEvaluateViolations(t *testing.T) {
 		{
 			name:       "no tables at all: everybody unseated",
 			guests:     enabledRange(1, 3),
-			plan:       Plan{Capacity: 8},
+			plan:       Plan{Capacity: 9},
 			wantCodes:  []ViolationCode{ViolUnseated},
 			wantTable:  []int{0},
 			wantGuests: [][]GuestID{{1, 2, 3}},
 		},
 		{
-			name:       "oversized cluster (9 > 8) left unseated",
-			guests:     enabledRange(1, 15),
-			links:      chain(rng(1, 9)...),
-			plan:       Plan{Capacity: 8, Tables: []Table{tbl(1, rng(10, 15)...)}},
+			name:       "oversized cluster (10 > 9) left unseated",
+			guests:     enabledRange(1, 16),
+			links:      chain(rng(1, 10)...),
+			plan:       Plan{Capacity: 9, Tables: []Table{tbl(1, rng(11, 16)...)}},
 			wantCodes:  []ViolationCode{ViolOversizedCluster, ViolUnseated},
 			wantTable:  []int{0, 0},
-			wantGuests: [][]GuestID{rng(1, 9), rng(1, 9)},
+			wantGuests: [][]GuestID{rng(1, 10), rng(1, 10)},
 		},
 		{
 			name:   "disabled guests' seats are ignored everywhere",
-			guests: cat(enabledRange(1, 6), off(7, 8, 9, 10, 11, 12)),
-			plan:   Plan{Capacity: 8, Tables: []Table{tbl(1, rng(1, 12)...), tbl(2, 7, 8)}},
-			// table 1 has 6 enabled (12 seats), table 2 has 0 enabled seats -> under floor; no over_capacity.
+			guests: cat(enabledRange(1, 8), off(9, 10, 11, 12, 13, 14)),
+			plan:   Plan{Capacity: 9, Tables: []Table{tbl(1, rng(1, 14)...), tbl(2, 9, 10)}},
+			// table 1 has 8 enabled (14 seats), table 2 has 0 enabled seats -> under floor; no over_capacity.
 			wantCodes:  []ViolationCode{ViolUnderFloor},
 			wantTable:  []int{2},
 			wantGuests: [][]GuestID{nil},
 		},
 		{
 			name:       "a guest listed at two tables counts once (first seat wins)",
-			guests:     enabledRange(1, 12),
-			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 6)...), tbl(2, append(rng(7, 12), 1)...)}},
+			guests:     enabledRange(1, 16),
+			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 8)...), tbl(2, append(rng(9, 16), 1)...)}},
 			wantCodes:  nil,
 			wantTable:  nil,
 			wantGuests: nil,
@@ -198,10 +198,10 @@ func TestEvaluateViolations(t *testing.T) {
 			name:       "violations are ordered: tables, then clusters, then unseated",
 			guests:     enabledRange(1, 22),
 			links:      chain(1, 20),
-			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 11)...), tbl(2, rng(12, 17)...), tbl(3, 20, 21)}},
+			plan:       Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 11)...), tbl(2, rng(12, 19)...), tbl(3, 20, 21)}},
 			wantCodes:  []ViolationCode{ViolOverCapacity, ViolUnderFloor, ViolClusterSplit, ViolUnseated},
 			wantTable:  []int{1, 3, 0, 0},
-			wantGuests: [][]GuestID{rng(1, 11), {20, 21}, {1, 20}, {18, 19, 22}},
+			wantGuests: [][]GuestID{rng(1, 11), {20, 21}, {1, 20}, {22}},
 		},
 	}
 	for _, tc := range tests {
@@ -249,8 +249,8 @@ func TestEvaluateUnseatedPlacements(t *testing.T) {
 }
 
 func TestEvaluateIsPure(t *testing.T) {
-	g := BuildGraph(enabledRange(1, 12), []Link{lk(1, 2, Preferred)})
-	p := Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 6)...), tbl(2, rng(7, 12)...)}}
+	g := BuildGraph(enabledRange(1, 16), []Link{lk(1, 2, Preferred)})
+	p := Plan{Capacity: 10, Tables: []Table{tbl(1, rng(1, 8)...), tbl(2, rng(9, 16)...)}}
 	a, b := Evaluate(g, p), Evaluate(g, p)
 	if !reflect.DeepEqual(a, b) {
 		t.Error("Evaluate is not deterministic")
