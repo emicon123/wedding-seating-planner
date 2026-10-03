@@ -65,6 +65,8 @@ At the expected ~85–100 guests every capacity is feasible by head count; infea
 
 ## Auto-seating algorithm (heuristic, deterministic)
 
+Greedy packing decides the table count; simulated annealing and a final local search then maximise satisfaction within the hard rules (task 008).
+
 ```mermaid
 flowchart TD
     A[All guests + links + capacity + pins] --> B["Build clusters: union-find over group-0 links of ALL guests, keep enabled members"]
@@ -74,17 +76,25 @@ flowchart TD
     C1 --> D["k = ⌈N / capacity⌉"]
     D --> E["Pack: place pinned clusters, then the rest largest-first, each to the table with the highest affinity gain that keeps fill ≤ capacity"]
     E --> F{"All clusters placed and every table ≥ floor?"}
-    F -- no --> G[Repair: move / swap clusters between tables to lift under-floor tables]
+    F -- no --> G["Repair: move / swap clusters between tables to lift under-floor tables (greedy pack with and without affinity), else a bounded exact search over cluster sizes"]
     G --> H{Feasible now?}
     H -->|"no, and (k+1)·8 ≤ N"| I[k = k + 1] --> E
     H -->|"no, no larger k possible"| R[Return best-effort plan + violations]
     H -- yes --> J
-    F -- yes --> J["Improve: local search — move one cluster or swap two clusters if it raises the scenario score and keeps all hard rules (first-improvement, until no gain or time budget)"]
-    J --> K["Proposal: tables 1..k + assignments + Evaluate"]
+    F -- yes --> J["Anneal: simulated annealing from the feasible layout — random move of one cluster or swap of two clusters, only steps that keep every hard rule; better or equal always accepted, worse accepted with probability exp(Δ/T), T cooling; keep the best layout seen. Fixed iteration budget, constant-seed PRNG"]
+    J --> J2["Improve: local search on the best layout — move one cluster or swap two if it strictly raises the score and keeps all hard rules (first-improvement, fixed pass cap)"]
+    J2 --> K["Proposal: tables 1..k + assignments + Evaluate"]
     R --> K
 ```
 
-*Legend:* functional core — every box is a pure function over in-memory data; no Strategy/Template pattern (one algorithm, capacity is a parameter). Determinism: clusters and tables are processed in a stable order (by smallest guest id), so the same input gives the same proposal (testable). Sized for ~85–100 guests: a time budget of 1 s per scenario (4 s for Generate) is ample on the Pi. The algorithm is a heuristic, not a proven optimum.
+*Legend:*
+- **Two stages.** Everything up to the "yes" into **J** decides **feasibility and the table count k**; the anneal and improve stages only raise the satisfaction score of a layout that is already feasible. They never change k, never break a hard rule (capacity, floor 8 — waived for k = 1, clusters atomic, pinned clusters never move; oversized clusters are not items at all), so every intermediate layout is feasible. The result is never worse than the layout the anneal started from: the best-seen layout includes the start, and improve only accepts strict gains.
+- **Why annealing.** Greedy packing fills tables to capacity; on nearly full tables almost every single move or swap breaks capacity or the floor, so a strict-improvement local search stops early (task 008 audit on the real list: capacity 12 scored 172 against ≈ 308 reachable). Accepting some worse steps lets the search leave those local optima. It is still a **heuristic, not a proven optimum**; it reaches the best known score on the ~100-guest test fixture.
+- **Determinism (hard requirement).** Same input → same proposal. Clusters and tables are processed in a stable order (by smallest guest id); the anneal draws from a **small PRNG implemented in the package (e.g. splitmix64 / xorshift) with a constant seed**, never `math/rand`'s global source or the clock; the run length is a **fixed iteration budget** (a constant, or a pure function of the input size), never a wall-clock cut-off. Several restarts are allowed, each with its own constant seed, best result wins. The randomness is therefore *pseudo*-randomness fully fixed by the input — the package stays a pure function.
+- **Time budget (a target, not a cut-off).** Sized for ~85–100 guests: one `Propose` ≤ ~1 s on the Pi (ARM64) and Generate (four capacities) ≤ ~2–3 s, with at least ~400k anneal iterations per capacity. Checked by a Go benchmark on a synthetic ~100-guest fixture; the measured numbers are recorded below. If the four sequential runs exceed the Generate target, the `scenarios` service runs the four `Propose` calls in parallel goroutines (pure functions over a read-only `Graph`, results kept in capacity order 9–12); `seating` itself stays single-threaded.
+- **Patterns:** functional core — every box is a pure function over in-memory data; no Strategy/Template pattern (one algorithm, capacity is a parameter; annealing is a stage of that algorithm, not an alternative to it).
+
+*Measured (filled in by task 008 Phase B):* iterations per capacity, restarts, `Propose` time per capacity and Generate total on the Pi, capacity-12 score on the fixture.
 
 ## Manual edits and violations
 

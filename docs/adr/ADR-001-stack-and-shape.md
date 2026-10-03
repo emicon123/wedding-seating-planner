@@ -78,7 +78,7 @@ The user decided on 2026-10-02 that no public access is needed. **If the app is 
 - One implementation, table-driven tests.
 - The evaluation returned on every read is the same code the generator optimises.
 - Rejected: running it in the browser (scores would have to be duplicated or trusted).
-- Generating runs the same function three times, with capacity 8, 10 and 12. At ~100 guests, that takes well under a second on the Pi. *(Amended 2026-10-03: four times, capacities 9, 10, 11, 12 — see "Amendment 2026-10-03" below.)*
+- Generating runs the same function three times, with capacity 8, 10 and 12. At ~100 guests, that takes well under a second on the Pi. *(Amended 2026-10-03: four times, capacities 9, 10, 11, 12 — see "Amendment 2026-10-03" below. Task 008 adds a deterministic simulated-annealing stage, so the target is now ≤ ~1 s per capacity and ≤ ~2–3 s for Generate; see 03-seating-model.md § Auto-seating algorithm.)*
 
 **Consequences:**
 - + Minimal ops: one container, one SQLite file, **no secrets at all** (the `.env` holds only non-secret config).

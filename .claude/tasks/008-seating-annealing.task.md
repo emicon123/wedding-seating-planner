@@ -28,6 +28,14 @@ At capacity 12, SA reached 308 in 10 of 10 runs at 2M iterations (8 of 10 at 400
 ### Phase A — Architect (small)
 Update `docs/architecture/03-seating-model.md` (algorithm flowchart box J + legend, determinism wording, time budget), the `003-backend-design.md` § for `internal/seating` if it names `improve`, and add a short note on the budget/PRNG decision (ADR-001 amendment only if you judge it architectural). No contract/schema change expected. NOTE: task 007's Architect phase also edits `03-seating-model.md` — start only after 007 Phase A is committed.
 
+**Phase A done (2026-10-03).** No contract, schema or migration change; no new ADR (an internal algorithm stage, not architectural); ADR-001 §7 timing note corrected inline.
+
+**Backend-Go must read:**
+- `docs/architecture/03-seating-model.md` lines 66–97 (§ Auto-seating algorithm: flowchart with boxes J = anneal, J2 = improve; legend: two stages, determinism, time budget, *Measured* placeholder that Phase B fills in)
+- `docs/architecture/03-seating-model.md` lines 20–41 (§ Rules + § Scoring — unchanged objective and hard rules)
+- `docs/architecture/diagrams/003-backend-design.md` lines 102–132 (§2.1 internal functions + "Score optimisation stage (task 008)": `rng`, `anneal`, `optimise` sketch, postcondition, determinism note, parallel-Calculate fallback, `graph.go` package-doc rewording)
+- `docs/architecture/diagrams/003-backend-design.md` line 399 (§4 pattern evaluation: no Strategy / no RNG interface)
+
 ### Phase B — Backend-Go
 Implement in `backend-go/internal/seating` (new file e.g. `anneal.go`; wire into `Propose` after the feasible layout and before returning), tests as above, benchmark, `go vet`, `go test ./...` green. Remove the temporary-audit approach: no test reads the live DB or `guests.json`.
 

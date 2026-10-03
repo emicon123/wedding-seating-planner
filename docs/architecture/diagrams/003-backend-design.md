@@ -1,6 +1,6 @@
 # 003 — Backend design (Go): packages, core interfaces, class diagram, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
+Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6) and task 008 (anneal stage, §2.1). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
 
 ## 1. Packages and dependency direction
 
@@ -101,7 +101,35 @@ func Propose(g Graph, current Plan) Plan          // deterministic; keeps pinned
 func ExpandDisabled(g Graph, p Plan) Plan          // adds each placed cluster's unlisted disabled members to its table (used by Service.Replace)
 ```
 
-Internal (unexported, but each has its own table-driven tests): `minTables`, `pack`, `repairFloor`, `improve` (move/swap, first-improvement, capped at a fixed number of passes, no wall-clock), `score`. **No time budget based on the clock**: a pass cap keeps it deterministic and testable. At ~100 guests it finishes well under a second.
+Internal (unexported, but each has its own table-driven tests): `minTables`, `pack`, `repairFloor`, `packExact`, `anneal`, `improve` (move/swap, first-improvement, capped at a fixed number of passes, no wall-clock), `score`. **No time budget based on the clock**: fixed iteration / pass / node caps keep it deterministic and testable.
+
+**Score optimisation stage (task 008).** In `Propose`, every place that today calls `improve(l, maxPasses)` on a feasible layout (after `pack`+`repairFloor` and after `packExact`) calls `optimise(l)` instead; nothing before it changes (k selection, `pack`, `repairFloor`, `packExact`, the best-effort fallback):
+
+```go
+// anneal.go (new file)
+type rng struct{ s uint64 }              // self-contained PRNG (splitmix64 or xorshift64*); no math/rand, no clock
+func (r *rng) next() uint64
+func (r *rng) intn(n int) int             // uniform in [0, n)
+func (r *rng) float() float64             // uniform in [0, 1)
+
+const annealSeed = <constant>             // fixed; restart i uses a seed derived from annealSeed and i
+const annealIters = <constant>            // per restart; ≥ 400k at ~100 guests (may be a pure function of item count)
+const annealRestarts = <constant>         // ≥ 1
+
+// anneal: simulated annealing over unpinned placed items, from l (feasible).
+// Steps: move one item to another table, or swap two items on different tables;
+// a step is only tried if it keeps capacity and floor (Floor, 0 when k = 1).
+// Δ from affTo / swapDelta (integer). Accept Δ ≥ 0; else accept if r.float() < exp(Δ/T),
+// T cooling geometrically over the iteration budget. Leaves l at the BEST layout seen.
+func anneal(l *layout, iters int, r *rng)
+
+// optimise = for each restart: copy of the start layout → anneal → keep the best;
+// then improve(best, maxPasses). Skips anneal when fewer than 2 movable items or k = 1.
+// Postcondition: score(result) ≥ score(start); k, pins, fills within [floor, capacity] unchanged.
+func optimise(l *layout)
+```
+
+Names and the exact schedule (T0, T_end, move/swap mix, restart count) are Backend-Go's choice, tuned with the benchmark; the contract is the postcondition plus determinism. `layout` needs a cheap copy (assign, fill, affTo) for best-seen snapshots and restarts. Determinism note: `math.Exp` results feed the accept decision, so "same input → same plan" is guaranteed for the same build/architecture (tests run on the Pi); tests assert run-twice equality and score thresholds rather than relying on cross-architecture bit identity. Target: one `Propose` ≤ ~1 s on the Pi, `Calculate` (four capacities) ≤ ~2–3 s; if sequential runs miss it, `scenarios.Service.Calculate` runs the four `Propose` calls in goroutines (read-only `Graph`; results kept in order 9, 10, 11, 12) — `seating` stays single-threaded. Update the package doc in `graph.go` ("no clock, no randomness") to: no clock, no I/O, no package-level mutable state; the only randomness is a constant-seed PRNG inside `Propose`, so results are still a pure function of the input.
 
 ### 2.2 `internal/guests`
 
@@ -368,6 +396,7 @@ classDiagram
 |---|---|---|
 | Strategy (seating algorithm) | rejected | One algorithm; capacity is a parameter. Add it only if a second algorithm is actually built. |
 | Template Method | rejected | No algorithm family. |
+| Strategy / injectable RNG interface for the anneal (task 008) | rejected | Annealing is one more stage of the single algorithm, not an alternative. The PRNG is a tiny concrete type with a constant seed; tests need determinism, not a swappable source. |
 | Command / Memento (undo) | rejected as patterns | Task 007's one-step Cofnij needs no server code: the client re-sends its pre-Generate snapshot through the same `PUT /scenarios`. No undo stack, no snapshot table. |
 | Observer / domain events | rejected | Nothing reacts asynchronously; plans are evaluated on read. |
 | State (plan "needs recalculation") | rejected as a pattern | It is a derived boolean (`len(violations) > 0`), not a stored state machine. |
@@ -393,7 +422,7 @@ classDiagram
 | **DRY** | One `Plan` type (core), one `SeatingPlan` DTO shared by `Scenario` and `Proposal`, one error mapper, one place for the floor/weights (`seating` constants). |
 | **Law of Demeter** | Handlers call one service method each; services do not reach through store internals. |
 | **YAGNI** | No Strategy, no event bus, no caching, no Zustand, no auth, no config package, no batch create endpoint. Import is kept in the contract but implemented last. |
-| **Found and fixed in this audit** | (1) `scenarios.PlanState` duplicated the core plan shape, so it now embeds `seating.Plan` (04-data-model §1 updated). (2) `importcsv` importing `guests` while `guests.Service.Import` imports `importcsv` would be an import cycle, so `importcsv` now returns its own row types and depends only on `seating`. (3) The wall-clock time budget in `Propose` made tests flaky by design, so it is replaced by a fixed pass cap (deterministic). (4) `GET /clusters` and plan reads both need the graph: built by one function (`seating.BuildGraph`) via `guests.ToSeating`, not duplicated. |
+| **Found and fixed in this audit** | (1) `scenarios.PlanState` duplicated the core plan shape, so it now embeds `seating.Plan` (04-data-model §1 updated). (2) `importcsv` importing `guests` while `guests.Service.Import` imports `importcsv` would be an import cycle, so `importcsv` now returns its own row types and depends only on `seating`. (3) The wall-clock time budget in `Propose` made tests flaky by design, so it is replaced by a fixed pass cap (deterministic); task 008's anneal follows the same rule (fixed iteration budget, constant-seed PRNG). (4) `GET /clusters` and plan reads both need the graph: built by one function (`seating.BuildGraph`) via `guests.ToSeating`, not duplicated. |
 
 ## 6. Task 007 — Generate stores at once, Cofnij (`PUT /scenarios`)
 
