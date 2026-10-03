@@ -22,11 +22,14 @@ The rules the seating code (`backend-go/internal/seating`, pure Go, no I/O) impl
 
 1. **Hard — cluster integrity:** all enabled members of a cluster sit at exactly one table.
 2. **Hard — capacity:** fill (enabled guests) ≤ capacity.
-3. **Fewest tables:** use the smallest feasible table count *k*. Only exception: the mixed plan may use *k* + 1 when that strictly lowers the number of isolated guests (§ The mixed plan).
+3. **Fewest tables:** use the smallest feasible table count *k*. Only exception: the mixed plan may use *k* + 1 when that strictly lowers the number of isolated guests (§ The mixed plan). (Being replaced: the mixed plan will choose its table count to maximise satisfaction; rule TBD, § The mixed plan, "Pending change".)
 4. **Hard — floor:** every table has ≥ 8 enabled guests (all five plans; was 6 until 2026-10-03), unless the scenario has a single table. Fewest tables always beats satisfaction.
-5. **Exclude isolation** (task 011, "wykluczanie izolacji"): among the layouts allowed by rules 1–4 and 7, use one with the **fewest isolated guests** (§ Isolation below). Soft only in the sense that rules 1–4 and pins beat it: it never adds a table, never breaks the floor or capacity, never moves a pin. Within those rules it is **lexicographically above** satisfaction: no amount of group-1/2 satisfaction buys one more isolated guest.
-6. **Maximise satisfaction** (group 1 > group 2 > stranger) among the layouts with that fewest number of isolated guests. Evenness beyond the floor is *not* rewarded — "rebalance only as much as needed" falls out of rules 3–6: with 28 guests at capacity 12, 12 + 12 + 4 is infeasible (floor), so the optimiser picks among feasible splits (e.g. 12 + 8 + 8, 11 + 9 + 8, 10 + 10 + 8, 10 + 9 + 9) the best one.
-7. **Pins:** pinned clusters keep their table; the optimiser only moves unpinned clusters.
+5. **Exclude isolation** (task 011, "wykluczanie izolacji"): among the layouts allowed by rules 1–4 and 8, use one with the **fewest isolated guests** (§ Isolation below). Soft only in the sense that rules 1–4 and pins beat it: it never adds a table, never breaks the floor or capacity, never moves a pin. Within those rules it is **lexicographically above** rules 6 and 7: no amount of satisfaction or of avoided strangers buys one more isolated guest.
+6. **Avoid strangers** (task 015, "maksymalnie unikać obcych"): among the layouts with that fewest number of isolated guests, use one with the **fewest stranger pairs** (§ Stranger pairs below). Soft in the same sense as rule 5 (never adds a table, never breaks a hard rule or a pin; zero stranger pairs is reached whenever the data and the hard rules allow it, otherwise the fewest the search finds). Lexicographically above satisfaction: no amount of satisfaction buys one more stranger pair.
+7. **Maximise satisfaction** (group 1 > group 2 > stranger) among the layouts with those fewest isolated guests and stranger pairs. Evenness beyond the floor is *not* rewarded **by satisfaction**; but rule 6 does prefer smaller tables where strangers are unavoidable (a pair count grows with the square of the table's adults, § Stranger pairs, example J). "Rebalance only as much as needed" falls out of rules 3–7: with 28 guests at capacity 12, 12 + 12 + 4 is infeasible (floor), so the optimiser picks among feasible splits (e.g. 12 + 8 + 8, 11 + 9 + 8, 10 + 10 + 8, 10 + 9 + 9) the best one.
+8. **Pins:** pinned clusters keep their table; the optimiser only moves unpinned clusters.
+
+*(Rule numbers since task 015: avoiding strangers was inserted as rule 6; satisfaction is rule 7, pins rule 8. Older sections of the design docs that say "rule 6" for satisfaction or "rule 7" for pins mean the same rules.)*
 
 ## Scoring
 
@@ -67,7 +70,7 @@ isolated(g)   = g is an enabled ADULT AND seated
 - **Partner exists but cannot be at the table** (unseated, an oversized cluster, or capacity/floor make it impossible) → isolated. Shown, not hidden.
 - **Unseated guests** are not isolated (they have no table; `unseated_guests` already covers them).
 - **Not a violation.** `needsRecalculation` and the violation list are unchanged: "Przelicz" cannot help when isolation is unavoidable at the fewest tables, and a plan with an avoidable isolation made by hand is a quality issue, like low satisfaction. The UI marks isolated guests and counts them per plan ([diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §12).
-- **Two numbers, two roles.** The displayed satisfaction takes −1 per isolated guest (what the user sees in the scores). The optimiser does **not** trade that −1 against satisfaction: it compares layouts by the pair (isolated guests ↑, scenario score ↓), lexicographically (rule 5 before rule 6). Within an equal isolated count, "higher score" is the same as "higher group-1/2 satisfaction", since the penalty part is then equal.
+- **Two numbers, two roles.** The displayed satisfaction takes −1 per isolated guest (what the user sees in the scores). The optimiser does **not** trade that −1 against satisfaction: it compares layouts by the triple (isolated guests ↑, stranger pairs ↑, scenario score ↓), lexicographically (rule 5 before rule 6 before rule 7; the pair (isolated, score) until task 015). Within an equal isolated count, "higher score" is the same as "higher group-1/2 satisfaction", since the penalty part is then equal.
 
 **Worked examples** (capacity 12; sizes in brackets, all members adults; gains are scenario points: a group-1 pair of clusters of adult weights a and b adds 2·a·b, group 2 adds a·b — with adults only, the weight equals the size).
 
@@ -85,6 +88,64 @@ M can never sit with Q and P together (4 + 2 + 6 = 12 leaves R alone, which is l
 
 *C. Avoidable only with one more table.* M[3] —1— P[5]; strangers [6], [2], [5], [3]; 24 guests. k = 2 (two tables of 12): M + P = 8 would need exactly 4 more seats and no cluster or pair of clusters makes 4, so M and P sit apart, both isolated (8 isolated guests). With k = 3 (three tables of exactly 8): {M, P}, {6, 2}, {5, 3}, nobody isolated. Fewest tables wins (rule 3 before rule 5), so the plan has 2 tables and 8 isolated guests. Whether an extra table is worth it is the user's call; Propose never adds one on its own. The diagnostic in [diagrams/003-backend-design.md](diagrams/003-backend-design.md) §8.6 reports these k vs k + 1 numbers on the real data.
 
+### Stranger pairs ("pary obcych", task 015)
+
+User requirement (2026-10-03): "osoba nie może siedzieć z ludźmi spoza grupy 1 i 2", clarified as **"Maksymalnie unikać obcych"**: not a hard rule (a plan is never invalid because of strangers), but the optimiser avoids strangers as much as the hard rules and isolation allow, reaching zero whenever the data allows it; the user completes the missing links over time (§ Missing-links report below).
+
+```
+known(A, B)        = A = B  OR  affinity(A, B) is level 1 or level 2          (level 1 and 2 are equal here)
+stranger pair      = two seated enabled ADULTS g, h at the same table with NOT known(cluster(g), cluster(h))
+strangerPairs(t)   = Σ over unordered pairs of clusters {A, B} at table t, A ≠ B, NOT known(A, B), of adults(A)·adults(B)
+                   = crossPairs(t) − knownPairs(t), where
+                     crossPairs(t) = (A_t² − Σ_{A at t} adults(A)²) / 2      (A_t = enabled adults at t)
+                     knownPairs(t) = Σ over pairs {A, B} at t with an affinity of adults(A)·adults(B)
+plan strangerPairs = Σ_t strangerPairs(t)
+                   = ½ · Σ over seated enabled adults g of strangersAtTable(g)     (each pair seen from both ends)
+```
+
+- **Adults only** (task 014): children never form a stranger pair, with anyone. A cluster of only children adds nothing.
+- **Group-0 mates are never strangers** (they are one cluster). A cluster split over two tables by hand still counts its members as one cluster (as `strangersAtTable` does).
+- **Unseated guests** form no pairs. **Disabled** guests do not exist for scoring; their links still make clusters known (affinity is computed from all members, as everywhere).
+- **Not a violation**, not in `needsRecalculation`, not in the score: the displayed satisfaction is unchanged (a stranger already adds 0). The UI shows the count per plan and per table ([diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §15). It is derived from the existing `GuestScore.strangersAtTable`, no contract field.
+- **Order**: isolated adults first, stranger pairs second, satisfaction third (rules 5–7), never a weighted sum. An isolated adult always sits with strangers only (or alone with the own cluster), so rule 5 already removes the worst cases; rule 6 then removes the rest.
+- **Consequence (flagged, glossary A-24): rule 6 prefers smaller tables when strangers are unavoidable.** Pairs grow with the square of the adults at a table, so of two feasible splits the one with more even adult counts at the tables with strangers has fewer pairs (example J). Satisfaction still never rewards evenness. Within the fewest tables k this only chooses among fills 8–capacity; it never adds a table (rule 3 first).
+
+**Worked examples** (capacity 12; all members adults; `[size]`).
+
+*I. A table of two acquaintance cliques.* A[5] —1— B[5]; clique {A, C[2], D[2]} (A—C, A—D, C—D, all level 2); clique {B, E[2], F[2]} (B—E, B—F, E—F, level 2); G[2] has no links; N = 20, k = 2, fills 8–12.
+
+| Layout | Group-1/2 points | Isolated | Stranger pairs | (isolated, score) before 015 | (isolated, strangers, score) |
+|---|---|---|---|---|---|
+| a: {A, B, G} + {C, D, E, F} | A–B 50 + C–D 4 + E–F 4 = 58 | 0 | A–G 10 + B–G 10 + {C, D}×{E, F} 16 = **36** | **(0, 58) chosen** | (0, 36, 58) |
+| b: {A, C, D, G} + {B, E, F} | 10 + 10 + 4 + 10 + 10 + 4 = 48 | 0 | G with A, C, D: 10 + 4 + 4 = **18** | (0, 48) | **(0, 18, 48) chosen** |
+| c: {A, C, D} + {B, E, F, G} | 48 | 0 | 18 (mirror of b) | (0, 48) | (0, 18, 48), tie with b |
+
+Layout a is the old optimum: the big group-1 pair A–B sits together, and table 2 is two cliques that do not know each other (16 stranger pairs) plus G next to A and B. G knows nobody, so it is a stranger wherever it sits; 18 is the minimum (G's table needs ≥ 6 other guests, and {A, C, D} + G costs 18 with nothing else). The new objective picks b or c (tie: whichever the deterministic search returns; B1 pins one). Price: 10 points of satisfaction, A and B apart.
+
+*J. No links at all: rule 6 evens the tables.* 20 single adults, no links, capacity 12, k = 2. Every pair at a table is a stranger pair: 12 + 8 gives 66 + 28 = 94, 11 + 9 gives 55 + 36 = 91, 10 + 10 gives 45 + 45 = **90**. Before task 015 any split was equally good (score 0); now 10 + 10.
+
+*K. Motivating data (live list, 2026-10-03; counts only, names stay in the chat).* 105 enabled guests in 45 families: 21 guests (11 families) belong to no mutually acquainted group (one clique of the "known" relation over clusters) of ≥ 8 people, the table floor, so they cannot sit at any table without strangers; 47 cannot sit at a stranger-free table of 10 or 11, 65 not at one of 12; 41 know fewer than 11 people in groups 0/1/2 (own family included). A strict "everyone knows everyone at the table" rule would make every plan infeasible today; hence rule 6 is soft and the missing-links report tells the user which links to add.
+
+### Missing-links report ("Braki powiązań", task 015)
+
+A read-only report on the guests page (client-derived from `GET /guests` + `GET /clusters`, no endpoint; [diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §15.3). Per family (a cluster with at least one enabled adult):
+
+```
+seats(A)          = seatedSize(A)       (enabled members, children included: the floor counts seats)
+knownPeople(A)    = seats(A) − 1 + Σ seats(B) over clusters B with an affinity (1 or 2) to A
+                    ("how many people one member knows in groups 0/1/2", own family included, self excluded)
+bestGroup(A)      = the maximum-weight clique containing A in the graph
+                    nodes = clusters with seats > 0, edges = affinity (level 1 or 2), weight = seats
+reach(A)          = Σ seats over bestGroup(A)            ("the largest group of people who all know each other")
+status(A)         = reach < 8  → no stranger-free table at all (floor 8)
+                    8 ≤ reach < 12 → a stranger-free table only up to `reach` seats
+                    reach ≥ 12 → enough for any table size
+```
+
+- **Conservative on purpose (A-23):** children-only clusters join a group only through their own links, although strictly they form no stranger pairs; the report never promises a stranger-free table that needs unrelated children to fill it. A large `reach` is necessary, not sufficient: the cliques of different families compete for the same people, and cluster sizes must still add up to 8–capacity.
+- **Exact** max-weight clique (Bron–Kerbosch with pivoting over ≈ 50 nodes of a sparse graph, average degree ≈ 4: microseconds to milliseconds in the browser).
+- Families are sorted worst first (`reach` ascending, then `knownPeople`, then name); only families with `reach < 12` are listed, the rest are counted ("pozostałe rodziny: OK").
+
 ## Children (task 014)
 
 User requirement (2026-10-03): "Czy dzieci i ich zadowolenie wlicza się do wyniku?? (Nie powinno)". Children (`isChild`) **take seats but are not scored**.
@@ -99,7 +160,7 @@ flowchart TD
     C -- no --> A["scored: satisfaction from ADULT table-mates; can be isolated (partners = clusters with an enabled adult)"]
 ```
 
-*Legend:* hard rules (rules 1–4, 7) see seats; soft rules (5, 6) see adults. One flag, read in one place per concern (a cluster's adult weight); no new rule, no Strategy.
+*Legend:* hard rules (rules 1–4, 8) see seats; soft rules (5, 6, 7) see adults. One flag, read in one place per concern (a cluster's adult weight); no new rule, no Strategy.
 
 **What changes, exactly.**
 
@@ -167,7 +228,7 @@ At the expected ~85–100 guests every capacity is feasible by head count; infea
 
 ## Auto-seating algorithm (heuristic, deterministic)
 
-Greedy packing decides the table count; simulated annealing and a final local search then maximise satisfaction within the hard rules (task 008).
+Greedy packing decides the table count; simulated annealing and a final local search then optimise (isolated adults, stranger pairs, score) within the hard rules (task 008; objective tasks 011, 015).
 
 ```mermaid
 flowchart TD
@@ -183,16 +244,16 @@ flowchart TD
     H -->|"no, and (k+1)·8 ≤ N"| I[k = k + 1] --> E
     H -->|"no, no larger k possible"| R[Return best-effort plan + violations]
     H -- yes --> J
-    F -- yes --> J["Anneal: simulated annealing from the feasible layout — random move of one cluster or swap of two clusters, only steps that keep every hard rule; steps that are not worse in (isolated guests, score) always accepted, worse ones with probability exp(Δ/T), T cooling; keep the best layout seen (fewest isolated, then highest score). Fixed iteration budget, constant-seed PRNG"]
-    J --> J2["Improve: local search on the best layout — move one cluster or swap two if it strictly improves (isolated guests, score) and keeps all hard rules (first-improvement, fixed pass cap)"]
+    F -- yes --> J["Anneal: simulated annealing from the feasible layout — random move of one cluster or swap of two clusters, only steps that keep every hard rule; steps that are not worse in (isolated adults, stranger pairs, score) always accepted, worse ones with probability exp(Δ/T), T cooling; keep the best layout seen (fewest isolated, then fewest stranger pairs, then highest score). Fixed iteration budget, constant-seed PRNG"]
+    J --> J2["Improve: local search on the best layout — move one cluster or swap two if it strictly improves (isolated adults, stranger pairs, score) and keeps all hard rules (first-improvement, fixed pass cap)"]
     J2 --> K["Proposal: tables 1..k + assignments + Evaluate"]
     R --> K
 ```
 
 *Legend:*
-- **Objective of the optimiser (task 011; adults only since task 014).** A layout is better when it has **fewer isolated guests** (isolated **adults**), or the same number and a **higher scenario score** (adults' satisfaction; every weight is an adult weight, § Children) (lexicographic pair, never a weighted sum, so no "big M" and no overflow question). The repair step, anneal, the restart winner and improve all compare by this pair. Pack is unchanged (it only builds a starting layout).
-- **Two stages.** Everything up to the "yes" into **J** decides **feasibility and the table count k**; the anneal and improve stages only improve (isolated guests, score) of a layout that is already feasible. They never change k, never break a hard rule (capacity, floor 8 — waived for k = 1, clusters atomic, pinned clusters never move; oversized clusters are not items at all), so every intermediate layout is feasible. The result is never worse than the layout the anneal started from in (isolated guests, score): the best-seen layout includes the start, and improve only accepts strict improvements. Isolation never increases k (rule 3 before rule 5).
-- **Isolation is a heuristic target, too.** Like the score, "fewest isolated guests" is what the search finds, not a proven minimum; improve tries every single move and every swap, so a layout where one such step would remove an isolation without breaking a hard rule is never returned.
+- **Objective of the optimiser (task 011; adults only since task 014; stranger pairs since task 015).** A layout is better when it has **fewer isolated adults**; at an equal count, **fewer stranger pairs** (§ Stranger pairs); at equal counts, a **higher scenario score** (adults' satisfaction; every weight is an adult weight, § Children). A lexicographic triple, never a weighted sum, so no "big M" and no overflow question. The repair step, anneal, the restart winner and improve all compare by this triple; the mixed plan's table-count decision does not (§ The mixed plan). Pack is unchanged (it only builds a starting layout). The anneal now runs whenever a movable item has an adult (with no affinity at all the stranger term still varies, example J); before task 015 it was skipped when no item had an affinity.
+- **Two stages.** Everything up to the "yes" into **J** decides **feasibility and the table count k**; the anneal and improve stages only improve (isolated adults, stranger pairs, score) of a layout that is already feasible. They never change k, never break a hard rule (capacity, floor 8 — waived for k = 1, clusters atomic, pinned clusters never move; oversized clusters are not items at all), so every intermediate layout is feasible. The result is never worse than the layout the anneal started from in that order: the best-seen layout includes the start, and improve only accepts strict improvements. Isolation and strangers never increase k (rule 3 before rules 5 and 6).
+- **Isolation and strangers are heuristic targets, too.** Like the score, "fewest isolated guests" and "fewest stranger pairs" are what the search finds, not proven minima; improve tries every single move and every swap, so a layout where one such step would remove an isolation, or remove stranger pairs without adding an isolation, without breaking a hard rule is never returned. Zero stranger pairs is found reliably when a partition into stranger-free tables exists and is reachable by moves and swaps (test S-P2), not proven in general.
 - **Why annealing.** Greedy packing fills tables to capacity; on nearly full tables almost every single move or swap breaks capacity or the floor, so a strict-improvement local search stops early (task 008 audit on the real list: capacity 12 scored 172 against ≈ 308 reachable). Accepting some worse steps lets the search leave those local optima. It is still a **heuristic, not a proven optimum**; it reaches the best known score on the ~100-guest test fixture.
 - **Determinism (hard requirement).** Same input → same proposal. Clusters and tables are processed in a stable order (by smallest guest id); the anneal draws from a **small PRNG implemented in the package (e.g. splitmix64 / xorshift) with a constant seed**, never `math/rand`'s global source or the clock; the run length is a **fixed iteration budget** (a constant, or a pure function of the input size), never a wall-clock cut-off. Several restarts are allowed, each with its own constant seed, best result wins. The randomness is therefore *pseudo*-randomness fully fixed by the input — the package stays a pure function.
 - **Time budget (a target, not a cut-off; task 012).** Search effort is a fixed budget, not a clock: `annealRestarts = 32` independent walks of `min(1 500 000, 700 × m²)` steps each, `m` = movable items (the swap neighbourhood grows with m²: 46 items on a real ~107-guest list get ~1.48M, 20 items 280k), skipped when no item has any affinity. The restarts of one `Propose` run in parallel goroutines (each on its own layout clone and PRNG; the winner is chosen after all finished, by objective, earliest index on ties, so the result does not depend on scheduling) and the `scenarios` service proposes the five plans in parallel goroutines (pure functions over a read-only `Graph`, results kept in plan order 9, 10, 11, 12, mixed). Target on the Pi (4 cores): Generate (five plans) ≲ 5 s for ~107 guests in ~46 clusters, memory flat (peak RSS of the benchmark process 11 MB before and after; each walk copies only a ~46 x 12 table of ints). Checked by `BenchmarkProposeTight` (`go test -bench ProposeTight ./internal/seating`; with `STOLIKI_TUNE_INPUT` pointing at a JSON of ids/links it runs on a real-shaped file instead); the measured numbers are recorded below.
@@ -210,15 +271,26 @@ flowchart TD
 
 *Measured after task 013 (five plans incl. mixed; live list 2026-10-03, 107 enabled guests; `POST /scenarios/calculate` inside the container):* ≈ 4.1 s wall time for all five plans (the four capacities and the mixed plan run in parallel on the 4 cores; the mixed plan costs one solve while plan 12 has 0 isolated guests, up to two otherwise, worst case ≈ 4.8 s). `BenchmarkProposeTight` `generate5` ≈ 4.0 s idle, ≈ 6.1 s while another CPU-heavy process is running. Peak container memory stays ≈ 8 MB.
 
+*Expected after task 015 (stranger pairs; to be measured in Phase B1 and replaced by the numbers):* same budget (32 × `min(1.5M, 700·m²)`), one more O(1) term per delta and one more m × k matrix of ints per layout (`knowTo`, updated in the same loop as `affTo`), so ≈ +5–15% per step: Generate ≈ 4.7–5.2 s on the live list (was ≈ 4.5 s). The budget constants are **not** cut to stay under 5 s: the user said time is not a problem, and the mixed-plan change pending below raises the target for Generate to ≲ 8–10 s anyway. Link-free inputs (tests, a fresh list) now run the anneal too (the stranger term varies), which only costs time on tiny instances (m² scaling).
+
 ## The mixed plan ("Mieszany", task 013)
+
+> **Pending change — mixed plan objective and table count: TBD (user requirement 2026-10-03, after task 015 Phase A started).** "W ogóle w wariancie mieszanym priorytetem powinna być maksymalizacja zadowolenia. Nieważne ile stołów." The mixed plan will **no longer** use rule 3 (fewest tables) nor the k0 / k0 + 1 limit below: it chooses its table count k in **[k0, ⌊N/8⌋]** (sizes 9–12 still derived from the fill, floor 8, capacity 12, clusters intact, pins) to maximise satisfaction. The four uniform plans keep rule 3 as a hard rule. The exact objective is **not decided yet** (the orchestrator measures k = k0 … k0 + 4 on the live data and asks the user). Options:
+>
+> - **Option A — the same triple across k:** compare the best layout of every k by (isolated adults ↑, stranger pairs ↑, score ↓). Likely picks **many small tables** (fewer adults per table means fewer stranger pairs, example J), i.e. often k = ⌊N/8⌋ with tables of 8 (9-seat tables).
+> - **Option B — displayed satisfaction first:** compare by the displayed score (satisfaction with the isolation penalty included) ↓, then stranger pairs ↑, then fewer tables. Bigger tables hold more companions, so this tends towards **fewer, fuller tables**, but not necessarily k0.
+>
+> Within one k the optimiser stays the task-015 triple (rules 5–7) in both options; only the comparison **between** k values is open. **Time budget design (both options):** for every k in [k0, ⌊N/8⌋] (≈ 5 values on the live list: k0 = 9, ⌊105/8⌋ = 13) a **coarse solve** (`feasibleAt` with a reduced budget, e.g. 8 restarts × ¼ of the steps ≈ 1/16 of a full solve, ≈ 0.05–0.1 s each) ranks the k values; then a **full solve** (today's budget) for the best one or two coarse k values, and the winner among those by the chosen comparison (ties: smaller k). Everything stays deterministic (constant seeds per k, fixed order, ties by k ascending). Estimated mixed plan ≈ 0.4 s coarse + 1.8 s for two full solves on saturated cores; Generate ≈ 6–7 s with the four uniform plans (target ≲ 8–10 s, the user accepts the wait). Simpler fallback if B1 measures it fits: a full solve for every k (≈ 9–10 s).
+>
+> **What this invalidates once decided** (kept as they are until the decision lands, so `main` stays consistent): the k0 / k0 + 1 rule and flowchart below, `proposeMixed` ([diagrams/003-backend-design.md](diagrams/003-backend-design.md) §9.2), tests M1–M7 (§9.7), the glossary entry *Mixed plan* and assumption A-21 ("same tables as plan 12"), the mixed card note **"1 stół więcej niż plan 12 — mniej osób bez znajomych"** ([diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §13.2 / §13.3, `EXTRA_TABLE_NOTE`), and the planned diagnostic "z 1 stołem więcej: o N par obcych mniej" (dropped in task 015, it is no longer needed: the mixed plan will choose its own k). The diagnostic of §8.6 (test-only) stays.
 
 User requirement (2026-10-03): "plan mieszany — różne stoły od 9 do 12 (minimum 8 jeśli konieczne)"; answers: the algorithm chooses the sizes, it is a **fifth plan** generated with the other four, and it **may use one table more** than the minimum.
 
-**Rules.** Everything in § Rules applies with **capacity 12** (rules 1, 2, 4–7 unchanged: clusters intact, ≤ 12 guests per table, floor 8 unless single table, isolation before satisfaction, pins). Only rule 3 changes:
+**Rules.** Everything in § Rules applies with **capacity 12** (rules 1, 2, 4–8 unchanged: clusters intact, ≤ 12 guests per table, floor 8 unless single table, isolation before strangers before satisfaction, pins). Only rule 3 changes:
 
 - *k0* = the table count the 12-seat rules give (the smallest feasible k at capacity 12, found exactly as in § Feasibility, with this plan's own pins).
 - If *(k0 + 1)·8 ≤ N*, the layout at *k0 + 1* is also solved (same pins; a pin to a table above k0 is honoured at k0 + 1 and released at k0, as everywhere).
-- **Choose k0 + 1 only if its isolated-guest count (isolated adults, task 014) is strictly lower** than at k0. Otherwise k0. Never more than k0 + 1. Score never justifies the extra table (a k0 + 1 layout with fewer isolated guests wins even with a lower score; equal isolated counts keep k0 whatever the scores).
+- **Choose k0 + 1 only if its isolated-guest count (isolated adults, task 014) is strictly lower** than at k0. Otherwise k0. Never more than k0 + 1. Score never justifies the extra table (a k0 + 1 layout with fewer isolated guests wins even with a lower score; equal isolated counts keep k0 whatever the scores). Task 015 keeps this decision **isolation-only**: stranger pairs do not justify the extra table either (they would almost always favour k0 + 1); inside each k the layout is optimised by the triple.
 - If no k is feasible (best-effort fallback of § Feasibility), the mixed plan returns that best-effort plan, like the 12-seat plan; no k0 + 1 attempt.
 - Shortcut (same result, saves time): if the k0 layout has 0 isolated guests, k0 + 1 cannot be strictly better, so it is not solved.
 

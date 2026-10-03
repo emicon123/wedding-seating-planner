@@ -522,7 +522,7 @@ The size of a mixed-plan table as its fill changes is the state machine in [001-
 | Plan cards grid | `PlansPage` | Five cards in `PLAN_KEYS` order, mixed last: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5` (phones 1, tablets 2, laptops 3 + 2, wide screens 5 across). Header copy: "Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany". |
 | Card header | `PlanCard` | Uniform: unchanged (`TableGlyph seats={capacity}`, "{c} miejsc", "Stoły {c}-osobowe"). Mixed: two overlapping glyphs `TableGlyph seats={12}` + smaller `seats={9}`, title **"Mieszany"**, subline "Stoły 9–12-osobowe". `aria-label` from `planTitle`. Links `/plany/{key}`. |
 | Card body (all five) | `PlanCard` → new `TablesNeededLine` | Under `PlanFigures`: **"Potrzebne stoły: 5 × 12, 3 × 11, 1 × 9 (102 miejsca)"** with a tiny `TableGlyph seats={size}` before each group (icon + text). Uniform cards show "Potrzebne stoły: 9 × 12 (108 miejsc)". Hidden when the plan has no non-empty table. This is the comparison figure ("as visual as possible"): sizes and total seats side by side across the five cards. |
-| Mixed card, extra table | `PlanCard` (mixed only) | When `mixed.tableCount === plan12.tableCount + 1` **and** `isolatedCount(mixed) < isolatedCount(plan12)`: a calm note "1 stół więcej niż plan 12 — mniej osób bez znajomych ({a} zamiast {b})". Derived from the two cached scenarios; nothing when the condition is false (also after hand edits). |
+| Mixed card, extra table | `PlanCard` (mixed only) | When `mixed.tableCount === plan12.tableCount + 1` **and** `isolatedCount(mixed) < isolatedCount(plan12)`: a calm note "1 stół więcej niż plan 12 — mniej osób bez znajomych ({a} zamiast {b})". Derived from the two cached scenarios; nothing when the condition is false (also after hand edits). **To be removed/replaced when the pending mixed-plan objective lands (§15, 03-seating-model § The mixed plan).** |
 | Fill bars | `FillBars` | No change; for mixed it scales to `capacity` (12). |
 | Switcher | `PlanSwitcher` | Five entries from `PLAN_KEYS`: "9 miejsc" … "12 miejsc", **"Mieszany"**, each with its table count. On phones it may scroll horizontally inside its own box (`overflow-x-auto`), never the page. |
 | Detail header | `PlanDetailPage` | Title from `planName`; `TablesNeededLine` next to `PlanFigures`. Routes `plany/:planKey`, `druk/:planKey`; the route guard (`CapacityRoute` → **`PlanRoute`**) uses `parsePlanKey`; `/plany/8` and `/druk/8` still redirect to 9; anything else → `/`. URL of the mixed plan: `/wesele/plany/mixed`. |
@@ -572,3 +572,92 @@ The child's seat, name, chip, drag-and-drop and print entry are unchanged (a chi
 **Tests (B2):** fixtures in `features/plans/fixtures.ts` get a child (a `Guest` with `isChild: true` seated with a family, `GuestScore` all zeros); `GuestScoreMark` renders nothing for it; `GuestDetailsPanel` shows the child line and not "Ten gość nie ma preferowanych osób" / "Obcych"; an adult shows "Obcych dorosłych przy stole: N"; `isolatedCount` ignores the child (satisfaction 0); `PlanFigures` score figure has the tooltip text. Typecheck, lint, test, build green.
 
 Pattern check: one conditional and three strings; no hook, no context, no contract field (the client already has `isChild` from `GET /guests`). Rejected: hiding the child in the plan (it takes a seat), a client-side recomputation of scores (the server is the single source).
+
+## 15. Avoid strangers: "Pary obcych" cues and the missing-links report (task 015)
+
+Rules: [../03-seating-model.md](../03-seating-model.md) § Stranger pairs and § Missing-links report. **No contract shape change**: everything is derived from `SeatingPlan.guestScores` (`strangersAtTable`, adults only, 0 for children) and from `GET /guests` + `GET /clusters`. Only descriptions changed in `docs/openapi.yaml` (`GuestScore.strangersAtTable`, `PlanSummary`); regenerate `schema.d.ts` (comments only).
+
+> **Mixed plan (pending, not in this task's B2):** the user decided the mixed plan will maximise satisfaction with any table count; the exact rule is TBD (03-seating-model § The mixed plan, "Pending change"). The mixed card note "1 stół więcej niż plan 12 — mniej osób bez znajomych" (§13.2, `EXTRA_TABLE_NOTE`) becomes wrong then and will be removed or replaced in that task; **leave it as is in task 015**. No "z 1 stołem więcej: o N par obcych mniej" note is built (dropped).
+
+### 15.1 Domain (pure TS, unit-tested)
+
+```ts
+// domain/strangers.ts
+/** Stranger pairs in a plan: each pair is seen from both adults, so half the sum (exact: the server's counts are symmetric). */
+export const strangerPairs = (scores: readonly GuestScore[]): number =>
+  scores.reduce((n, s) => n + s.strangersAtTable, 0) / 2
+/** Same, for one table. */
+export const tableStrangerPairs = (scores: readonly GuestScore[], tableNumber: number): number =>
+  strangerPairs(scores.filter((s) => s.tableNumber === tableNumber))
+// labels.ts
+export const STRANGER_PAIRS_LABEL = 'Pary obcych'
+export const strangerPairsLabel = (n: number) => `${pluralPl(n, 'para', 'pary', 'par')} obcych` // "1 para obcych", "3 pary obcych", "5 par obcych"
+export const STRANGER_PAIRS_HINT = 'Pary dorosłych przy jednym stole, którzy się nie znają (ani grupa 0, ani 1, ani 2)'
+```
+
+### 15.2 Where the counts show
+
+| Place | Component | What |
+|---|---|---|
+| Plan card | `PlanFigures` | New optional prop `strangerPairs?: number`; when defined: a small muted line **"Pary obcych: N"** (also for 0: it is the new comparison figure across the five cards), `title` = `STRANGER_PAIRS_HINT`, under the isolated line. Callers: `PlanCard` passes `strangerPairs(plan.guestScores)`. |
+| Plan detail header | `PlanDetailPage` `<dl>` | A `dt`/`dd` pair "Pary obcych" / N after the isolated pair, `…` while `saving` (like the score). |
+| Table card | `TableCard` | New prop `strangerPairs: number \| null` (null while a save is in flight, like `score`); when > 0, after "Zadowolenie N": **"· 3 pary obcych"** in muted text with `title` = hint. `FloorPlan` passes `settled ? tableStrangerPairs(plan.guestScores, table.number) : null`. |
+| Guest details | `GuestDetailsPanel` | Unchanged ("Obcych dorosłych przy stole: N", task 014). |
+| Print | — | No change (YAGNI). |
+
+Not a violation and no colour alarm: muted text + number (the user completes links over time; the report below says how).
+
+### 15.3 The missing-links report ("Braki powiązań")
+
+**Placement:** a collapsible section on the **guests page** (`/goscie`), directly under the data warnings (`ClusterWarnings`). No new route: the guest page already has both queries and the relations dialog (`LinkEditor`, `onOpenLinks`), and after a link is saved the queries are invalidated, so the report recomputes by itself. Collapsed by default (local `useState`, `aria-expanded` button); its header is always visible with the summary counts. Computed over the **whole enabled list**, independent of the page's search and filters.
+
+```ts
+// domain/acquaintance.ts (pure)
+export type ReachStatus = 'none' | 'partial' | 'ok'   // reach < 8 | 8..11 | ≥ 12
+export type FamilyReach = {
+  clusterKey: number
+  memberIds: number[]          // enabled members, Polish-collated by displayName
+  seats: number                // seatedSize
+  knownPeople: number          // seats − 1 + Σ seats of clusters with an affinity (level 1 or 2)
+  reach: number                // seats of the max-weight acquainted group containing the family
+  groupKeys: number[]          // that group's other cluster keys (not the family itself), by name
+  status: ReachStatus
+}
+/** One entry per cluster with ≥ 1 enabled ADULT (from guests' isChild/enabled). Sorted worst first:
+ *  reach ↑, knownPeople ↑, family name (pl collation), key. */
+export function familyReach(guests: readonly Guest[], overview: ClusterOverview): FamilyReach[]
+```
+
+**Algorithm** (exact; ≈ 50 nodes, sparse):
+
+```mermaid
+flowchart TD
+    A["clusters with seatedSize > 0 = nodes, weight = seatedSize"] --> B["edges: affinity level 1 or 2, read from BOTH sides' affinities; unknown keys and self ignored"]
+    B --> C["Bron–Kerbosch with pivot (pivot = vertex of P ∪ X with most neighbours in P; vertices in ascending key order)"]
+    C --> D["for every maximal clique R: w = Σ weights; for each v in R keep R if w > best[v].w, ties: lexicographically smaller sorted keys"]
+    D --> E["per family with ≥ 1 enabled adult: reach = best[v].w, groupKeys = best[v] \\ {v}, knownPeople, status"]
+    E --> F["sort worst first"]
+```
+
+*Legend:* a maximum-weight clique containing v is contained in some maximal clique, so keeping the heaviest maximal clique per vertex is exact. No library (≈ 40 lines). Children-only clusters are nodes (they have seats and links) but never rows; they join a group only through their own links (conservative, glossary A-23). A cluster unknown to the overview (stale cache right after an add) is ignored until the overview refreshes.
+
+**UI** (`features/guests/MissingLinksSection.tsx`, props: `reaches: FamilyReach[]`, `nameOf`, `onOpenLinks(guestId)`):
+
+- Header button (icon `UsersRound` or similar + text, never colour alone): **"Braki powiązań: {a} {rodzina|rodziny|rodzin} bez stołu w gronie znajomych, {b} tylko na mniejszy stół"**; `a` = status `none`, `b` = `partial`. When both are 0: **"Każda rodzina ma grupę znajomych na pełny stół."** (muted, no expand).
+- Expanded, first a help paragraph: **"Żeby nikt nie siedział z obcymi, każda rodzina potrzebuje grupy co najmniej 8 osób, w której wszyscy się znają (grupa 0, 1 lub 2). Dopisz powiązania z grup 1/2 z rodzinami, które znają też ich znajomi."**
+- Then one row per family with status `none` or `partial` (worst first): family names (first 3 `displayName`s + "+N"), as a **button** opening the relations dialog of the family's first member by name (`onOpenLinks`); **"Zna: {knownPeople} os."**; **"Największa grupa znajomych: {reach} os."**; a badge — `none`: brick **"Za mało znajomych na stół (min. 8)"**, `partial`: amber **"Stół bez obcych najwyżej na {reach} os."**; a muted line **"Razem z: {names of groupKeys' first members}"** (or **"Nikt — dopisz pierwsze powiązania z grup 1/2"** when the group is the family alone).
+- Last line: **"Pozostałe rodziny ({c}): wystarczy znajomych na pełny stół."**
+- Phones: rows stack (name line, then figures, then badge); no horizontal scroll.
+
+### 15.4 Tests (B2)
+
+- `domain/strangers.test.ts`: `strangerPairs` (empty → 0; a symmetric fixture: table of A[2 adults] + B[1 adult] strangers → each A adult 1, B 2 → 2 pairs; children's zeros add nothing); `tableStrangerPairs` filters by table; `strangerPairsLabel(1/3/5/22)` → "1 para obcych", "3 pary obcych", "5 par obcych", "22 pary obcych".
+- `domain/acquaintance.test.ts`: triangle of clusters 3 + 3 + 3 → reach 9 for each, `partial`; a path A–B–C (A, C strangers) → reach of B = max(A+B, B+C), not A+B+C; two disjoint groups; a family with no links → reach = own seats, `knownPeople = seats − 1`, `none`, groupKeys []; one-sided affinity counts; unknown key ignored; children-only cluster is a node but not a row; a family whose only enabled members are children is not a row; ties broken deterministically (shuffled inputs → identical output); a 50-node random sparse graph completes (sanity: < 50 ms) and every reported group is a clique (checked pairwise) and is at least as heavy as any clique found by brute force on a ≤ 12-node random graph.
+- `PlanFigures` shows "Pary obcych: 0" and "Pary obcych: 7"; nothing when the prop is undefined. `TableCard` shows "· 3 pary obcych" for 3, nothing for 0 or null. `PlanDetailPage` header shows the pair, "…" while saving.
+- `MissingLinksSection` / `GuestsPage`: header counts and Polish plurals; collapsed by default, expands; rows worst first; a row's name button opens the relations dialog for the right guest; all-ok text; section ignores the page filters (search for one name, the header counts stay).
+- Fixtures: `features/plans/fixtures.ts` scores made symmetric for `strangersAtTable` (the sum per table must be even); `features/guests/fixtures.ts` gets clusters with affinities for the report.
+- Typecheck, lint, test, build green.
+
+### 15.5 Pattern check
+
+Two pure modules and two small components; no hook, no context, no store, no library, no route, no contract field. Rejected: a server endpoint for the report (pure function of data the page holds), a suggestions engine ("dopisz X–Y", YAGNI: the help text and the "Razem z" names suffice), a contract field for stranger pairs (exact client derivation), approximating the clique greedily (exact is cheap at this size and never misleads).

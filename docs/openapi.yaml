@@ -1567,6 +1567,7 @@ components:
       example: 10
     PlanSummary:
       type: object
+      description: 'Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly from `SeatingPlan.guestScores`.'
       required:
         - tableCount
         - seatedCount
@@ -1688,7 +1689,7 @@ components:
           example: 1
         strangersAtTable:
           type: integer
-          description: Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child.
+          description: 'Enabled adults at the table outside the guest''s cluster with no group-1/2 affinity to it (children are not counted). 0 for a child. Symmetric: the number of stranger pairs at a table (or in a plan) is exactly half the sum of `strangersAtTable` over its guests, which is how clients derive "Pary obcych" (task 015: the optimiser minimises stranger pairs right after isolated adults and before satisfaction).'
           example: 0
     Violation:
       type: object

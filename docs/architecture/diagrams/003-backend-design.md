@@ -92,7 +92,7 @@ type Evaluation struct {
     GuestScores []GuestScore
     Violations  []Violation
 }
-type Summary struct { TableCount, Seated, Unseated, ViolationCount, Isolated int; Score float64; NeedsRecalculation bool } // Isolated: task 011, not in the contract
+type Summary struct { TableCount, Seated, Unseated, ViolationCount, Isolated, StrangerPairs int; Score float64; NeedsRecalculation bool } // Isolated (task 011), StrangerPairs (task 015, §11): Go only, not in the contract
 type TableEval  struct { Number, Fill int; Score float64; Clusters []Placement }
 type Placement  struct { ClusterKey GuestID; Guests []GuestID; Pinned bool } // enabled members only
 type GuestScore struct { Guest GuestID; Table int /*0 = unseated*/; Satisfaction float64; PreferredTotal, PreferredAtTable, FallbackAtTable, StrangersAtTable int /*adults only; all 0 for a child, task 014*/; Isolated bool /*task 011, not in the contract*/ }
@@ -831,6 +831,8 @@ flowchart LR
 
 ### 9.2 `internal/seating`
 
+> Pending (§11.7): the mixed plan's table-count rule below (k0 / k0 + 1) will be replaced by a choice over k ∈ [k0, ⌊N/8⌋]; the objective is TBD. Unchanged until then.
+
 ```go
 type Plan struct { Capacity int; Mixed bool; Tables []Table }   // Mixed only changes Propose; Evaluate ignores it
 
@@ -1036,3 +1038,150 @@ Score integrality: `2·w·A_a·A_b` is an integer (w ∈ {1, ½}); scores stay w
 | Children-only clusters attracted to their family's friends | rejected | That would be scoring children (the opposite of the requirement); edge case (A-22). |
 
 Audit: SRP kept (seats vs weights are two arrays with two names, `size` / `adults`, never mixed); no new package or dependency; determinism, budgets, objective order and the mixed-plan rule unchanged in code shape; the only semantic change is the weight.
+
+## 11. Task 015 — Avoid strangers (stranger pairs, rule 6) + missing-links report
+
+Rules and worked examples I–K: [../03-seating-model.md](../03-seating-model.md) § Stranger pairs (authoritative). In one line: **the optimiser compares (isolated adults ↑, stranger pairs ↑, score ↓)**, lexicographically, everywhere it compared (isolated, score). No migration, no API shape change (descriptions only: `GuestScore.strangersAtTable`, `PlanSummary`), no new package. Only `internal/seating` changes (plus test inputs). The missing-links report is frontend-only (no Go code). The **mixed plan's table-count rule is untouched by this task** (still k0 / k0 + 1, isolation-only, `proposeMixed` unchanged); its replacement is pending a user decision (§11.7).
+
+### 11.1 Definitions in code terms
+
+`known(a, b)` for two items ⇔ `a == b` or affinity level 1/2 between their clusters. In `items`, **`gain[a][b] > 0` ⇔ known ∧ `adults[a] ≥ 1` ∧ `adults[b] ≥ 1`** (gain = 2·w·adults·adults, w ∈ {1, ½}), so `nbr[a]` is exactly the list of items whose adults are known to `a`'s adults. A pair with a zero-adult side never counts, known or not. Hence:
+
+```
+strangers(a, t) = adultsAt[t] − adults[a]·[assign[a] == t] − knowTo[a][t]     // stranger ADULTS a meets at t
+knowTo[a][t]    = Σ adults[b] over b ∈ nbr[a] with assign[b] == t                 // incremental, like affTo
+objective.str   = ½ · Σ over placed a of adults[a] · strangers(a, assign[a])      // integer: each pair twice
+```
+
+### 11.2 `evaluate.go`
+
+```go
+type Summary struct { /* … as before … */ StrangerPairs int } // Go only, not in the contract (client derives it)
+```
+
+In the per-table loop, for every **adult** score appended: `strangerTwice += strangers` (the existing `strangers` count of that cluster, adults only); after all tables `ev.Summary.StrangerPairs = strangerTwice / 2` (always even: the relation is symmetric per table; assert in tests, not at runtime). `GuestScore.StrangersAtTable`, scores, violations, `NeedsRecalculation`: **unchanged**.
+
+### 11.3 `propose.go`: state, objective, exact deltas
+
+```go
+type items struct {
+    // … as before …
+    know [][]int // know[c][a] = adults[a] if gain[c][a] > 0 else 0 (branch-free update in place/unplace)
+}
+type layout struct {
+    // … as before …
+    adultsAt []int   // enabled adults seated per table
+    knowTo   [][]int // knowTo[a][t] = Σ know[a][b] over items b at table t
+}
+// place(a, t):   adultsAt[t] += adults[a]; in the existing loop over c: affTo[c][t] += gain[c][a]; knowTo[c][t] += know[c][a]
+// unplace(a):    the mirror image. clone(): copies adultsAt and knowTo too. restore(): unchanged (goes through place/unplace).
+
+type objective struct{ iso, str, score int } // isolated adults, stranger pairs, displayed score
+func (o objective) better(p objective) bool  // o.iso < p.iso || (= && o.str < p.str) || (= && = && o.score > p.score)
+type delta struct{ iso, str, score int }
+func (d delta) improves() bool  // d.iso < 0 || (d.iso == 0 && (d.str < 0 || (d.str == 0 && d.score > 0)))
+func (d delta) notWorse() bool  // same with score >= 0
+func (d delta) better(e delta) bool // same order as objective.better
+
+func (l *layout) objective() objective // iso and score as today; str from §11.1, O(items)
+```
+
+**Move `a`: `ta → tb`** (x = `adults[a]`; `iso`, `score` exactly as §8.3/§10.4):
+
+```
+delta.str = x · [ (adultsAt[tb] − knowTo[a][tb]) − (adultsAt[ta] − x − knowTo[a][ta]) ]
+```
+
+Only pairs that contain `a` change; a's stranger adults at `tb` (it is not there yet) minus those at `ta` (itself excluded). O(1).
+
+**Swap `a` (at `ta`) ↔ `b` (at `tb`)**, x = `adults[a]`, y = `adults[b]`, `kab = [gain[a][b] > 0]` (then `know[a][b] = y`, `know[b][a] = x`):
+
+```
+strA_before = adultsAt[ta] − x − knowTo[a][ta]
+strA_after  = (adultsAt[tb] − y) − (knowTo[a][tb] − kab·y)       // b has left tb
+strB_before = adultsAt[tb] − y − knowTo[b][tb]
+strB_after  = (adultsAt[ta] − x) − (knowTo[b][ta] − kab·x)       // a has left ta
+delta.str   = x·(strA_after − strA_before) + y·(strB_after − strB_before)
+```
+
+Every changed pair contains `a` or `b`, never both (they are at different tables before and after), so nothing is double-counted. O(1). Both formulas are exact integers; the property test (§11.6 S-Δ) is their oracle.
+
+```mermaid
+flowchart TD
+    S["step: move a ta→tb, or swap a(ta)↔b(tb)"] --> I["ΔI: §8.3 tables (adults weights, §10.4)"]
+    S --> T["Δstr: O(1) from adultsAt, knowTo (§11.3)"]
+    S --> P["pairΔ: affTo / gain (unchanged)"]
+    I --> D["delta = (iso: ΔI, str: Δstr, score: pairΔ − IsolationPenalty·ΔI)"]
+    T --> D
+    P --> D
+    D --> U{"used by"}
+    U --> R["repairFloor: best candidate by delta.better (triple)"]
+    U --> A["anneal: notWorse → accept; else exp((score − wI·iso − wS·str)/T); best-seen by objective.better"]
+    U --> M["improve: apply iff delta.improves() (triple)"]
+    U --> O["optimise: restart winner by objective.better (triple), earliest on ties"]
+```
+
+*Legend:* the same value-object pattern as §8 (`objective` / `delta` with one lexicographic order), extended by one component; no new type, no Strategy. `known ⇔ gain > 0` reuses the existing adjacency (DRY): `know` is `nbr` with adult weights.
+
+### 11.4 Where the triple is used
+
+- **`repairFloor`** (`liftByMove`, `liftBySwap`): candidate chosen by `delta.better` (triple). No other change.
+- **`anneal`:** accept when `d.notWorse()` (triple); otherwise with probability `exp((d.score − annealIsoWeight·d.iso − annealStrangerWeight·d.str) / T)`. New constant **`annealStrangerWeight = 2`** (one stranger pair weighs like one group-1 pair of single adults); a walk-only knob like `annealIsoWeight`, never deciding what is returned. Backend-Go tunes it the way `annealIsoWeight` was tuned (generated (instance, capacity) cases, total (isolated, stranger pairs) left, w ∈ {0, 1, 2, 4, 8}; record the table in the constant's comment). `cur` gets `str += d.str`; best-seen by `objective.better`.
+- **`optimise` / `optimiseWith`:** restart winner by the triple; postcondition: `objective(result)` not worse than `objective(start)` in the triple order.
+- **Skip condition:** `hasAffinity(movable)` is replaced by **`hasWeight(movable)`** = some movable item has `adults ≥ 1`. Without any affinity the stranger term still varies (example J: 12 + 8 → 10 + 10), so the anneal must run; a layout whose movable items are all children-only still skips (objective constant).
+- **`improve`:** unchanged code shape; `improves()` is the triple. Guarantee (testable): no single feasible move/swap lowers isolated adults, or keeps them and lowers stranger pairs, or keeps both and raises the score.
+- **k selection, best-effort fallback, `pack`:** unchanged.
+- **`proposeMixed`:** unchanged — compares `objective().iso` only (k0 vs k0 + 1). Each of its solves optimises the triple.
+
+### 11.5 Diagnostic and time
+
+- `TestDiagnoseIsolation` (test-only, §8.6): add `strangers=N` to every line (from `Evaluate(...).Summary.StrangerPairs`). Phase C uses it plus `POST /scenarios/calculate`. **The product diagnostic "z 1 stołem więcej: o N par obcych mniej" is dropped**: it would cost a sixth solve (≈ +0.9 s on 4 saturated cores) and a contract field available only on the proposal (gone after reload), and the pending mixed-plan change (§11.7) makes it moot.
+- **Time:** per step one more O(1) term; `place`/`unplace` update one more m × k matrix in the loop they already run; `clone` copies it. Expected +5–15% per solve (Generate ≈ 4.7–5.2 s live). Do **not** cut `annealRestarts`/steps to stay under 5 s (user: time is not a problem; the mixed-plan change raises the target to ≲ 8–10 s). Measure `BenchmarkProposeTight` `generate5` before/after on the same machine and a live `POST /scenarios/calculate` in Phase C; record both in 03-seating-model § Auto-seating (replace the "Expected after task 015" paragraph).
+
+### 11.6 Tests (B1) — real code paths, no mocks
+
+**Evaluate** (`evaluate_test.go` / new `strangers_test.go`):
+
+| # | Case | Expected |
+|---|---|---|
+| S-E1 | example I layout a, as a hand-built `Plan` | `Summary.StrangerPairs == 36`, `Summary.Isolated == 0`, `Score == 58` |
+| S-E2 | example I layout b | 18, 0, 48 |
+| S-E3 | family [5/2] (2 adults, 3 children) + stranger cluster [3/3] at one table | 6 pairs (children add none); every child's `StrangersAtTable` 0 |
+| S-E4 | two clusters with a level-2 link only | 0 pairs (level 2 = acquaintance) |
+| S-E5 | one cluster split by hand over one table and another (`cluster_split`), members back at one table with nobody else | 0 pairs |
+| S-E6 | unseated adults | no pairs |
+| S-E7 | generated instances with random child flags | `StrangerPairs == Σ adults' StrangersAtTable / 2` and that sum is even |
+
+**Deltas** (`propose_test.go` / `anneal_test.go`), each asserting `moveDelta`/`swapDelta` == `objective(after) − objective(before)` component-wise:
+S-D1 move `a` from a table of strangers to a table of acquaintances (Δstr = −x·(strangers left)); S-D2 move to a table with no adults (only the left side counts); S-D3 swap of two mutually known items `a`—`b` (the `kab` correction); S-D4 swap of strangers `a`, `b`; S-D5 swap where a third `c` at `ta` knows `b` only; S-D6 children-only item moves (Δ = (0, 0, 0)) and swaps (only the other item's term); S-D7 an item whose only "known" cluster is children-only (no `nbr`): all adults it meets are strangers.
+
+**Property** (extends the §8.7/§10.5 test, same generator incl. ~25% children): after pack/repair and after ≥ 2 000 random steps (hard rules ignored), every predicted delta == recomputed difference (iso, str, score); `Evaluate(toPlan)` gives `Summary.Isolated == iso`, `Summary.StrangerPairs == str`, `Summary.Score == score`.
+
+**Propose:**
+- S-P1 example I (capacity 12): 2 tables, `Isolated 0`, `StrangerPairs 18`, `Score 48` (before task 015: 36 / 58). B1 pins which of b / c is returned (determinism).
+- S-P2 *zero when possible*: generated instances built as a partition into acquainted groups (cliques of 1–4 clusters, each group 8–12 seats, capacity 12, k = ⌈N/12⌉ by construction), shuffled ids, plus random cross links (only add acquaintance); ≥ 30 seeds → `StrangerPairs == 0` and `Isolated == 0` every time.
+- S-P3 example J (20 singles, no links): fills 10 + 10, `StrangerPairs 90`.
+- S-P4 *brute-force oracle*: random instances of ≤ 8 items, capacity 12, k ≤ 3 (all feasible assignments enumerated, ≤ 3⁸): Propose's objective equals the lexicographic minimum of the triple (iso and str exactly; score too, the search is exhaustive enough at this size — if one seed differs, show it and assert iso, str only). This is where "strangers first, isolation before strangers" is checked against ground truth.
+- S-P5 *never worse*: on generated inputs `objective(result)` is not worse than the pack/repair start in the triple order (extends P5/P6); local optimality as in §11.4.
+- S-P6 determinism: run twice, identical plans (all fixtures above + the tight fixture + a children fixture).
+- S-P7 mixed plan rule unchanged: M1–M10 still pass; a k0 + 1 layout with fewer stranger pairs but equal isolated adults does **not** add the table.
+- **Existing expectations:** an expected plan may change only where the stranger term now decides (e.g. fixtures without links now get evened fills, example J; fixtures whose old optimum had avoidable strangers). Each changed expectation is justified in the commit message with the before/after triple; nothing is weakened (never compare scores across the order change as a regression: a lower score with fewer stranger pairs is correct).
+
+### 11.7 Pending: mixed plan objective and table count (TBD)
+
+Rules side: [../03-seating-model.md](../03-seating-model.md) § The mixed plan, "Pending change". **Not part of task 015 B1.** When decided, `proposeMixed` becomes a loop over k ∈ [k0, ⌊N/8⌋] — coarse solve per k (`feasibleAt` with a reduced, constant budget: an `optimiseWith(l, 8, annealSteps(m)/4, seedBase(k))`-style call), full solve (`optimise`) for the best one or two, winner by the chosen comparison (option A: the triple; option B: displayed score, then stranger pairs, then fewer tables), ties by smaller k; deterministic seeds per k. M1–M7 and the frontend's "1 stół więcej niż plan 12" note are replaced then. Expected Generate ≈ 6–7 s (≲ 8–10 s target).
+
+### 11.8 Pattern evaluation and audit (task 015)
+
+| Candidate | Verdict | Reason |
+|---|---|---|
+| Extend `objective` / `delta` by one component | **adopted** | One lexicographic order, explicit at every comparison site (as §8.8). |
+| Weighted sum `score − M·str` | rejected | Same reasons as for isolation: no safe M, hides intent. |
+| `knowTo` + `adultsAt` incremental state | **adopted** | O(1) deltas; `know` reuses the `gain > 0` adjacency (DRY). |
+| Recompute stranger pairs per step from table member lists | rejected | O(items at two tables) per step × 47M steps per Generate. |
+| Strangers as a violation / hard rule | rejected | Infeasible on the live data (example K); the user chose "maksymalnie unikać". |
+| Product diagnostic "z 1 stołem więcej: o N par obcych mniej" | dropped | Sixth solve + proposal-only contract field; superseded by the pending mixed-plan objective. |
+| Contract field `summary.strangerPairs` | rejected | `½ · Σ strangersAtTable` is exact and already in the payload. |
+| Missing-links report as an endpoint | rejected | Pure function of `GET /guests` + `GET /clusters`, ≈ 50 nodes; the client already holds both. |
+
+Audit: SRP kept (`seating` only); no new package or dependency; determinism and fixed budgets unchanged; one new walk-only constant (`annealStrangerWeight`).
