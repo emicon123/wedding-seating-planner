@@ -1,6 +1,7 @@
 # Stoliki: one container (Go binary serves API + SPA under /wesele), SQLite on a named volume.
 # Run from anywhere:  docker compose -f infra/compose.yml up -d --build
-# Config comes from infra/.env (copy infra/.env.example); every variable has a default.
+# Config comes from infra/.env (copy infra/.env.example). STOLIKI_PIN is required (no default): every
+# docker compose command for this project fails until infra/.env defines it, so the app can never run open.
 name: stoliki
 
 services:
@@ -15,9 +16,12 @@ services:
       PORT: "8080"                # container-internal; the host port is STOLIKI_HOST_PORT
       DB_PATH: /data/stoliki.db
       WEB_ROOT: /app/web
+      # Access gate (docs/architecture/05-access-gate.md): shared PIN, any length. Required and non-empty.
+      # The session key is generated on first start as /data/session.key (same dir as DB_PATH, in the volume).
+      STOLIKI_PIN: ${STOLIKI_PIN:?set STOLIKI_PIN in infra/.env}
       GOMEMLIMIT: ${GOMEMLIMIT:-150MiB}
     ports:
-      # Home LAN + local Tailscale daemon (user decision 2026-10-02: reachable from the home network, no login).
+      # Home LAN + local Tailscale daemon (user decision 2026-10-02: reachable from the home network; access gate = STOLIKI_PIN).
       # STOLIKI_BIND=127.0.0.1 restricts it back to loopback (tailnet-only via tailscale serve).
       - "${STOLIKI_BIND:-0.0.0.0}:${STOLIKI_HOST_PORT:-8094}:8080"
     volumes:
