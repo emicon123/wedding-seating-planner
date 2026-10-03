@@ -1,5 +1,5 @@
-import { CircleCheckIcon, TriangleAlertIcon } from 'lucide-react'
-import { peopleLabel, scoreLabel, violationCountLabel } from '@/domain/labels'
+import { CircleCheckIcon, TriangleAlertIcon, UserXIcon } from 'lucide-react'
+import { ISOLATED_LABEL, peopleLabel, scoreLabel, violationCountLabel } from '@/domain/labels'
 import type { PlanSummary } from '@/domain/types'
 import { cn } from '@/lib/utils'
 
@@ -27,8 +27,14 @@ function Figure({ label, value, tone, icon }: FigureProps) {
   )
 }
 
+type PlanFiguresProps = {
+  summary: PlanSummary
+  /** Guests "bez znajomych przy stole" (derived from the guest scores); a note, not a violation. */
+  isolated?: number
+}
+
 /** Table count, satisfaction score and violation count of a plan: the three numbers to compare. */
-export function PlanFigures({ summary }: { summary: PlanSummary }) {
+export function PlanFigures({ summary, isolated = 0 }: PlanFiguresProps) {
   const broken = summary.violationCount > 0
   return (
     <div className="space-y-2">
@@ -63,6 +69,12 @@ export function PlanFigures({ summary }: { summary: PlanSummary }) {
           </>
         )}
       </p>
+      {isolated > 0 && (
+        <p className="flex items-center gap-1 text-sm font-medium text-brick">
+          <UserXIcon aria-hidden="true" className="size-4 shrink-0" />
+          {ISOLATED_LABEL}: {isolated} os.
+        </p>
+      )}
     </div>
   )
 }

@@ -66,11 +66,11 @@ export function makePlan(tables: TableInput[], unseated: ClusterPlacement[] = []
       tableCount: tables.length,
       seatedCount,
       unseatedCount: size(unseated),
-      score: 42.5,
+      score: 42,
       violationCount: 1,
       needsRecalculation: true,
     },
-    tables: tables.map((table) => ({ ...table, fill: size(table.clusters), score: 7.5 })),
+    tables: tables.map((table) => ({ ...table, fill: size(table.clusters), score: 7 })),
     unseated,
     guestScores: [],
     violations: [

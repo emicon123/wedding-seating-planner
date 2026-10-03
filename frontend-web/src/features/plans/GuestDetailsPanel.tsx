@@ -1,8 +1,9 @@
-import { CheckIcon, MapPinIcon, XIcon } from 'lucide-react'
+import { CheckIcon, MapPinIcon, UserXIcon, XIcon } from 'lucide-react'
 import { GroupMark } from '@/components/GroupMark'
 import { Button } from '@/components/ui/button'
 import type { CompanionRow, GuestDetails } from '@/domain/guestDetails'
-import { peopleLabel, placeLabel, viaLabel } from '@/domain/labels'
+import { isIsolated } from '@/domain/isolation'
+import { ISOLATED_HINT, ISOLATED_LABEL, peopleLabel, placeLabel, viaLabel } from '@/domain/labels'
 import type { LinkLevel } from '@/domain/types'
 import { cn } from '@/lib/utils'
 
@@ -38,6 +39,14 @@ function Satisfaction({ details }: { details: GuestDetails }) {
   if (!score) return null
   return (
     <div className="space-y-1.5 rounded-lg border bg-background p-2.5 text-sm">
+      {isIsolated(score) && (
+        <p className="flex items-start gap-1.5 font-semibold text-brick">
+          <UserXIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            {ISOLATED_LABEL} — {ISOLATED_HINT}.
+          </span>
+        </p>
+      )}
       {score.preferredTotal > 0 ? (
         <>
           <p className="font-semibold">

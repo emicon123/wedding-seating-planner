@@ -3,6 +3,7 @@ import { Link } from 'react-router'
 import { TableGlyph } from '@/components/TableGlyph'
 import { buttonVariants } from '@/components/ui/button'
 import type { Capacity } from '@/domain/capacity'
+import { isolatedCount } from '@/domain/isolation'
 import type { Scenario } from '@/domain/types'
 import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
 import { FillBars } from '@/features/plans/FillBars'
@@ -36,7 +37,7 @@ export function PlanCard({
         </div>
       </header>
 
-      <PlanFigures summary={plan.summary} />
+      <PlanFigures summary={plan.summary} isolated={isolatedCount(plan.guestScores)} />
       <FillBars plan={plan} capacity={capacity} />
 
       {plan.summary.needsRecalculation && <RecalculationBanner violations={plan.violations} />}

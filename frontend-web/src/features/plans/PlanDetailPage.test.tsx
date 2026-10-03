@@ -77,6 +77,19 @@ describe('PlanDetailPage: the hall (read)', () => {
     ).toHaveLength(2)
   })
 
+  it('marks guests without acquaintances at the table, in the chips, the header and the panel', async () => {
+    await renderDetail('/plany/10?guest=4')
+
+    const maciek = chip('Maciek, Karolina Nowak') as HTMLElement
+    expect(within(maciek).getAllByText('Bez znajomych przy stole')).toHaveLength(2)
+    expect(within(chip('Zosia') as HTMLElement).queryByText('Bez znajomych przy stole')).toBeNull()
+    expect(screen.getByText('2 os.').previousSibling).toHaveTextContent('Bez znajomych przy stole')
+    const panel = screen.getByRole('region', { name: 'Szczegóły: Maciek' })
+    expect(
+      within(panel).getByText('Bez znajomych przy stole — nikt z grup 1 i 2 tu nie siedzi.'),
+    ).toBeInTheDocument()
+  })
+
   it('flags an over-full and an under-floor table with icon and text, not colour alone', async () => {
     const guests = (from: number, count: number) =>
       Array.from({ length: count }, (_, i) => placement(from + i, [from + i]))

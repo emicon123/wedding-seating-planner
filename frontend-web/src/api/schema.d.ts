@@ -644,7 +644,10 @@ export interface components {
             seatedCount: number;
             /** @example 0 */
             unseatedCount: number;
-            /** @example 318.5 */
+            /**
+             * @description Sum of the table scores (a whole number; negative possible).
+             * @example 318
+             */
             score: number;
             /** @example 0 */
             violationCount: number;
@@ -683,8 +686,8 @@ export interface components {
              */
             fill: number;
             /**
-             * @description Sum of the guests' satisfaction.
-             * @example 21.5
+             * @description Sum of the guests' satisfaction (a whole number; negative possible).
+             * @example 21
              */
             score: number;
             clusters: components["schemas"]["ClusterPlacement"][];
@@ -701,7 +704,7 @@ export interface components {
              */
             tableNumber: number | null;
             /**
-             * @description Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5).
+             * @description Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5), minus 1 when the guest is isolated: seated, with at least one enabled group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests.
              * @example 5.5
              */
             satisfaction: number;

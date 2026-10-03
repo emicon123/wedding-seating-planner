@@ -294,7 +294,7 @@ describe('useSetAssignment (optimistic)', () => {
     // optimistic: visible before the server answered
     await waitFor(() => expect(tableOf(cached(queryClient)?.[1], 4)).toBe(2))
     expect(cached(queryClient)?.[1]?.plan.tables.map((t) => t.fill)).toEqual([0, 4])
-    expect(cached(queryClient)?.[1]?.plan.summary.score).toBe(42.5) // scores untouched until the reply
+    expect(cached(queryClient)?.[1]?.plan.summary.score).toBe(42) // scores untouched until the reply
     expect(result.current.isPending).toBe(true)
 
     hold.open()

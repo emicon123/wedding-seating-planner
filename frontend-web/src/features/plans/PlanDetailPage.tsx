@@ -1,5 +1,5 @@
 import { useIsMutating } from '@tanstack/react-query'
-import { ChevronLeftIcon, EyeIcon, PlusIcon, PrinterIcon } from 'lucide-react'
+import { ChevronLeftIcon, EyeIcon, PlusIcon, PrinterIcon, UserXIcon } from 'lucide-react'
 import { useCallback, useEffect, useEffectEvent, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -20,7 +20,14 @@ import type { Capacity } from '@/domain/capacity'
 import { tableElementId } from '@/domain/dropTargets'
 import { guestDetails, placeOf } from '@/domain/guestDetails'
 import { buildGuestIndex } from '@/domain/guestIndex'
-import { peopleLabel, scoreLabel, tableCountLabel, violationCountLabel } from '@/domain/labels'
+import { isolatedCount } from '@/domain/isolation'
+import {
+  ISOLATED_LABEL,
+  peopleLabel,
+  scoreLabel,
+  tableCountLabel,
+  violationCountLabel,
+} from '@/domain/labels'
 import { guestTableMap } from '@/domain/planView'
 import type { ClusterOverview, ClusterPlacement, Guest } from '@/domain/types'
 import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
@@ -281,6 +288,15 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
               <dt className="text-muted-foreground">Zadowolenie</dt>
               <dd className="font-semibold">{saving ? '…' : scoreLabel(plan.summary.score)}</dd>
             </div>
+            {!saving && isolatedCount(plan.guestScores) > 0 && (
+              <div className="flex gap-1.5 text-brick">
+                <dt className="flex items-center gap-1">
+                  <UserXIcon aria-hidden="true" className="size-4" />
+                  {ISOLATED_LABEL}
+                </dt>
+                <dd className="font-semibold">{isolatedCount(plan.guestScores)} os.</dd>
+              </div>
+            )}
             <div className="flex gap-1.5">
               <dt className="text-muted-foreground">Naruszenia</dt>
               <dd className="font-semibold">

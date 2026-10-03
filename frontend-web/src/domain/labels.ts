@@ -182,7 +182,15 @@ export const GENERATE_SAVED_MESSAGE = (capacities: readonly number[]) =>
 export const UNDO_DONE_MESSAGE = 'Przywrócono poprzednie plany.'
 export const UNDO_REFUSED_MESSAGE = 'Nie można cofnąć — plany zmieniono po wygenerowaniu.'
 
-/** A satisfaction score the way the server computed it: 301 or 318,5 (never rounded further). */
+/** Isolated guest (task 011): has group 1/2 partners, none of them at the table. */
+export const ISOLATED_LABEL = 'Bez znajomych przy stole'
+export const ISOLATED_HINT = 'nikt z grup 1 i 2 tu nie siedzi'
+
+/**
+ * A score the way the server computed it. Table and plan scores are whole numbers and can be
+ * negative (a "-3" is fine: isolated guests cost 1 each); only a single guest's satisfaction can
+ * end in ,5.
+ */
 export const scoreLabel = (score: number) =>
   score.toLocaleString('pl-PL', { maximumFractionDigits: 1 })
 

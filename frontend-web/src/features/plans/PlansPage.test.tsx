@@ -23,7 +23,7 @@ describe('PlansPage: compare the four plans', () => {
 
     const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
     expect(within(ten).getByText('Stoły').nextSibling).toHaveTextContent('3')
-    expect(within(ten).getByText('Zadowolenie').nextSibling).toHaveTextContent('42,5')
+    expect(within(ten).getByText('Zadowolenie').nextSibling).toHaveTextContent('42')
     expect(within(ten).getByText('Bez naruszeń', { exact: false })).toBeInTheDocument()
     expect(within(ten).getByRole('img', { name: /Obłożenie stołów.*8, 8, 8/ })).toBeInTheDocument()
 
@@ -34,6 +34,26 @@ describe('PlansPage: compare the four plans', () => {
       'Plan na 11 miejsc',
       'Plan na 12 miejsc',
     ])
+  })
+
+  it('counts the guests without acquaintances at the table on the card', async () => {
+    const plan = {
+      ...makePlan([{ number: 1, clusters: [] }]),
+      guestScores: [-1, -1, 0].map((satisfaction, id) => ({
+        guestId: id + 1,
+        tableNumber: 1,
+        satisfaction,
+        preferredTotal: 0,
+        preferredAtTable: 0,
+        fallbackAtTable: 0,
+        strangersAtTable: 0,
+      })),
+    }
+    serveScenarios([makeScenario(10, plan)])
+    renderPage(<PlansPage />)
+
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    expect(within(ten).getByText('Bez znajomych przy stole: 2 os.')).toBeInTheDocument()
   })
 
   it('links every card to its floor plan under the router basename', async () => {

@@ -131,8 +131,8 @@ export function detailScenario(): Scenario {
     ),
   )
   plan.guestScores = [
-    score(4, 1, { preferredTotal: 2, preferredAtTable: 0, strangersAtTable: 1 }),
-    score(5, 1, { preferredTotal: 2, preferredAtTable: 0, strangersAtTable: 1 }),
+    score(4, 1, { satisfaction: -1, preferredTotal: 2, preferredAtTable: 0, strangersAtTable: 1 }),
+    score(5, 1, { satisfaction: -1, preferredTotal: 2, preferredAtTable: 0, strangersAtTable: 1 }),
     score(8, 1, { preferredTotal: 1, preferredAtTable: 1, fallbackAtTable: 2 }),
     score(6, 2),
     score(7, 2),
