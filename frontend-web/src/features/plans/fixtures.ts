@@ -1,5 +1,13 @@
 import { http } from 'msw'
-import type { Capacity, Guest, GuestScore, Proposal, Scenario, SeatingPlan } from '@/domain/types'
+import type {
+  Capacity,
+  Guest,
+  GuestScore,
+  Proposal,
+  Scenario,
+  ScenariosReplace,
+  SeatingPlan,
+} from '@/domain/types'
 import {
   KAROLINA,
   MACIEK,
@@ -12,7 +20,7 @@ import {
   placement,
   withoutViolations,
 } from '@/test/builders'
-import { apiUrl, HttpResponse, list, server, single } from '@/test/server'
+import { apiUrl, failure, HttpResponse, list, mockApi, server, single } from '@/test/server'
 
 /** `count` tables with `fill` single guests each; ids are unique per plan. */
 export function evenPlan(count: number, fill: number): SeatingPlan {
@@ -43,6 +51,44 @@ export function fourProposals(): Proposal[] {
     { capacity: 11, basedOnVersion: 3, plan: evenPlan(2, 11) },
     { capacity: 12, basedOnVersion: 2, plan: evenPlan(2, 12) },
   ]
+}
+
+type GenerateFlow = {
+  /** The stored plans before Generate (GET /scenarios answers with them). */
+  before: Scenario[]
+  /** What POST /scenarios/calculate computes. */
+  proposals: Proposal[]
+  /** Answers of the successive PUT /scenarios calls: the Generate first, then (optionally) Cofnij. */
+  stored: Scenario[][]
+}
+
+/**
+ * A small server that remembers: GET answers with what is stored, calculate with the proposals, and
+ * every PUT /scenarios is checked like the real one (a stale basedOnVersion on any plan = 409,
+ * nothing changes) before the next prepared answer becomes the stored state.
+ */
+export function serveGenerateFlow({ before, proposals, stored }: GenerateFlow) {
+  let current = before
+  const answers = [...stored]
+  server.use(http.get(apiUrl('/scenarios'), () => HttpResponse.json(list(current))))
+  const calculate = mockApi('post', '/scenarios/calculate', () =>
+    HttpResponse.json(list(proposals)),
+  )
+  const put = mockApi('put', '/scenarios', (body) => {
+    const { plans } = body as ScenariosReplace
+    const stale = plans.some(
+      (plan) =>
+        current.find((scenario) => scenario.capacity === plan.capacity)?.version !==
+        plan.basedOnVersion,
+    )
+    const next = answers.shift()
+    if (stale || !next) {
+      return HttpResponse.json(failure('version_conflict', 'version'), { status: 409 })
+    }
+    current = next
+    return HttpResponse.json(list(current))
+  })
+  return { calculate, put }
 }
 
 /** GET /scenarios served from the given plans. */

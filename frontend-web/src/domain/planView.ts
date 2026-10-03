@@ -1,28 +1,63 @@
+import { CAPACITIES } from '@/domain/capacity'
 import type {
   Capacity,
   ClusterPlacement,
-  Proposal,
+  GenerateUndo,
   Scenario,
+  ScenariosReplace,
   SeatingPlan,
   TableLayout,
   Violation,
 } from '@/domain/types'
 
-/** The layout `PUT .../assignments` expects for a proposal: every table with its guests. */
-export function toAcceptTables(plan: SeatingPlan): TableLayout[] {
+/** What `PUT /scenarios` stores for a plan: every table with its guests and its pinned guests. */
+export function toTableLayouts(plan: SeatingPlan): TableLayout[] {
   return plan.tables.map((table) => ({
     number: table.number,
     guestIds: table.clusters.flatMap((cluster) => cluster.guestIds),
+    pinnedGuestIds: table.clusters
+      .filter((cluster) => cluster.pinned)
+      .flatMap((cluster) => cluster.guestIds),
   }))
 }
 
-/** A proposal is stale when the plan changed after it was generated: the server would answer 409. */
-export function isProposalStale(proposal: Proposal, scenario: Scenario | undefined): boolean {
-  return scenario !== undefined && scenario.version !== proposal.basedOnVersion
+type PlanToStore = { capacity: Capacity; basedOnVersion: number; plan: SeatingPlan }
+
+/** The body of `PUT /scenarios`: all four plans, each replacing the stored version it names. */
+export function toScenariosReplace(plans: PlanToStore[]): ScenariosReplace {
+  return {
+    plans: plans.map(({ capacity, basedOnVersion, plan }) => ({
+      capacity,
+      basedOnVersion,
+      tables: toTableLayouts(plan),
+    })),
+  }
 }
 
-export function withoutProposal(proposals: Proposal[], capacity: Capacity): Proposal[] {
-  return proposals.filter((proposal) => proposal.capacity !== capacity)
+/** The version of each plan, by capacity. Throws when a plan is missing (the API always sends four). */
+export function versionsOf(scenarios: Scenario[]): Record<Capacity, number> {
+  const versions = {} as Record<Capacity, number>
+  for (const capacity of CAPACITIES) {
+    const scenario = scenarios.find((candidate) => candidate.capacity === capacity)
+    if (!scenario) throw new Error(`Brak planu na ${capacity} miejsc`)
+    versions[capacity] = scenario.version
+  }
+  return versions
+}
+
+/**
+ * Cofnij is offered only while every plan still has the version the last Generate produced: any
+ * move, pin, table change, delete or other Generate (here or on another device) moves a version on.
+ */
+export function canUndoGenerate(
+  undo: GenerateUndo | undefined,
+  scenarios: Scenario[] | undefined,
+): boolean {
+  if (!undo || !scenarios || scenarios.length === 0) return false
+  return (
+    scenarios.length === CAPACITIES.length &&
+    scenarios.every((scenario) => scenario.version === undo.generatedVersions[scenario.capacity])
+  )
 }
 
 /** guestId -> table number (null = unseated). Guests the plan does not list are absent. */

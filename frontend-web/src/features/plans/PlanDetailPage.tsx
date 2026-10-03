@@ -1,13 +1,13 @@
 import { useIsMutating } from '@tanstack/react-query'
 import { ChevronLeftIcon, EyeIcon, PlusIcon, PrinterIcon } from 'lucide-react'
 import { useCallback, useEffect, useEffectEvent, useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { useClusterOverview } from '@/api/clusters'
 import { errorMessage } from '@/api/errorMessage'
 import { useGuests } from '@/api/guests'
 import {
-  CALCULATE_MUTATION_KEY,
+  GENERATE_MUTATION_KEY,
   useAddTable,
   useDeleteAssignment,
   useDeleteTable,
@@ -33,6 +33,7 @@ import { PlanSearch } from '@/features/plans/PlanSearch'
 import { PlanSwitcher } from '@/features/plans/PlanSwitcher'
 import { type PlanView } from '@/features/plans/planViewContext'
 import { RecalculationBanner } from '@/features/plans/RecalculationBanner'
+import { UndoGenerateBar } from '@/features/plans/UndoGenerateBar'
 
 const NO_GUESTS: Guest[] = []
 const NO_OVERVIEW: ClusterOverview = { clusters: [], warnings: [] }
@@ -60,11 +61,11 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
   const guestsQuery = useGuests()
   const overviewQuery = useClusterOverview()
   const [params, setParams] = useSearchParams()
-  const navigate = useNavigate()
-  // Generate is not a save: it writes nothing, so it must not hide the plan's numbers.
+  // Generate is not an edit in flight: the plan on screen stays as it is until the result lands, so
+  // it must not hide the plan's numbers.
   const saving =
     useIsMutating({
-      predicate: (mutation) => mutation.options.mutationKey !== CALCULATE_MUTATION_KEY,
+      predicate: (mutation) => mutation.options.mutationKey !== GENERATE_MUTATION_KEY,
     }) > 0
   const { mutateAsync: setAssignment } = useSetAssignment()
   const { mutateAsync: deleteAssignment } = useDeleteAssignment()
@@ -234,6 +235,8 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
         {scenarios.data && <PlanSwitcher current={capacity} scenarios={scenarios.data} />}
       </header>
 
+      <UndoGenerateBar />
+
       {loading && <p className="text-muted-foreground">Wczytuję plan…</p>}
 
       {failed && (
@@ -287,10 +290,7 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
           </dl>
 
           {!saving && plan.summary.needsRecalculation && (
-            <RecalculationBanner
-              violations={plan.violations}
-              onGenerated={() => void navigate('/')}
-            />
+            <RecalculationBanner violations={plan.violations} />
           )}
 
           <div className="flex flex-wrap items-center gap-2">

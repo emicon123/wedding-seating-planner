@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Trash2Icon } from 'lucide-react'
-import { useProposals, useResetPlan, useScenarios } from '@/api/scenarios'
+import { useResetPlan, useScenarios } from '@/api/scenarios'
 import { errorMessage } from '@/api/errorMessage'
 import { Button } from '@/components/ui/button'
 import { CAPACITIES, type Capacity } from '@/domain/capacity'
@@ -9,19 +9,18 @@ import type { Scenario } from '@/domain/types'
 import { DeletePlanDialog } from '@/features/plans/DeletePlanDialog'
 import { GenerateButton } from '@/features/plans/GenerateButton'
 import { PlanCard } from '@/features/plans/PlanCard'
-import { ProposalPreview } from '@/features/plans/ProposalPreview'
+import { UndoGenerateBar } from '@/features/plans/UndoGenerateBar'
 
 type DeleteTarget = { kind: 'one'; capacity: Capacity } | { kind: 'all' }
 
 /**
  * The four plans (9, 10, 11, 12 seats) side by side: the answer to "how many tables, how happy, what
- * is wrong". Generate always computes all four; its result is a preview until accepted. This
+ * is wrong". Generate always computes and stores all four at once (Cofnij undoes it). This
  * page also owns "Usuń plan" / "Usuń wszystkie plany" (task 005): the cards only report the
  * intent, the dialog confirms, and one reset call per plan empties it on the server.
  */
 export function PlansPage() {
   const scenarios = useScenarios()
-  const proposals = useProposals().data
   const reset = useResetPlan()
   const [target, setTarget] = useState<DeleteTarget | null>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
@@ -91,9 +90,7 @@ export function PlansPage() {
         <GenerateButton size="lg" />
       </header>
 
-      {scenarios.isSuccess && proposals && proposals.length > 0 && (
-        <ProposalPreview proposals={proposals} scenarios={scenarios.data} />
-      )}
+      <UndoGenerateBar />
 
       {scenarios.isPending && <p className="text-muted-foreground">Wczytuję plany…</p>}
 

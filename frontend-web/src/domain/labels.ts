@@ -170,8 +170,13 @@ export function placeLabel(place: number | 'unseated' | 'disabled'): string {
   return `stół ${place}`
 }
 
-export const acceptConflictMessage = (capacity: number) =>
-  `Plan na ${capacity} miejsc zmienił się od wygenerowania propozycji. Wygeneruj plany ponownie.`
+/** Task 007: the plans changed between reading them and storing the Generate (409, nothing stored). */
+export const GENERATE_CONFLICT_MESSAGE =
+  'Plany zmieniły się w międzyczasie — kliknij „Generuj plany” jeszcze raz.'
+export const GENERATE_SAVED_MESSAGE = (capacities: readonly number[]) =>
+  `Zapisano nowe plany: ${capacities.join(', ')} miejsc.`
+export const UNDO_DONE_MESSAGE = 'Przywrócono poprzednie plany.'
+export const UNDO_REFUSED_MESSAGE = 'Nie można cofnąć — plany zmieniono po wygenerowaniu.'
 
 /** A satisfaction score the way the server computed it: 301 or 318,5 (never rounded further). */
 export const scoreLabel = (score: number) =>

@@ -9,8 +9,8 @@ import { client, unwrap } from '@/api/client'
 import { ApiError } from '@/api/errors'
 import { keys } from '@/api/keys'
 import { applyMove, findPlacement } from '@/domain/optimistic'
-import { withoutProposal } from '@/domain/planView'
-import type { AcceptPlan, Capacity, Proposal, Scenario } from '@/domain/types'
+import { toScenariosReplace, versionsOf } from '@/domain/planView'
+import type { Capacity, GenerateUndo, Proposal, Scenario, ScenariosReplace } from '@/domain/types'
 
 type CapacityArg = { capacity: Capacity }
 
@@ -27,70 +27,104 @@ function replaceScenario(queryClient: QueryClient, scenario: Scenario): void {
   )
 }
 
-// --- proposals: transient, server-derived, owned by the query cache (no client store) -------
+// --- Generate and Cofnij (task 007): the plans are stored at once; the undo snapshot is transient ---
 
 /** Lets every "Generuj" button know that one of them is running (`useIsMutating`). */
-export const CALCULATE_MUTATION_KEY = ['calculateProposals'] as const
+export const GENERATE_MUTATION_KEY = ['generatePlans'] as const
 
-/** Generates all four proposals (pure server computation) and parks them in the cache. */
-export function useCalculateProposals() {
+const isConflict = (error: unknown): boolean => error instanceof ApiError && error.status === 409
+
+/** 409 (a plan changed) or 422 (a guest is gone): the stored plans are not what the snapshot expects. */
+const refusesStaleSnapshot = (error: unknown): boolean =>
+  error instanceof ApiError && (error.status === 409 || error.status === 422)
+
+async function putScenarios(body: ScenariosReplace): Promise<Scenario[]> {
+  return (await unwrap(client.PUT('/scenarios', { body }))).data
+}
+
+/**
+ * "Generuj plany": read the four plans fresh (= the undo snapshot), compute the four proposals, and
+ * store them in one atomic PUT that names the snapshot's versions, so what is overwritten is exactly
+ * the snapshot. Nothing is stored on any error. Toasts are the caller's job.
+ */
+export function useGeneratePlans() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationKey: CALCULATE_MUTATION_KEY,
-    mutationFn: async (): Promise<Proposal[]> =>
-      (await unwrap(client.POST('/scenarios/calculate'))).data,
-    onSuccess: (proposals) => queryClient.setQueryData(keys.proposals, proposals),
+    mutationKey: GENERATE_MUTATION_KEY,
+    mutationFn: async (): Promise<{ stored: Scenario[]; undo: GenerateUndo }> => {
+      const snapshot = await queryClient.fetchQuery({
+        queryKey: keys.scenarios,
+        queryFn: async (): Promise<Scenario[]> => (await unwrap(client.GET('/scenarios'))).data,
+        staleTime: 0,
+      })
+      const versions = versionsOf(snapshot)
+      const proposals: Proposal[] = (await unwrap(client.POST('/scenarios/calculate'))).data
+      const stored = await putScenarios(
+        toScenariosReplace(
+          proposals.map(({ capacity, plan }) => ({
+            capacity,
+            basedOnVersion: versions[capacity],
+            plan,
+          })),
+        ),
+      )
+      return { stored, undo: { previous: snapshot, generatedVersions: versionsOf(stored) } }
+    },
+    onSuccess: ({ stored, undo }) => {
+      queryClient.setQueryData(keys.scenarios, stored)
+      queryClient.setQueryData(keys.generateUndo, undo)
+    },
+    onError: (error) => {
+      // someone changed a plan meanwhile: show what is stored now
+      if (isConflict(error)) void queryClient.invalidateQueries({ queryKey: keys.scenarios })
+    },
   })
 }
 
-/** The preview: whatever the last Generate stored. Never fetches, `undefined` when there is none. */
-export function useProposals() {
-  return useQuery<Proposal[]>({
-    queryKey: keys.proposals,
+/** The undo snapshot of the last Generate in this tab. Never fetches, `undefined` when there is none. */
+export function useGenerateUndo() {
+  return useQuery<GenerateUndo>({
+    queryKey: keys.generateUndo,
     queryFn: skipToken,
     staleTime: Infinity,
     gcTime: Infinity,
   })
 }
 
-/** Returns a function that clears the preview (after "Akceptuj wszystkie" or "Odrzuć"). */
-export function useDiscardProposals() {
+/** Returns a function that forgets the undo snapshot (the bar's "×"). */
+export function useDismissGenerateUndo() {
   const queryClient = useQueryClient()
   return (): void => {
-    void queryClient.resetQueries({ queryKey: keys.proposals })
+    void queryClient.resetQueries({ queryKey: keys.generateUndo })
   }
 }
 
-/** Returns a function that removes one accepted proposal from the preview, keeping the others. */
-export function useDropProposal() {
-  const queryClient = useQueryClient()
-  return (capacity: Capacity): void => {
-    queryClient.setQueryData<Proposal[]>(keys.proposals, (current) =>
-      current ? withoutProposal(current, capacity) : current,
-    )
-  }
-}
-
-type AcceptVars = CapacityArg & AcceptPlan
-
-export function useAcceptProposal() {
+/**
+ * "Cofnij": stores the snapshot again, naming the versions the Generate produced. 409/422: the
+ * server changed nothing, so the offer is dropped and the real plans are refetched. Other errors
+ * keep the snapshot so the user can retry. Toasts are the caller's job.
+ */
+export function useUndoGenerate() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ capacity, ...body }: AcceptVars): Promise<Scenario> =>
-      (
-        await unwrap(
-          client.PUT('/scenarios/{capacity}/assignments', {
-            params: { path: { capacity } },
-            body,
-          }),
-        )
-      ).data,
-    onSuccess: (scenario) => replaceScenario(queryClient, scenario),
+    mutationFn: async (undo: GenerateUndo): Promise<Scenario[]> =>
+      putScenarios(
+        toScenariosReplace(
+          undo.previous.map(({ capacity, plan }) => ({
+            capacity,
+            basedOnVersion: undo.generatedVersions[capacity],
+            plan,
+          })),
+        ),
+      ),
+    onSuccess: (restored) => {
+      queryClient.setQueryData(keys.scenarios, restored)
+      void queryClient.resetQueries({ queryKey: keys.generateUndo })
+    },
     onError: (error) => {
-      // stale basedOnVersion: someone changed the plan, so show them what is there now
-      if (error instanceof ApiError && error.status === 409) {
-        void queryClient.invalidateQueries({ queryKey: keys.scenarios })
-      }
+      if (!refusesStaleSnapshot(error)) return
+      void queryClient.resetQueries({ queryKey: keys.generateUndo })
+      void queryClient.invalidateQueries({ queryKey: keys.scenarios })
     },
   })
 }
@@ -205,8 +239,8 @@ export function useDeleteTable() {
 
 /**
  * "Usuń plan": the server empties the plan (no tables, no pins, everyone unseated). Not optimistic:
- * it is destructive and rare, so the UI waits for the evaluated copy. The plan's version moved, so
- * the preview's proposal for that capacity is stale and goes too. Toasts are the caller's job.
+ * it is destructive and rare, so the UI waits for the evaluated copy. Its version moves, so a pending
+ * Cofnij hides itself (`canUndoGenerate`). Toasts are the caller's job.
  */
 export function useResetPlan() {
   const queryClient = useQueryClient()
@@ -217,11 +251,6 @@ export function useResetPlan() {
           client.DELETE('/scenarios/{capacity}/tables', { params: { path: { capacity } } }),
         )
       ).data,
-    onSuccess: (scenario) => {
-      replaceScenario(queryClient, scenario)
-      queryClient.setQueryData<Proposal[]>(keys.proposals, (current) =>
-        current ? withoutProposal(current, scenario.capacity) : current,
-      )
-    },
+    onSuccess: (scenario) => replaceScenario(queryClient, scenario),
   })
 }

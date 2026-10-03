@@ -1,6 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { PlanDetailPage } from '@/features/plans/PlanDetailPage'
-import { detailScenario, serveDetail } from '@/features/plans/fixtures'
+import { detailScenario, serveDetail, serveGenerateFlow } from '@/features/plans/fixtures'
 import type { PlanTable, Scenario } from '@/domain/types'
 import { makePlan, makeScenario, placement, withoutViolations } from '@/test/builders'
 import { renderPage } from '@/test/renderPage'
@@ -11,6 +11,21 @@ const table = (number: number) => screen.getByRole('region', { name: `Stół ${n
 const chip = (names: string) =>
   screen.getByRole('button', { name: `Przeciągnij paczkę: ${names}` }).closest('[data-cluster]')!
 const tray = () => screen.getByRole('region', { name: /Bez stołu/ })
+
+/** The detail plan with one rule broken, so the "Przelicz / Generuj" call to action shows. */
+function brokenDetail(): Scenario {
+  const base = detailScenario()
+  return {
+    ...base,
+    plan: {
+      ...base.plan,
+      violations: [
+        { code: 'unseated_guests' as const, message: 'x', tableNumber: null, guestIds: [11] },
+      ],
+      summary: { ...base.plan.summary, violationCount: 1, needsRecalculation: true },
+    },
+  }
+}
 
 async function renderDetail(path = '/plany/10') {
   serveDetail()
@@ -100,15 +115,8 @@ describe('PlanDetailPage: the hall (read)', () => {
   })
 
   it('the call to action stays on screen while Generate runs and sends one calculate request', async () => {
-    const base = detailScenario()
-    const plan = {
-      ...base.plan,
-      violations: [
-        { code: 'unseated_guests' as const, message: 'x', tableNumber: null, guestIds: [11] },
-      ],
-      summary: { ...base.plan.summary, violationCount: 1, needsRecalculation: true },
-    }
-    serveDetail({ ...base, plan })
+    const base = brokenDetail()
+    serveDetail(base)
     const hold = gate()
     const calculate = mockApi('post', '/scenarios/calculate', async () => {
       await hold.opened
@@ -118,7 +126,7 @@ describe('PlanDetailPage: the hall (read)', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Przelicz / Generuj' }))
 
-    expect(await screen.findByRole('button', { name: 'Liczę plany…' })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: 'Liczę i zapisuję plany…' })).toBeDisabled()
     expect(screen.getByText('Wymaga przeliczenia')).toBeInTheDocument()
     expect(calculate.calls).toHaveLength(1)
     hold.open()
@@ -586,5 +594,93 @@ describe('PlanDetailPage: keyboard drag and drop', () => {
     })
     expect(live).toBeInTheDocument()
     expect(document.body).toHaveTextContent('Aby przenieść paczkę, naciśnij spację')
+  })
+})
+
+describe('PlanDetailPage: Generate stores at once, Cofnij', () => {
+  /** After Generate the hall has a third table (Zosia alone) and no violations; versions + 1. */
+  function generatedHall(): Scenario[] {
+    const base = detailScenario()
+    const plan = withoutViolations(
+      makePlan(
+        [
+          { number: 1, clusters: [placement(4, [4, 5], true)] },
+          { number: 2, clusters: [placement(6, [6, 7])] },
+          { number: 3, clusters: [placement(8, [8]), placement(11, [11])] },
+        ],
+        [],
+      ),
+    )
+    return [9, 10, 11, 12].map((capacity) =>
+      makeScenario(capacity as Scenario['capacity'], capacity === 10 ? plan : base.plan, 9),
+    )
+  }
+  const before = (): Scenario[] =>
+    [9, 10, 11, 12].map((capacity) =>
+      capacity === 10
+        ? brokenDetail()
+        : makeScenario(capacity as Scenario['capacity'], detailScenario().plan, 1),
+    )
+
+  async function generateOnDetail(stored: Scenario[][] = []) {
+    const initial = before()
+    serveDetail(brokenDetail())
+    const flow = serveGenerateFlow({
+      before: initial,
+      proposals: [9, 10, 11, 12].map((capacity) => ({
+        capacity: capacity as Scenario['capacity'],
+        basedOnVersion: 0,
+        plan: generatedHall()[1]!.plan,
+      })),
+      stored: [generatedHall(), ...stored],
+    })
+    const rendered = renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    await rendered.user.click(await screen.findByRole('button', { name: 'Przelicz / Generuj' }))
+    await screen.findByText('Wygenerowano nowe plany. Poprzednie można przywrócić.')
+    return { ...rendered, flow }
+  }
+
+  it('shows the generated tables and guests right here, with no navigation and no preview', async () => {
+    const { flow } = await generateOnDetail()
+
+    expect(await screen.findByRole('region', { name: 'Stół 3' })).toBeInTheDocument()
+    expect(within(table(3)).getByText('Zosia')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Plan na 10 miejsc' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Przelicz / Generuj' })).toBeNull() // plan is calm now
+    expect(screen.getByTestId('search')).toHaveTextContent('')
+    expect(flow.put.calls).toHaveLength(1)
+    expect(
+      await screen.findByText('Zapisano nowe plany: 9, 10, 11, 12 miejsc.'),
+    ).toBeInTheDocument()
+  })
+
+  it('Cofnij brings the previous tables back', async () => {
+    const restored = before().map((s) => ({ ...s, version: s.version + 9 }))
+    const { user } = await generateOnDetail([restored])
+    await screen.findByRole('region', { name: 'Stół 3' })
+
+    await user.click(screen.getByRole('button', { name: 'Cofnij' }))
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Stół 3' })).toBeNull())
+    expect(table(1)).toBeInTheDocument()
+    expect(await screen.findByText('Przywrócono poprzednie plany.')).toBeInTheDocument()
+    expect(screen.queryByText('Wygenerowano nowe plany. Poprzednie można przywrócić.')).toBeNull()
+  })
+
+  it('the bar goes away after a move on this page', async () => {
+    const { user } = await generateOnDetail()
+    await screen.findByRole('region', { name: 'Stół 3' })
+    mockApi('put', '/scenarios/10/assignments/6', () =>
+      HttpResponse.json(single(makeScenario(10, generatedHall()[1]!.plan, 10))),
+    )
+
+    await user.click(menuOf('Michał, Ola'))
+    await user.click(await screen.findByRole('menuitem', { name: /Stół 1/ }))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Wygenerowano nowe plany. Poprzednie można przywrócić.'),
+      ).toBeNull(),
+    )
   })
 })

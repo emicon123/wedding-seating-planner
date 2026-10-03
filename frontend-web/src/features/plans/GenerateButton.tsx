@@ -2,39 +2,39 @@ import { useIsMutating } from '@tanstack/react-query'
 import { Loader2Icon, SparklesIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { errorMessage } from '@/api/errorMessage'
-import { CALCULATE_MUTATION_KEY, useCalculateProposals } from '@/api/scenarios'
+import { ApiError } from '@/api/errors'
+import { GENERATE_MUTATION_KEY, useGeneratePlans } from '@/api/scenarios'
 import { Button } from '@/components/ui/button'
+import { GENERATE_CONFLICT_MESSAGE, GENERATE_SAVED_MESSAGE } from '@/domain/labels'
 
 type GenerateButtonProps = {
   label?: string
   variant?: 'default' | 'outline'
   size?: 'default' | 'lg'
-  /** Called once the four proposals are in the preview (the detail page uses it to go there). */
-  onGenerated?: () => void
 }
 
 /**
- * Generate always means all four plans (user requirement). The result is a preview that is
- * only stored when accepted. Any "Generuj" button on the screen disables while one is running.
+ * Generate always means all four plans (user requirement) and they are stored at once: the page
+ * you are on re-renders from the updated cache, nothing to accept, no navigation. "Cofnij" lives in
+ * `UndoGenerateBar`. Any "Generuj" button on the screen disables while one is running.
  */
 export function GenerateButton({
   label = 'Generuj plany',
   variant = 'default',
   size = 'default',
-  onGenerated,
 }: GenerateButtonProps) {
-  const { mutateAsync } = useCalculateProposals()
-  const running = useIsMutating({ mutationKey: CALCULATE_MUTATION_KEY }) > 0
+  const { mutateAsync } = useGeneratePlans()
+  const running = useIsMutating({ mutationKey: GENERATE_MUTATION_KEY }) > 0
 
   // mutateAsync, not mutate-level callbacks: those are dropped when the button unmounts mid-run
   async function generate() {
     try {
-      await mutateAsync()
+      const { stored } = await mutateAsync()
+      toast.success(GENERATE_SAVED_MESSAGE(stored.map((scenario) => scenario.capacity)))
     } catch (error) {
-      toast.error(errorMessage(error))
-      return
+      const conflict = error instanceof ApiError && error.status === 409
+      toast.error(conflict ? GENERATE_CONFLICT_MESSAGE : errorMessage(error))
     }
-    onGenerated?.()
   }
 
   return (
@@ -50,7 +50,7 @@ export function GenerateButton({
       ) : (
         <SparklesIcon aria-hidden="true" />
       )}
-      {running ? 'Liczę plany…' : label}
+      {running ? 'Liczę i zapisuję plany…' : label}
     </Button>
   )
 }

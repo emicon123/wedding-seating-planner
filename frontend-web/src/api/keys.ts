@@ -6,7 +6,7 @@ export const keys = {
   guests: ['guests'],
   clusters: ['clusters'],
   scenarios: ['scenarios'],
-  proposals: ['proposals'],
+  generateUndo: ['generateUndo'],
 } as const
 
 /**

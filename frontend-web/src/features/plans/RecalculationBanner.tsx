@@ -5,17 +5,12 @@ import { GenerateButton } from '@/features/plans/GenerateButton'
 
 const SHOWN = 2
 
-type RecalculationBannerProps = {
-  violations: Violation[]
-  onGenerated?: () => void
-}
-
 /**
  * The call to action of a plan that breaks a rule (a re-enabled guest overfilling a table, a new
  * guest without a table, ...). Never regenerates on its own: it says what is wrong and lets the
  * editor decide (A-17). The reasons are the server's violations, in Polish.
  */
-export function RecalculationBanner({ violations, onGenerated }: RecalculationBannerProps) {
+export function RecalculationBanner({ violations }: { violations: Violation[] }) {
   const shown = violations.slice(0, SHOWN)
   const more = violations.length - shown.length
   return (
@@ -35,7 +30,7 @@ export function RecalculationBanner({ violations, onGenerated }: RecalculationBa
           {more > 0 && <li>i jeszcze {more}</li>}
         </ul>
       )}
-      <GenerateButton label="Przelicz / Generuj" onGenerated={onGenerated} />
+      <GenerateButton label="Przelicz / Generuj" />
     </div>
   )
 }

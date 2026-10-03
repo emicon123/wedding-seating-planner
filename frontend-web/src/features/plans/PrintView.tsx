@@ -129,7 +129,7 @@ export function PrintView({ capacity }: { capacity: Capacity }) {
         <section className="space-y-2 rounded-xl border bg-card p-6">
           <h1 className="text-2xl font-semibold">Nie ma jeszcze planu na {capacity} miejsc</h1>
           <p className="text-muted-foreground">
-            Wygeneruj plany i zaakceptuj ten, który chcesz wydrukować.
+            Wygeneruj plany, a potem wydrukuj ten, który wybierzesz.
           </p>
           <Link to="/" className={buttonVariants()}>
             Przejdź do planów

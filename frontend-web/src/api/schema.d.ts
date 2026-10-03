@@ -147,7 +147,30 @@ export interface paths {
         };
         /** The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14) */
         get: operations["listScenarios"];
-        put?: never;
+        /**
+         * Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+         * @description Atomic: all four plans (9, 10, 11, 12) are replaced in ONE transaction, or nothing changes.
+         *     Used twice by the SPA:
+         *
+         *     * **"Generuj plany"**: the four `POST /scenarios/calculate` results, with `basedOnVersion` =
+         *       the versions of the plans the user had on screen before generating.
+         *     * **"Cofnij"**: the four plans as they were before that Generate, with `basedOnVersion` =
+         *       the versions this call returned when the Generate was stored.
+         *
+         *     For each plan: its tables and assignments are replaced by `tables` (numbers 1..k without gaps,
+         *     a guest at most once, empty tables allowed, `tables: []` = empty plan); each listed guest is
+         *     seated as given; every unlisted disabled member of a cluster is seated at the table of the
+         *     cluster's lowest-id listed enabled member (rides along). A cluster is pinned when any of its listed members is in
+         *     `pinnedGuestIds`; the pin is stored on every seat of the cluster at that table. Unlisted
+         *     guests end up unseated. Violations never block saving. Each plan's version is bumped by 1.
+         *
+         *     Checks, in order, before anything is written: body shape and each capacity exactly once (422);
+         *     every guest id known and not seated twice in a plan, `pinnedGuestIds` ⊆ that table's
+         *     `guestIds` (422 `validation_failed`); every `basedOnVersion` equals the stored version (409
+         *     `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all four plans
+         *     untouched.
+         */
+        put: operations["replaceScenarios"];
         post?: never;
         delete?: never;
         options?: never;
@@ -165,38 +188,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Generate proposals for all four plans (UC-10)
+         * Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
          * @description Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
-         *     current guests, links and pins. Accept a proposal with `PUT /scenarios/{capacity}/assignments`.
+         *     current guests, links and pins (pinned clusters stay at their table, `pinned: true`).
+         *     "Generuj plany" stores the four results straight away: the SPA sends them unchanged to
+         *     `PUT /scenarios` (one atomic call, version-checked) without showing a preview.
          */
         post: operations["calculateProposals"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/scenarios/{capacity}/assignments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Identifies the plan by its table capacity.
-                 * @example 10
-                 */
-                capacity: components["parameters"]["Capacity"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Accept a proposal — replace the plan's tables and assignments (UC-10)
-         * @description Version-checked against `basedOnVersion`. Disabled members of each cluster are seated with
-         *     their cluster; clusters that were pinned stay pinned. Bumps the scenario version.
-         */
-        put: operations["acceptProposal"];
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -260,8 +258,8 @@ export interface paths {
          * Delete a plan — remove all its tables, assignments and pins (UC-17)
          * @description "Usuń plan". The scenario itself stays (there are always four plans); it becomes an
          *     empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
-         *     too). Bumps the scenario version, so a proposal generated before is stale (accepting it
-         *     returns 409). Not version-checked, like the other manual plan edits: the result does not
+         *     too). Bumps the scenario version, so a "Cofnij" of an earlier Generate is no longer
+         *     possible (`PUT /scenarios` returns 409). Not version-checked, like the other manual plan edits: the result does not
          *     depend on what the client saw, and repeating it is harmless (idempotent apart from the
          *     version bump). No request body. "Usuń wszystkie plany" is four calls, one per capacity.
          */
@@ -615,7 +613,7 @@ export interface components {
              * @description True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
              *     cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
              *     cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
-             *     regenerates on its own. Always false for a proposal without violations.
+             *     regenerates on its own. False for a freshly generated plan without violations.
              * @example false
              */
             needsRecalculation: boolean;
@@ -714,11 +712,59 @@ export interface components {
             meta: components["schemas"]["Meta"];
             page: components["schemas"]["Page"];
         };
-        /** @description Transient auto-seating result for one plan (never stored). */
+        /** @description One table of a plan to store. Mapped 1:1 from a `PlanTable` (its clusters' `guestIds`, and those of its `pinned` clusters). */
+        TableLayout: {
+            /** @example 1 */
+            number: number;
+            /**
+             * @description Guests at this table (enabled ones; disabled cluster members are added by the server). May be empty.
+             * @example [
+             *       4,
+             *       5,
+             *       6,
+             *       7,
+             *       10,
+             *       11,
+             *       12,
+             *       13
+             *     ]
+             */
+            guestIds: number[];
+            /**
+             * @description Subset of `guestIds` whose clusters are pinned to this table (pin = whole cluster).
+             * @example [
+             *       4,
+             *       5
+             *     ]
+             */
+            pinnedGuestIds: number[];
+        };
+        /** @description The full content of one plan to store (tables, assignments, pins). */
+        ScenarioLayout: {
+            capacity: components["schemas"]["Capacity"];
+            /**
+             * @description The stored version this layout replaces (optimistic lock).
+             * @example 7
+             */
+            basedOnVersion: number;
+            /** @description Tables 1..k without gaps; `[]` = empty plan. */
+            tables: components["schemas"]["TableLayout"][];
+        };
+        /**
+         * @description All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+         *     by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
+         */
+        ScenariosReplace: {
+            plans: components["schemas"]["ScenarioLayout"][];
+        };
+        /**
+         * @description Auto-seating result for one plan, computed by `POST /scenarios/calculate` (never stored by that
+         *     call). "Generuj plany" stores it at once through `PUT /scenarios`; there is no preview.
+         */
         Proposal: {
             capacity: components["schemas"]["Capacity"];
             /**
-             * @description Scenario version the proposal was computed from; send it back when accepting.
+             * @description Scenario version the proposal was computed from.
              * @example 7
              */
             basedOnVersion: number;
@@ -730,28 +776,14 @@ export interface components {
             meta: components["schemas"]["Meta"];
             page: components["schemas"]["Page"];
         };
-        TableLayout: {
-            number: number;
-            /** @description Enabled guests at this table (disabled cluster members are added by the server). */
-            guestIds: number[];
-        };
-        /**
-         * @description Replaces the plan's tables and assignments with the given layout (normally a proposal's tables).
-         *     Table numbers must be 1..k without gaps; a guest may appear at most once.
-         *     Clusters that were pinned stay pinned.
-         */
-        AcceptPlan: {
-            basedOnVersion: number;
-            tables: components["schemas"]["TableLayout"][];
-        };
-        ScenarioResponse: {
-            data: components["schemas"]["Scenario"];
-            meta: components["schemas"]["Meta"];
-        };
         /** @description Seat the guest's WHOLE cluster at a table, and set its pin. */
         AssignmentSet: {
             tableNumber: number;
             pinned: boolean;
+        };
+        ScenarioResponse: {
+            data: components["schemas"]["Scenario"];
+            meta: components["schemas"]["Meta"];
         };
         HealthStatus: {
             /**
@@ -1400,6 +1432,238 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    replaceScenarios: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "plans": [
+                 *         {
+                 *           "capacity": 9,
+                 *           "basedOnVersion": 7,
+                 *           "tables": [
+                 *             {
+                 *               "number": 1,
+                 *               "guestIds": [
+                 *                 4,
+                 *                 5,
+                 *                 6,
+                 *                 7,
+                 *                 10,
+                 *                 11,
+                 *                 12,
+                 *                 13
+                 *               ],
+                 *               "pinnedGuestIds": [
+                 *                 4,
+                 *                 5
+                 *               ]
+                 *             },
+                 *             {
+                 *               "number": 2,
+                 *               "guestIds": [
+                 *                 1,
+                 *                 2,
+                 *                 3,
+                 *                 14,
+                 *                 15,
+                 *                 16,
+                 *                 17,
+                 *                 18
+                 *               ],
+                 *               "pinnedGuestIds": []
+                 *             }
+                 *           ]
+                 *         },
+                 *         {
+                 *           "capacity": 10,
+                 *           "basedOnVersion": 4,
+                 *           "tables": []
+                 *         },
+                 *         {
+                 *           "capacity": 11,
+                 *           "basedOnVersion": 1,
+                 *           "tables": [
+                 *             {
+                 *               "number": 1,
+                 *               "guestIds": [
+                 *                 1,
+                 *                 2,
+                 *                 3,
+                 *                 4,
+                 *                 5,
+                 *                 6,
+                 *                 7,
+                 *                 10,
+                 *                 11,
+                 *                 12,
+                 *                 13
+                 *               ],
+                 *               "pinnedGuestIds": []
+                 *             }
+                 *           ]
+                 *         },
+                 *         {
+                 *           "capacity": 12,
+                 *           "basedOnVersion": 3,
+                 *           "tables": [
+                 *             {
+                 *               "number": 1,
+                 *               "guestIds": [
+                 *                 1,
+                 *                 2,
+                 *                 3,
+                 *                 4,
+                 *                 5,
+                 *                 6,
+                 *                 7,
+                 *                 10,
+                 *                 11,
+                 *                 12,
+                 *                 13,
+                 *                 14
+                 *               ],
+                 *               "pinnedGuestIds": []
+                 *             }
+                 *           ]
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": components["schemas"]["ScenariosReplace"];
+            };
+        };
+        responses: {
+            /** @description The four stored plans with their evaluations, ordered 9, 10, 11, 12 (each version + 1). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "capacity": 9,
+                     *           "version": 8,
+                     *           "plan": {
+                     *             "summary": {
+                     *               "tableCount": 2,
+                     *               "seatedCount": 16,
+                     *               "unseatedCount": 0,
+                     *               "score": 41.5,
+                     *               "violationCount": 0,
+                     *               "needsRecalculation": false
+                     *             },
+                     *             "tables": [
+                     *               {
+                     *                 "number": 1,
+                     *                 "fill": 8,
+                     *                 "score": 18,
+                     *                 "clusters": [
+                     *                   {
+                     *                     "clusterKey": 4,
+                     *                     "guestIds": [
+                     *                       4,
+                     *                       5
+                     *                     ],
+                     *                     "pinned": true
+                     *                   }
+                     *                 ]
+                     *               }
+                     *             ],
+                     *             "unseated": [],
+                     *             "guestScores": [
+                     *               {
+                     *                 "guestId": 4,
+                     *                 "tableNumber": 1,
+                     *                 "satisfaction": 4,
+                     *                 "preferredTotal": 20,
+                     *                 "preferredAtTable": 4,
+                     *                 "fallbackAtTable": 0,
+                     *                 "strangersAtTable": 2
+                     *               }
+                     *             ],
+                     *             "violations": []
+                     *           }
+                     *         }
+                     *       ],
+                     *       "meta": {
+                     *         "requestId": "01JB8Z6Q0K3N"
+                     *       },
+                     *       "page": {
+                     *         "total": 4
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ScenarioListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /**
+             * @description At least one plan was changed after the client read it (move, pin, table added or
+             *     removed, plan deleted, another Generate). Nothing was written. For "Cofnij" it means the
+             *     undo is no longer possible; for "Generuj plany" the client refetches and the user retries.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "errors": [
+                     *         {
+                     *           "code": "version_conflict",
+                     *           "field": "plans",
+                     *           "message": "Plan 10 was changed by someone else (current version 9)."
+                     *         }
+                     *       ],
+                     *       "meta": {
+                     *         "requestId": "01JB8Z6Q0K3N"
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            413: components["responses"]["PayloadTooLarge"];
+            /**
+             * @description Invalid layout (capacity missing or repeated, unknown guest — e.g. deleted after the
+             *     Generate being undone —, guest seated twice, table numbers not 1..k, pinned guest not at
+             *     that table). Nothing was written.
+             */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "errors": [
+                     *         {
+                     *           "code": "validation_failed",
+                     *           "field": "plans",
+                     *           "message": "Plan 10, Unknown guest id 57."
+                     *         }
+                     *       ],
+                     *       "meta": {
+                     *         "requestId": "01JB8Z6Q0K3N"
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
     calculateProposals: {
         parameters: {
             query?: never;
@@ -1475,72 +1739,6 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    acceptProposal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Identifies the plan by its table capacity.
-                 * @example 10
-                 */
-                capacity: components["parameters"]["Capacity"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "basedOnVersion": 7,
-                 *       "tables": [
-                 *         {
-                 *           "number": 1,
-                 *           "guestIds": [
-                 *             4,
-                 *             5,
-                 *             6,
-                 *             7,
-                 *             10,
-                 *             11,
-                 *             12,
-                 *             13
-                 *           ]
-                 *         },
-                 *         {
-                 *           "number": 2,
-                 *           "guestIds": [
-                 *             1,
-                 *             2,
-                 *             3,
-                 *             14,
-                 *             15,
-                 *             16
-                 *           ]
-                 *         }
-                 *       ]
-                 *     }
-                 */
-                "application/json": components["schemas"]["AcceptPlan"];
-            };
-        };
-        responses: {
-            /** @description The stored plan with its evaluation. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioResponse"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -1,13 +1,15 @@
 import { fillStatus } from '@/domain/tableStatus'
+import { CAPACITIES } from '@/domain/capacity'
 import {
+  canUndoGenerate,
   guestTableMap,
-  isProposalStale,
   sortPlacements,
   tableViolations,
-  toAcceptTables,
-  withoutProposal,
+  toScenariosReplace,
+  toTableLayouts,
+  versionsOf,
 } from '@/domain/planView'
-import type { Proposal, Violation } from '@/domain/types'
+import type { Capacity, GenerateUndo, Scenario, Violation } from '@/domain/types'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 
 describe('fillStatus', () => {
@@ -23,37 +25,82 @@ describe('fillStatus', () => {
   })
 })
 
-describe('toAcceptTables', () => {
-  it('lists every table with the guests of all its clusters, ready for PUT .../assignments', () => {
+describe('toTableLayouts', () => {
+  it('lists every table with the guests of all its clusters and those of its pinned clusters', () => {
     const plan = makePlan([
-      { number: 1, clusters: [placement(4, [4, 5]), placement(6, [6])] },
-      { number: 2, clusters: [] },
+      { number: 1, clusters: [placement(4, [4, 5], true), placement(6, [6])] },
+      { number: 2, clusters: [placement(8, [8, 9], true)] },
+      { number: 3, clusters: [] },
     ])
 
-    expect(toAcceptTables(plan)).toEqual([
-      { number: 1, guestIds: [4, 5, 6] },
-      { number: 2, guestIds: [] },
+    expect(toTableLayouts(plan)).toEqual([
+      { number: 1, guestIds: [4, 5, 6], pinnedGuestIds: [4, 5] },
+      { number: 2, guestIds: [8, 9], pinnedGuestIds: [8, 9] },
+      { number: 3, guestIds: [], pinnedGuestIds: [] },
     ])
+  })
+
+  it('ignores the unseated tray: those guests are simply not listed', () => {
+    const plan = makePlan([{ number: 1, clusters: [placement(4, [4])] }], [placement(9, [9, 10])])
+    expect(toTableLayouts(plan)).toEqual([{ number: 1, guestIds: [4], pinnedGuestIds: [] }])
   })
 })
 
-describe('proposals vs. the stored plan', () => {
-  const proposal = (capacity: 9 | 10 | 11 | 12, basedOnVersion: number): Proposal => ({
-    capacity,
-    basedOnVersion,
-    plan: makePlan([]),
+describe('toScenariosReplace', () => {
+  it('builds one layout per plan with its own basedOnVersion', () => {
+    const plan = makePlan([{ number: 1, clusters: [placement(4, [4], true)] }])
+
+    expect(
+      toScenariosReplace([
+        { capacity: 9, basedOnVersion: 3, plan },
+        { capacity: 12, basedOnVersion: 5, plan: makePlan([]) },
+      ]),
+    ).toEqual({
+      plans: [
+        {
+          capacity: 9,
+          basedOnVersion: 3,
+          tables: [{ number: 1, guestIds: [4], pinnedGuestIds: [4] }],
+        },
+        { capacity: 12, basedOnVersion: 5, tables: [] },
+      ],
+    })
+  })
+})
+
+describe('versionsOf', () => {
+  it('maps each capacity to its version, whatever the order', () => {
+    const plan = makePlan([])
+    const scenarios = [12, 9, 11, 10].map((c, i) => makeScenario(c as Capacity, plan, i + 1))
+    expect(versionsOf(scenarios)).toEqual({ 9: 2, 10: 4, 11: 3, 12: 1 })
   })
 
-  it('is stale once the plan moved on after Generate', () => {
-    const plan = makeScenario(10, makePlan([]), 8)
-    expect(isProposalStale(proposal(10, 7), plan)).toBe(true)
-    expect(isProposalStale(proposal(10, 8), plan)).toBe(false)
-    expect(isProposalStale(proposal(10, 8), undefined)).toBe(false)
+  it('throws when a plan is missing', () => {
+    expect(() => versionsOf([makeScenario(9, makePlan([]), 1)])).toThrow()
+  })
+})
+
+describe('canUndoGenerate', () => {
+  const plan = makePlan([])
+  const scenarios = (versions: [number, number, number, number]): Scenario[] =>
+    CAPACITIES.map((capacity, i) => makeScenario(capacity, plan, versions[i] ?? 0))
+  const undo: GenerateUndo = {
+    previous: scenarios([1, 1, 1, 1]),
+    generatedVersions: { 9: 2, 10: 2, 11: 3, 12: 2 },
+  }
+
+  it('is true while every plan still has the version Generate produced', () => {
+    expect(canUndoGenerate(undo, scenarios([2, 2, 3, 2]))).toBe(true)
   })
 
-  it('removes one proposal and keeps the others', () => {
-    const all = [proposal(9, 1), proposal(10, 1), proposal(11, 1), proposal(12, 1)]
-    expect(withoutProposal(all, 10).map((p) => p.capacity)).toEqual([9, 11, 12])
+  it('is false as soon as one plan moved on (a move, pin, table change, delete, other Generate)', () => {
+    expect(canUndoGenerate(undo, scenarios([2, 3, 3, 2]))).toBe(false)
+  })
+
+  it('is false without a snapshot or without loaded plans', () => {
+    expect(canUndoGenerate(undefined, scenarios([2, 2, 3, 2]))).toBe(false)
+    expect(canUndoGenerate(undo, undefined)).toBe(false)
+    expect(canUndoGenerate(undo, [])).toBe(false)
   })
 })
 

@@ -26,4 +26,14 @@ export type GuestCreate = Schemas['GuestCreate']
 export type GuestUpdate = Schemas['GuestUpdate']
 export type GuestBulkToggle = Schemas['GuestBulkToggle']
 export type AssignmentSet = Schemas['AssignmentSet']
-export type AcceptPlan = Schemas['AcceptPlan']
+export type ScenarioLayout = Schemas['ScenarioLayout']
+export type ScenariosReplace = Schemas['ScenariosReplace']
+
+/**
+ * The one-slot undo snapshot of the last Generate (task 007): the four plans as they were before it,
+ * and the version each plan has right after it (what Cofnij must find unchanged).
+ */
+export type GenerateUndo = {
+  previous: Scenario[]
+  generatedVersions: Record<Capacity, number>
+}

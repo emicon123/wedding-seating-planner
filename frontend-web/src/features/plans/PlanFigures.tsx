@@ -6,13 +6,11 @@ import { cn } from '@/lib/utils'
 type FigureProps = {
   label: string
   value: string
-  /** What the stored plan says today, for a proposal's figure ("obecnie 10"). */
-  current?: string
   tone?: 'bad'
   icon?: React.ReactNode
 }
 
-function Figure({ label, value, current, tone, icon }: FigureProps) {
+function Figure({ label, value, tone, icon }: FigureProps) {
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -25,39 +23,21 @@ function Figure({ label, value, current, tone, icon }: FigureProps) {
         {icon}
         {value}
       </dd>
-      {current !== undefined && (
-        <dd className="text-xs text-muted-foreground">obecnie {current}</dd>
-      )}
     </div>
   )
 }
 
-type PlanFiguresProps = {
-  summary: PlanSummary
-  /** The stored plan's summary, when `summary` belongs to a proposal. */
-  current?: PlanSummary
-}
-
 /** Table count, satisfaction score and violation count of a plan: the three numbers to compare. */
-export function PlanFigures({ summary, current }: PlanFiguresProps) {
+export function PlanFigures({ summary }: { summary: PlanSummary }) {
   const broken = summary.violationCount > 0
   return (
     <div className="space-y-2">
       <dl className="grid grid-cols-3 gap-2">
-        <Figure
-          label="Stoły"
-          value={String(summary.tableCount)}
-          current={current && String(current.tableCount)}
-        />
-        <Figure
-          label="Zadowolenie"
-          value={scoreLabel(summary.score)}
-          current={current && scoreLabel(current.score)}
-        />
+        <Figure label="Stoły" value={String(summary.tableCount)} />
+        <Figure label="Zadowolenie" value={scoreLabel(summary.score)} />
         <Figure
           label="Naruszenia"
           value={String(summary.violationCount)}
-          current={current && String(current.violationCount)}
           tone={broken ? 'bad' : undefined}
           icon={
             broken ? (

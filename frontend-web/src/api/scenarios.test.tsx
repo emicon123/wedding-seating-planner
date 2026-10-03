@@ -3,21 +3,18 @@ import type { QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/api/errors'
 import { keys } from '@/api/keys'
 import {
-  useAcceptProposal,
   useAddTable,
-  useCalculateProposals,
   useDeleteAssignment,
   useDeleteTable,
-  useDiscardProposals,
-  useDropProposal,
-  useProposals,
+  useGeneratePlans,
+  useGenerateUndo,
   useResetPlan,
   useScenarios,
   useSetAssignment,
+  useUndoGenerate,
 } from '@/api/scenarios'
-import type { Proposal, Scenario } from '@/domain/types'
-import { withoutProposal } from '@/domain/planView'
-import { fourProposals } from '@/features/plans/fixtures'
+import { CAPACITIES } from '@/domain/capacity'
+import type { GenerateUndo, Proposal, Scenario, ScenariosReplace } from '@/domain/types'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 import { failure, gate, HttpResponse, list, mockApi, single } from '@/test/server'
 import { renderHookWithClient } from '@/test/wrapper'
@@ -79,148 +76,205 @@ describe('useScenarios', () => {
   })
 })
 
-describe('proposals live in the query cache', () => {
-  const proposals: Proposal[] = [9, 10, 11, 12].map((capacity) => ({
-    capacity: capacity as Proposal['capacity'],
-    basedOnVersion: 7,
-    plan: scenario10().plan,
-  }))
+describe('Generate and Cofnij (task 007)', () => {
+  const pinnedMaciek = placement(4, [4, 5], true)
+  /** The plan the server computes for every capacity: one table with a pinned and a free cluster. */
+  const proposedPlan = () => makePlan([{ number: 1, clusters: [pinnedMaciek, michal] }])
+  const proposals = (): Proposal[] =>
+    CAPACITIES.map((capacity) => ({ capacity, basedOnVersion: 0, plan: proposedPlan() }))
+  /** What the PUT answers: the proposals stored, every version + 1. */
+  const stored = (before: Scenario[]): Scenario[] =>
+    before.map((s) => makeScenario(s.capacity, proposedPlan(), s.version + 1))
 
-  it('useCalculateProposals writes keys.proposals and nothing is stored on the server', async () => {
-    const api = mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals)))
-    const { result, queryClient } = renderHookWithClient(() => ({
-      calculate: useCalculateProposals(),
-      preview: useProposals(),
-    }))
-    expect(result.current.preview.data).toBeUndefined()
+  const putCall = (respond: (body: unknown) => Response) => mockApi('put', '/scenarios', respond)
 
-    await act(() => result.current.calculate.mutateAsync())
+  describe('useGeneratePlans', () => {
+    it('reads the plans, calculates, then PUTs the proposals with the SNAPSHOT versions and the pins', async () => {
+      const order: string[] = []
+      const get = mockApi('get', '/scenarios', () => {
+        order.push('get')
+        return HttpResponse.json(list(initial()))
+      })
+      mockApi('post', '/scenarios/calculate', () => {
+        order.push('calculate')
+        return HttpResponse.json(list(proposals()))
+      })
+      const put = putCall(() => {
+        order.push('put')
+        return HttpResponse.json(list(stored(initial())))
+      })
+      const { result } = renderHookWithClient(() => useGeneratePlans())
 
-    expect(api.calls).toHaveLength(1)
-    expect(queryClient.getQueryData(keys.proposals)).toEqual(proposals)
-    await waitFor(() => expect(result.current.preview.data).toEqual(proposals))
+      await act(() => result.current.mutateAsync())
+
+      expect(order).toEqual(['get', 'calculate', 'put'])
+      expect(get.calls).toHaveLength(1)
+      const body = put.calls[0] as ScenariosReplace
+      expect(body.plans.map((p) => [p.capacity, p.basedOnVersion])).toEqual([
+        [9, 2],
+        [10, 7],
+        [11, 4],
+        [12, 3],
+      ])
+      expect(body.plans[0]?.tables).toEqual([
+        { number: 1, guestIds: [4, 5, 6, 7], pinnedGuestIds: [4, 5] },
+      ])
+    })
+
+    it('fetches the plans fresh even when the cache holds a recent copy', async () => {
+      const get = mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
+      mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals())))
+      putCall(() => HttpResponse.json(list(stored(initial()))))
+      const { result, queryClient } = renderHookWithClient(() => useGeneratePlans())
+      seedScenarios(queryClient)
+
+      await act(() => result.current.mutateAsync())
+
+      expect(get.calls).toHaveLength(1)
+    })
+
+    it('puts the stored plans into the scenarios cache and keeps the undo snapshot', async () => {
+      mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
+      mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals())))
+      putCall(() => HttpResponse.json(list(stored(initial()))))
+      const { result, queryClient } = renderHookWithClient(() => ({
+        generate: useGeneratePlans(),
+        undo: useGenerateUndo(),
+      }))
+      expect(result.current.undo.data).toBeUndefined()
+
+      await act(() => result.current.generate.mutateAsync())
+
+      expect(cached(queryClient)).toEqual(stored(initial()))
+      const expected = { previous: initial(), generatedVersions: { 9: 3, 10: 8, 11: 5, 12: 4 } }
+      expect(queryClient.getQueryData(keys.generateUndo)).toEqual(expected)
+      await waitFor(() => expect(result.current.undo.data).toEqual(expected))
+    })
+
+    it('a replaced Generate replaces the older snapshot', async () => {
+      mockApi('get', '/scenarios', () => HttpResponse.json(list(stored(initial()))))
+      mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals())))
+      putCall(() => HttpResponse.json(list(stored(stored(initial())))))
+      const { result, queryClient } = renderHookWithClient(() => useGeneratePlans())
+      queryClient.setQueryData(keys.generateUndo, { previous: initial(), generatedVersions: {} })
+
+      await act(() => result.current.mutateAsync())
+
+      expect(queryClient.getQueryData<GenerateUndo>(keys.generateUndo)?.previous).toEqual(
+        stored(initial()),
+      )
+    })
+
+    it('a 409 refetches the plans, stores nothing and offers no Cofnij', async () => {
+      const get = mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
+      mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals())))
+      putCall(() => HttpResponse.json(failure('version_conflict', 'version'), { status: 409 }))
+      const { result, queryClient } = renderHookWithClient(() => ({
+        scenarios: useScenarios(),
+        generate: useGeneratePlans(),
+      }))
+      await waitFor(() => expect(result.current.scenarios.isSuccess).toBe(true))
+      expect(get.calls).toHaveLength(1)
+
+      const error = await act(() => result.current.generate.mutateAsync().catch((e: unknown) => e))
+
+      expect((error as ApiError).has('version_conflict')).toBe(true)
+      await waitFor(() => expect(get.calls.length).toBeGreaterThanOrEqual(3)) // generate read + refetch
+      expect(queryClient.getQueryData(keys.generateUndo)).toBeUndefined()
+      expect(cached(queryClient)).toEqual(initial())
+    })
+
+    it('a failed calculate sends no PUT and leaves the caches alone', async () => {
+      mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
+      mockApi('post', '/scenarios/calculate', () =>
+        HttpResponse.json(failure('internal_error'), { status: 500 }),
+      )
+      const put = putCall(() => HttpResponse.json(list(stored(initial()))))
+      const { result, queryClient } = renderHookWithClient(() => useGeneratePlans())
+      seedScenarios(queryClient)
+
+      const error = await act(() => result.current.mutateAsync().catch((e: unknown) => e))
+
+      expect(error).toBeInstanceOf(ApiError)
+      expect(put.calls).toHaveLength(0)
+      expect(cached(queryClient)).toEqual(initial())
+      expect(queryClient.getQueryData(keys.generateUndo)).toBeUndefined()
+    })
   })
 
-  it('does not touch the scenarios cache', async () => {
-    mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals)))
-    const { result, queryClient } = renderHookWithClient(() => useCalculateProposals())
-    seedScenarios(queryClient)
+  describe('useUndoGenerate', () => {
+    const undoSnapshot = (): GenerateUndo => ({
+      previous: initial(),
+      generatedVersions: { 9: 3, 10: 8, 11: 5, 12: 4 },
+    })
 
-    await act(() => result.current.mutateAsync())
+    function setup() {
+      const rendered = renderHookWithClient(() => ({
+        undo: useGenerateUndo(),
+        restore: useUndoGenerate(),
+      }))
+      rendered.queryClient.setQueryData(keys.scenarios, stored(initial()))
+      rendered.queryClient.setQueryData(keys.generateUndo, undoSnapshot())
+      return rendered
+    }
 
-    expect(cached(queryClient)).toEqual(initial())
-  })
+    it('PUTs the snapshot plans with the versions Generate produced', async () => {
+      const put = putCall(() => HttpResponse.json(list(initial())))
+      const { result } = setup()
 
-  it('useDiscardProposals clears the preview', async () => {
-    mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals)))
-    const { result } = renderHookWithClient(() => ({
-      calculate: useCalculateProposals(),
-      preview: useProposals(),
-      discard: useDiscardProposals(),
-    }))
-    await act(() => result.current.calculate.mutateAsync())
-    await waitFor(() => expect(result.current.preview.data).toBeDefined())
+      await act(() => result.current.restore.mutateAsync(undoSnapshot()))
 
-    act(() => result.current.discard())
+      const body = put.calls[0] as ScenariosReplace
+      expect(body.plans.map((p) => [p.capacity, p.basedOnVersion])).toEqual([
+        [9, 3],
+        [10, 8],
+        [11, 5],
+        [12, 4],
+      ])
+      expect(body.plans[1]?.tables).toEqual([
+        { number: 1, guestIds: [4, 5], pinnedGuestIds: [] },
+        { number: 2, guestIds: [6, 7], pinnedGuestIds: [] },
+      ])
+    })
 
-    await waitFor(() => expect(result.current.preview.data).toBeUndefined())
-  })
+    it('200: the restored plans replace the cache and the snapshot is gone', async () => {
+      const restored = initial().map((s) => ({ ...s, version: s.version + 2 }))
+      putCall(() => HttpResponse.json(list(restored)))
+      const { result, queryClient } = setup()
 
-  it('useDropProposal removes one accepted proposal and keeps the others', async () => {
-    mockApi('post', '/scenarios/calculate', () => HttpResponse.json(list(proposals)))
-    const { result } = renderHookWithClient(() => ({
-      calculate: useCalculateProposals(),
-      preview: useProposals(),
-      drop: useDropProposal(),
-    }))
-    await act(() => result.current.calculate.mutateAsync())
-    await waitFor(() => expect(result.current.preview.data).toHaveLength(4))
+      await act(() => result.current.restore.mutateAsync(undoSnapshot()))
 
-    act(() => result.current.drop(10))
+      expect(cached(queryClient)).toEqual(restored)
+      await waitFor(() => expect(result.current.undo.data).toBeUndefined())
+    })
 
-    await waitFor(() =>
-      expect(result.current.preview.data?.map((p) => p.capacity)).toEqual([9, 11, 12]),
-    )
-  })
+    it.each([
+      [409, 'version_conflict'],
+      [422, 'validation_failed'],
+    ] as const)('%i drops the snapshot and refetches the real plans', async (status, code) => {
+      putCall(() => HttpResponse.json(failure(code), { status }))
+      const get = mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
+      const { result, queryClient } = setup()
+      renderHookWithClient(() => useScenarios(), queryClient)
 
-  it('a failed Generate leaves the preview empty and rejects with the ApiError', async () => {
-    mockApi('post', '/scenarios/calculate', () =>
-      HttpResponse.json(failure('internal_error'), { status: 500 }),
-    )
-    const { result, queryClient } = renderHookWithClient(() => useCalculateProposals())
+      const error = await act(() =>
+        result.current.restore.mutateAsync(undoSnapshot()).catch((e: unknown) => e),
+      )
 
-    const error = await act(() => result.current.mutateAsync().catch((e: unknown) => e))
+      expect(error).toBeInstanceOf(ApiError)
+      await waitFor(() => expect(result.current.undo.data).toBeUndefined())
+      await waitFor(() => expect(get.calls).toHaveLength(1))
+    })
 
-    expect(error).toBeInstanceOf(ApiError)
-    expect(queryClient.getQueryData(keys.proposals)).toBeUndefined()
-  })
-})
+    it('a 500 keeps the snapshot so Cofnij can be retried', async () => {
+      putCall(() => HttpResponse.json(failure('internal_error'), { status: 500 }))
+      const { result, queryClient } = setup()
 
-describe('useAcceptProposal', () => {
-  const tables = [{ number: 1, guestIds: [4, 5, 6, 7] }]
+      await act(() => result.current.restore.mutateAsync(undoSnapshot()).catch((e: unknown) => e))
 
-  it('PUTs the layout with basedOnVersion and replaces only that scenario with the server copy', async () => {
-    const accepted = makeScenario(10, makePlan([{ number: 1, clusters: [maciek, michal] }]), 8)
-    const api = mockApi('put', '/scenarios/10/assignments', () =>
-      HttpResponse.json(single(accepted)),
-    )
-    const { result, queryClient } = renderHookWithClient(() => useAcceptProposal())
-    seedScenarios(queryClient)
-
-    await act(() => result.current.mutateAsync({ capacity: 10, basedOnVersion: 7, tables }))
-
-    expect(api.calls).toEqual([{ basedOnVersion: 7, tables }])
-    const after = cached(queryClient)
-    expect(after?.map((s) => s.capacity)).toEqual([9, 10, 11, 12])
-    expect(after?.[1]).toEqual(accepted)
-    expect(after?.[0]).toEqual(scenario9)
-    expect(after?.[2]).toEqual(scenario11)
-    expect(after?.[3]).toEqual(scenario12)
-  })
-
-  it('on a 409 refetches the scenarios and rejects with a version_conflict ApiError', async () => {
-    mockApi('put', '/scenarios/10/assignments', () =>
-      HttpResponse.json(failure('version_conflict', 'version'), { status: 409 }),
-    )
-    const fresh = [scenario9, scenario10(9), scenario11, scenario12]
-    const refetch = mockApi('get', '/scenarios', () => HttpResponse.json(list(fresh)))
-    const { result } = renderHookWithClient(() => ({
-      scenarios: useScenarios(),
-      accept: useAcceptProposal(),
-    }))
-    await waitFor(() => expect(result.current.scenarios.isSuccess).toBe(true))
-    expect(refetch.calls).toHaveLength(1)
-
-    const error = await act(() =>
-      result.current.accept
-        .mutateAsync({ capacity: 10, basedOnVersion: 7, tables })
-        .catch((e: unknown) => e),
-    )
-
-    expect(error).toBeInstanceOf(ApiError)
-    expect((error as ApiError).has('version_conflict')).toBe(true)
-    await waitFor(() => expect(refetch.calls).toHaveLength(2))
-    await waitFor(() => expect(result.current.scenarios.data?.[1]?.version).toBe(9))
-  })
-
-  it('does not refetch for other errors', async () => {
-    mockApi('put', '/scenarios/10/assignments', () =>
-      HttpResponse.json(failure('validation_failed'), { status: 422 }),
-    )
-    const refetch = mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
-    const { result } = renderHookWithClient(() => ({
-      scenarios: useScenarios(),
-      accept: useAcceptProposal(),
-    }))
-    await waitFor(() => expect(result.current.scenarios.isSuccess).toBe(true))
-
-    await act(() =>
-      result.current.accept
-        .mutateAsync({ capacity: 10, basedOnVersion: 7, tables })
-        .catch((e: unknown) => e),
-    )
-
-    expect(refetch.calls).toHaveLength(1)
+      expect(queryClient.getQueryData(keys.generateUndo)).toEqual(undoSnapshot())
+      expect(cached(queryClient)).toEqual(stored(initial()))
+    })
   })
 })
 
@@ -423,26 +477,12 @@ describe('useResetPlan', () => {
     expect(cached(queryClient)?.[3]).toEqual(scenario12)
   })
 
-  it("drops that capacity's proposal from the preview and keeps the others", async () => {
-    mockApi('delete', '/scenarios/10/tables', () => HttpResponse.json(single(emptied())))
-    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
-    seedScenarios(queryClient)
-    queryClient.setQueryData(keys.proposals, fourProposals())
-
-    await act(() => result.current.mutateAsync({ capacity: 10 }))
-
-    expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(
-      withoutProposal(fourProposals(), 10),
-    )
-  })
-
   it('rejects with the ApiError on 404 and leaves the caches alone', async () => {
     mockApi('delete', '/scenarios/10/tables', () =>
       HttpResponse.json(failure('not_found'), { status: 404 }),
     )
     const { result, queryClient } = renderHookWithClient(() => useResetPlan())
     seedScenarios(queryClient)
-    queryClient.setQueryData(keys.proposals, fourProposals())
 
     const error = await act(() =>
       result.current.mutateAsync({ capacity: 10 }).catch((caught: unknown) => caught),
@@ -450,17 +490,6 @@ describe('useResetPlan', () => {
 
     expect(error).toBeInstanceOf(ApiError)
     expect(cached(queryClient)).toEqual(initial())
-    expect(queryClient.getQueryData<Proposal[]>(keys.proposals)).toEqual(fourProposals())
-  })
-
-  it('does not invent a preview when there is none', async () => {
-    mockApi('delete', '/scenarios/10/tables', () => HttpResponse.json(single(emptied())))
-    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
-    seedScenarios(queryClient)
-
-    await act(() => result.current.mutateAsync({ capacity: 10 }))
-
-    expect(queryClient.getQueryData(keys.proposals)).toBeUndefined()
   })
 
   it('is not optimistic: the plan stays as it was until the server answers', async () => {

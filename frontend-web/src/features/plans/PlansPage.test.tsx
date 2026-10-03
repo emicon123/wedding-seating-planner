@@ -1,8 +1,14 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import { keys } from '@/api/keys'
 import { CAPACITIES, type Capacity } from '@/domain/capacity'
-import type { Proposal } from '@/domain/types'
-import { evenPlan, serveScenarios, fourProposals, fourScenarios } from '@/features/plans/fixtures'
+import type { Scenario, ScenariosReplace } from '@/domain/types'
+import {
+  evenPlan,
+  fourProposals,
+  fourScenarios,
+  serveGenerateFlow,
+  serveScenarios,
+} from '@/features/plans/fixtures'
 import { PlansPage } from '@/features/plans/PlansPage'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 import { renderPage } from '@/test/renderPage'
@@ -79,47 +85,71 @@ describe('PlansPage: compare the four plans', () => {
   })
 })
 
-describe('PlansPage: generate, preview, accept', () => {
-  it('Generate shows four proposals next to the current plans, and writes nothing', async () => {
-    serveScenarios(fourScenarios())
-    const proposals = fourProposals()
-    proposals[1] = { ...proposals[1]!, plan: evenPlan(4, 6) }
-    const calculate = mockApi('post', '/scenarios/calculate', () =>
-      HttpResponse.json(list(proposals)),
-    )
+/** Four plans of 3 tables before, 4 tables after Generate (versions + 1), as the server stores them. */
+function generateScenarios() {
+  const before = fourScenarios()
+  const generated = before.map((s) => makeScenario(s.capacity, evenPlan(4, 6), s.version + 1))
+  const proposals = before.map((s) => ({
+    capacity: s.capacity,
+    basedOnVersion: s.version,
+    plan: evenPlan(4, 6),
+  }))
+  return { before, generated, proposals }
+}
+
+const bar = () => screen.getByText(barText).closest('[role=status]')
+const barText = 'Wygenerowano nowe plany. Poprzednie można przywrócić.'
+const tablesOf = (name: string) => within(card(name)).getByText('Stoły').nextSibling
+
+describe('PlansPage: Generate stores the plans at once', () => {
+  it('shows the new tables in the plan cards, with no preview and no accept step', async () => {
+    const { before, generated, proposals } = generateScenarios()
+    const flow = serveGenerateFlow({ before, proposals, stored: [generated] })
     const { user } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('3')
 
     await user.click(screen.getByRole('button', { name: 'Generuj plany' }))
 
-    const preview = await screen.findByRole('region', { name: 'Propozycje do przejrzenia' })
-    expect(calculate.calls).toHaveLength(1)
-    const ten = within(preview).getByRole('article', { name: 'Propozycja na 10 miejsc' })
-    expect(within(ten).getByText('Stoły').nextSibling).toHaveTextContent('4')
-    expect(within(ten).getByText('obecnie 3')).toBeInTheDocument() // the stored plan, for comparison
-    // the stored plans are still shown below
-    expect(screen.getByRole('article', { name: 'Plan na 10 miejsc' })).toBeInTheDocument()
+    await waitFor(() => expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('4'))
+    expect(flow.calculate.calls).toHaveLength(1)
+    expect(flow.put.calls).toHaveLength(1)
+    const body = flow.put.calls[0] as ScenariosReplace
+    expect(body.plans.map((p) => [p.capacity, p.basedOnVersion])).toEqual([
+      [9, 4],
+      [10, 7],
+      [11, 3],
+      [12, 2],
+    ])
+    expect(
+      await screen.findByText('Zapisano nowe plany: 9, 10, 11, 12 miejsc.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Propozycje do przejrzenia' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Akceptuj/ })).toBeNull()
+    expect(screen.getByText(barText)).toBeInTheDocument()
   })
 
-  it('disables Generate while the server computes and says so', async () => {
-    serveScenarios(fourScenarios())
+  it('disables Generate while the server computes and stores, and says so', async () => {
+    const { before, generated, proposals } = generateScenarios()
+    serveGenerateFlow({ before, proposals, stored: [generated] })
     const hold = gate()
     mockApi('post', '/scenarios/calculate', async () => {
       await hold.opened
-      return HttpResponse.json(list(fourProposals()))
+      return HttpResponse.json(list(proposals))
     })
     const { user } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
 
     await user.click(screen.getByRole('button', { name: 'Generuj plany' }))
 
-    expect(await screen.findByRole('button', { name: 'Liczę plany…' })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: 'Liczę i zapisuję plany…' })).toBeDisabled()
     hold.open()
-    await screen.findByRole('region', { name: 'Propozycje do przejrzenia' })
+    await screen.findByText(barText)
   })
 
-  it('a failed Generate shows a toast and no preview', async () => {
-    serveScenarios(fourScenarios())
+  it('a failed Generate shows a toast, keeps the plans and offers no Cofnij', async () => {
+    const { before, generated, proposals } = generateScenarios()
+    serveGenerateFlow({ before, proposals, stored: [generated] })
     mockApi('post', '/scenarios/calculate', () =>
       HttpResponse.json(failure('internal_error'), { status: 500 }),
     )
@@ -129,120 +159,144 @@ describe('PlansPage: generate, preview, accept', () => {
     await user.click(screen.getByRole('button', { name: 'Generuj plany' }))
 
     expect(await screen.findByText(/Coś poszło nie tak po stronie serwera/)).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'Propozycje do przejrzenia' })).toBeNull()
+    expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('3')
+    expect(screen.queryByText(barText)).toBeNull()
   })
 
-  it('Odrzuć clears the preview and keeps the stored plans', async () => {
-    serveScenarios(fourScenarios())
-    const { user, queryClient } = renderPage(<PlansPage />)
+  it('a 409 (plans changed meanwhile) says to click again and stores nothing', async () => {
+    const { before, proposals } = generateScenarios()
+    // nothing prepared: the fake refuses the PUT like a server whose versions moved on
+    serveGenerateFlow({ before, proposals, stored: [] })
+    const { user } = renderPage(<PlansPage />)
     await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, fourProposals())
-    await screen.findByRole('region', { name: 'Propozycje do przejrzenia' })
 
-    await user.click(screen.getByRole('button', { name: 'Odrzuć' }))
-
-    await waitFor(() =>
-      expect(screen.queryByRole('region', { name: 'Propozycje do przejrzenia' })).toBeNull(),
-    )
-    expect(screen.getByRole('article', { name: 'Plan na 10 miejsc' })).toBeInTheDocument()
-  })
-
-  function acceptHandlers(statusByCapacity: Partial<Record<number, number>> = {}) {
-    const store = fourScenarios()
-    return ([9, 10, 11, 12] as const).map((capacity) => {
-      const stored = store.find((s) => s.capacity === capacity)!
-      return {
-        capacity,
-        api: mockApi('put', `/scenarios/${capacity}/assignments`, () => {
-          const status = statusByCapacity[capacity] ?? 200
-          if (status === 409) {
-            return HttpResponse.json(failure('version_conflict'), { status })
-          }
-          return HttpResponse.json(single({ ...stored, version: stored.version + 1 }))
-        }),
-      }
-    })
-  }
-
-  it('"Akceptuj wszystkie" sends one PUT per plan with basedOnVersion and the proposal tables', async () => {
-    serveScenarios(fourScenarios())
-    const handlers = acceptHandlers()
-    const { user, queryClient } = renderPage(<PlansPage />)
-    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, fourProposals())
-
-    await user.click(await screen.findByRole('button', { name: 'Akceptuj wszystkie' }))
-
-    await waitFor(() => handlers.forEach(({ api }) => expect(api.calls).toHaveLength(1)))
-    const body = handlers[1]!.api.calls[0] as { basedOnVersion: number; tables: unknown[] }
-    expect(body.basedOnVersion).toBe(7)
-    expect(body.tables).toHaveLength(3)
-    expect(body.tables[0]).toEqual({ number: 1, guestIds: [1, 2, 3, 4, 5, 6, 7, 8] })
-    await waitFor(() =>
-      expect(screen.queryByRole('region', { name: 'Propozycje do przejrzenia' })).toBeNull(),
-    )
-    expect(await screen.findByText('Zapisano plany: 9, 10, 11, 12 miejsc.')).toBeInTheDocument()
-  })
-
-  it('one 409 shows a toast for that plan while the others stay accepted', async () => {
-    serveScenarios(fourScenarios())
-    acceptHandlers({ 10: 409 })
-    const { user, queryClient } = renderPage(<PlansPage />)
-    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, fourProposals())
-
-    await user.click(await screen.findByRole('button', { name: 'Akceptuj wszystkie' }))
+    await user.click(screen.getByRole('button', { name: 'Generuj plany' }))
 
     expect(
-      await screen.findByText(/Plan na 10 miejsc zmienił się od wygenerowania propozycji/),
-    ).toBeInTheDocument()
-    // only the conflicting proposal is left in the preview
-    await waitFor(() => {
-      const preview = screen.getByRole('region', { name: 'Propozycje do przejrzenia' })
-      expect(within(preview).getAllByRole('article')).toHaveLength(1)
-      expect(
-        within(preview).getByRole('article', { name: 'Propozycja na 10 miejsc' }),
-      ).toBeInTheDocument()
-    })
-  })
-
-  it('accepts one proposal alone', async () => {
-    serveScenarios(fourScenarios())
-    const handlers = acceptHandlers()
-    const { user, queryClient } = renderPage(<PlansPage />)
-    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    queryClient.setQueryData(keys.proposals, fourProposals())
-    const preview = await screen.findByRole('region', { name: 'Propozycje do przejrzenia' })
-
-    await user.click(
-      within(within(preview).getByRole('article', { name: 'Propozycja na 12 miejsc' })).getByRole(
-        'button',
-        { name: /Akceptuj/ },
+      await screen.findByText(
+        'Plany zmieniły się w międzyczasie — kliknij „Generuj plany” jeszcze raz.',
       ),
-    )
-
-    await waitFor(() => expect(handlers[3]!.api.calls).toHaveLength(1))
-    expect(handlers[0]!.api.calls).toHaveLength(0)
-    await waitFor(() =>
-      expect(
-        within(preview).queryByRole('article', { name: 'Propozycja na 12 miejsc' }),
-      ).toBeNull(),
-    )
+    ).toBeInTheDocument()
+    expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('3')
+    expect(screen.queryByText(barText)).toBeNull()
   })
 
-  it('a proposal older than the stored plan is marked stale and cannot be accepted', async () => {
-    const scenarios = fourScenarios()
-    scenarios[1] = makeScenario(10, evenPlan(3, 8), 8) // someone moved a chip after Generate
-    serveScenarios(scenarios)
-    const { queryClient } = renderPage(<PlansPage />)
-    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
-    const proposals: Proposal[] = fourProposals()
-    queryClient.setQueryData(keys.proposals, proposals)
+  it('"Przelicz / Generuj" on a card does exactly the same and stays on the page', async () => {
+    const { before, generated, proposals } = generateScenarios()
+    before[1] = makeScenario(10, makePlan([{ number: 1, clusters: [] }]), 7) // needs recalculation
+    const flow = serveGenerateFlow({ before, proposals, stored: [generated] })
+    const { user } = renderPage(<PlansPage />)
+    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
 
-    const stale = await screen.findByRole('article', { name: 'Propozycja na 10 miejsc' })
-    expect(within(stale).getByRole('alert')).toHaveTextContent('zmienił się po wygenerowaniu')
-    expect(within(stale).queryByRole('button', { name: /Akceptuj/ })).toBeNull()
-    expect(within(stale).getByRole('button', { name: 'Generuj ponownie' })).toBeInTheDocument()
+    await user.click(within(ten).getByRole('button', { name: 'Przelicz / Generuj' }))
+
+    await screen.findByText(barText)
+    expect(flow.put.calls).toHaveLength(1)
+    expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('4')
+    expect(screen.getByRole('heading', { name: 'Plany' })).toBeInTheDocument()
+  })
+})
+
+describe('PlansPage: Cofnij', () => {
+  async function afterGenerate(stored: Scenario[][] = []) {
+    const { before, generated, proposals } = generateScenarios()
+    const flow = serveGenerateFlow({ before, proposals, stored: [generated, ...stored] })
+    const rendered = renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    await rendered.user.click(screen.getByRole('button', { name: 'Generuj plany' }))
+    await screen.findByText(barText)
+    return { ...rendered, flow, before, generated }
+  }
+
+  it('restores the previous plans with the versions Generate produced, then the bar is gone', async () => {
+    const { before, user, flow } = await afterGenerate([
+      fourScenarios().map((s) => ({ ...s, version: s.version + 2 })),
+    ])
+    expect(bar()).toHaveTextContent(barText)
+
+    await user.click(screen.getByRole('button', { name: 'Cofnij' }))
+
+    await waitFor(() => expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('3'))
+    const body = flow.put.calls[1] as ScenariosReplace
+    expect(body.plans.map((p) => [p.capacity, p.basedOnVersion])).toEqual([
+      [9, 5],
+      [10, 8],
+      [11, 4],
+      [12, 3],
+    ])
+    expect(body.plans[1]?.tables).toHaveLength(before[1]!.plan.tables.length)
+    expect(await screen.findByText('Przywrócono poprzednie plany.')).toBeInTheDocument()
+    expect(screen.queryByText(barText)).toBeNull()
+  })
+
+  it('says "Przywracam…" and disables the button while it runs', async () => {
+    const { user } = await afterGenerate([fourScenarios()])
+    const hold = gate()
+    mockApi('put', '/scenarios', async () => {
+      await hold.opened
+      return HttpResponse.json(list(fourScenarios()))
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Cofnij' }))
+
+    expect(await screen.findByRole('button', { name: 'Przywracam…' })).toBeDisabled()
+    hold.open()
+    await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+  })
+
+  it('a 409 explains that the plans changed, drops the offer and shows the stored plans', async () => {
+    const { user } = await afterGenerate()
+    mockApi('put', '/scenarios', () =>
+      HttpResponse.json(failure('version_conflict', 'version'), { status: 409 }),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Cofnij' }))
+
+    expect(
+      await screen.findByText('Nie można cofnąć — plany zmieniono po wygenerowaniu.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(barText)).toBeNull()
+    expect(tablesOf('Plan na 10 miejsc')).toHaveTextContent('4') // what is stored now
+  })
+
+  it('a network error keeps the offer so Cofnij can be retried', async () => {
+    const { user } = await afterGenerate()
+    mockApi('put', '/scenarios', () => HttpResponse.error())
+
+    await user.click(screen.getByRole('button', { name: 'Cofnij' }))
+
+    expect(await screen.findByText(/Brak połączenia z serwerem/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cofnij' })).toBeEnabled()
+  })
+
+  it('hides itself as soon as any plan version moves on (an edit here or on another device)', async () => {
+    const { queryClient, generated } = await afterGenerate()
+
+    act(() => {
+      queryClient.setQueryData(
+        keys.scenarios,
+        generated.map((s) => (s.capacity === 12 ? { ...s, version: s.version + 1 } : s)),
+      )
+    })
+
+    await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+  })
+
+  it('"Zamknij" forgets the snapshot', async () => {
+    const { user, queryClient } = await afterGenerate()
+
+    await user.click(screen.getByRole('button', { name: 'Zamknij' }))
+
+    await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+    expect(queryClient.getQueryData(keys.generateUndo)).toBeUndefined()
+  })
+
+  it('is not offered when nothing was generated in this session', async () => {
+    serveScenarios(fourScenarios())
+    renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+
+    expect(screen.queryByRole('button', { name: 'Cofnij' })).toBeNull()
   })
 })
 
@@ -440,18 +494,19 @@ describe('PlansPage: delete plans', () => {
     expect(await screen.findByRole('button', { name: 'Usuń wszystkie plany' })).toBeDisabled()
   })
 
-  it('a deleted plan leaves the preview, the other proposals stay', async () => {
-    serveScenarios(fourScenarios())
+  it('deleting a plan bumps its version, so a pending Cofnij is no longer offered', async () => {
+    const { before, generated, proposals } = generateScenarios()
+    serveGenerateFlow({ before, proposals, stored: [generated] })
     resetCall(10)
-    const { user, queryClient } = renderPage(<PlansPage />)
-    queryClient.setQueryData(keys.proposals, fourProposals())
-    const ten = await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    const { user } = renderPage(<PlansPage />)
+    await screen.findByRole('article', { name: 'Plan na 10 miejsc' })
+    await user.click(screen.getByRole('button', { name: 'Generuj plany' }))
+    await screen.findByText(barText)
 
-    await user.click(within(ten).getByRole('button', { name: /Usuń plan/ }))
+    await user.click(within(card('Plan na 10 miejsc')).getByRole('button', { name: /Usuń plan/ }))
     await user.click(await screen.findByRole('button', { name: 'Usuń plan 10-osobowy' }))
 
     await screen.findByText('Usunięto plan na 10 miejsc.')
-    expect(screen.queryByRole('article', { name: 'Propozycja na 10 miejsc' })).toBeNull()
-    expect(screen.getByRole('article', { name: 'Propozycja na 9 miejsc' })).toBeInTheDocument()
+    expect(screen.queryByText(barText)).toBeNull()
   })
 })
