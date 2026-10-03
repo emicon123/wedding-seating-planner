@@ -25,12 +25,12 @@ delete:
   operationId: resetPlan
   summary: Delete a plan — remove all its tables, assignments and pins (UC-17)
   description: |
-    "Usuń plan". The scenario itself stays (there are always three plans); it becomes an
+    "Usuń plan". The scenario itself stays (there are always four plans); it becomes an
     empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
     too). Bumps the scenario version, so a proposal generated before is stale (accepting it
     returns 409). Not version-checked, like the other manual plan edits: the result does not
     depend on what the client saw, and repeating it is harmless (idempotent apart from the
-    version bump). No request body. "Usuń wszystkie plany" is three calls, one per capacity.
+    version bump). No request body. "Usuń wszystkie plany" is four calls, one per capacity.
   responses:
     '200':
       description: |

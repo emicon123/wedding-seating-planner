@@ -10,9 +10,9 @@ For any task that leads to code changes, follow the Orchestrator Workflow below 
 
 Core idea (preliminary, details in `.claude/tasks/001-domain-and-stack-adr.task.md` until the Architect writes the glossary):
 - Guest list lives in the app, edited continuously (declines, changes); initial import probably from a Google Sheet.
-- Plans for **8-, 10- and 12-seat tables are handled at the same time** (all three options available together).
+- Plans for **9-, 10-, 11- and 12-seat tables are handled at the same time** (all four options available together; capacity 8 was dropped in task 006, 2026-10-03).
 - Guests have **groups**: group 0 = must sit together (hard — treat the whole group as one seating unit), group 1 = should sit with (preferred), group 2 = may sit with only if unavoidable (fallback).
-- Goal of the auto-seating: **fewest tables**, every table with **at least 6 guests** (rebalance minimally when a remainder would be smaller, e.g. 10 + 10 + 4 → 10 + 8 + 6), with group-0 clusters intact and as many group-1 (then group-2) companions together as possible. Group 1/2 links are symmetric and expand through group-0 clusters.
+- Goal of the auto-seating: **fewest tables**, every table with **at least 8 guests** (floor raised from 6 to 8 on 2026-10-03; rebalance minimally when a remainder would be smaller, e.g. 12 + 12 + 4 → 12 + 8 + 8), with group-0 clusters intact and as many group-1 (then group-2) companions together as possible. Group 1/2 links are symmetric and expand through group-0 clusters.
 - **The UI is a first-class requirement:** very readable, very convenient, as visual as possible.
 
 **Canonical spec:** design docs live in `docs/` (`docs/architecture/`, `docs/adr/`). If the prompt or some code is not what `docs/` says — tell me.

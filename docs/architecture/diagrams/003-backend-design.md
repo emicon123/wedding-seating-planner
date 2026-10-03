@@ -57,7 +57,7 @@ package seating
 type GuestID = int64
 type LinkLevel int
 const (Must LinkLevel = 0; Preferred LinkLevel = 1; Acceptable LinkLevel = 2)
-const Floor = 6                       // minimum guests per table when k > 1
+const Floor = 8                       // minimum guests per table when k > 1 (was 6 until task 006)
 func Weight(l LinkLevel) float64      // Preferred 1.0, Acceptable 0.5, else 0
 
 type Guest struct { ID GuestID; Enabled bool }
@@ -76,7 +76,7 @@ func (g Graph) Clusters() []Cluster                    // ordered by Key
 func (g Graph) ClusterOf(id GuestID) (Cluster, bool)
 func (g Graph) Affinity(a, b GuestID) (LinkLevel, bool) // between two cluster keys; false = strangers
 func (g Graph) IsEnabled(id GuestID) bool
-func (g Graph) Warnings() []DataWarning                 // cluster_exceeds_8 / _12 / conflicting_link_levels
+func (g Graph) Warnings() []DataWarning                 // cluster_exceeds_9 / _12 / conflicting_link_levels
 
 type Seat  struct { Guest GuestID; Pinned bool }
 type Table struct { Number int; Seats []Seat }
@@ -149,7 +149,7 @@ func (s *Service) Import(ctx, r io.Reader, dryRun bool) (importcsv.Report, error
 type PlanState struct { Version int64; Plan seating.Plan }   // reuses seating.Plan (DRY): Capacity, Tables, Seats(+Pinned)
 
 type Store interface {                       // implemented by *store.Scenarios
-    List(ctx) ([]PlanState, error)                                    // 3, ordered by capacity
+    List(ctx) ([]PlanState, error)                                    // 4, ordered by capacity (9, 10, 11, 12)
     Get(ctx, capacity int) (PlanState, error)
     ReplacePlan(ctx, capacity int, expectedVersion int64, p seating.Plan) (PlanState, error)
     SeatCluster(ctx, capacity int, members []int64, tableNumber int, pinned bool) (PlanState, error)
@@ -166,7 +166,7 @@ type Proposal  struct { BasedOnVersion int64; Plan seating.Plan; Eval seating.Ev
 type Service struct { plans Store; guests GuestSource }
 func NewService(p Store, g GuestSource) *Service
 func (s *Service) List(ctx) ([]Evaluated, error)
-func (s *Service) Calculate(ctx) ([]Proposal, error)                                  // Propose ×3 (8, 10, 12) from ONE graph
+func (s *Service) Calculate(ctx) ([]Proposal, error)                                  // Propose ×4 (9, 10, 11, 12) from ONE graph
 func (s *Service) Accept(ctx, capacity int, basedOn int64, tables []seating.Table) (Evaluated, error)
         // validate 1..k + no duplicate guest → keep pins of previously pinned clusters → ExpandDisabled → ReplacePlan
 func (s *Service) Seat(ctx, capacity int, guestID int64, table int, pinned bool) (Evaluated, error) // whole cluster (ClusterOf.Members)
@@ -375,7 +375,7 @@ classDiagram
 | Decorator | adopted only as chi middleware | Request ID, recoverer, logging, body limit: the idiomatic `func(http.Handler) http.Handler`. |
 | Generic repository | rejected | Two aggregates with different operations. |
 | Clock / ID-generator interfaces | rejected | Timestamps come from SQL defaults; ids from SQLite. |
-| Batch "delete all plans" endpoint (Unit of Work over 3 scenarios) | rejected | Three independent `DELETE /scenarios/{capacity}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the three plans to change atomically (they are independent aggregates, like "accept all"). |
+| Batch "delete all plans" endpoint (Unit of Work over 4 scenarios) | rejected | Four independent `DELETE /scenarios/{capacity}/tables` calls suffice: each is idempotent, a partial failure is fixed by retrying, and nothing requires the three plans to change atomically (they are independent aggregates, like "accept all"). |
 
 ## 5. Clean-architecture / SOLID / YAGNI audit (Skill 16)
 

@@ -1,6 +1,6 @@
 # 001 — State machines (domain lifecycles + UI interaction)
 
-Task 001, Phase 2 (Skill 7); updated 2026-10-02 with the user's answers (enabled toggle, generate-all-three, no login). Terms: [../01-domain-glossary.md](../01-domain-glossary.md). Rules: [../03-seating-model.md](../03-seating-model.md).
+Task 001, Phase 2 (Skill 7); updated 2026-10-02 with the user's answers (enabled toggle, generate-all-three, no login); updated 2026-10-03 for four table sizes 9/10/11/12 (task 006). Terms: [../01-domain-glossary.md](../01-domain-glossary.md). Rules: [../03-seating-model.md](../03-seating-model.md).
 
 Contents:
 1. [Guest lifecycle](#1-guest-lifecycle) (domain)
@@ -35,11 +35,11 @@ stateDiagram-v2
 
     note right of Enabled
         Seated / Unseated / Pinned is tracked separately
-        in EACH of the three plans (8 / 10 / 12).
+        in EACH of the four plans (9 / 10 / 11 / 12).
         All members of a cluster share the same table.
     end note
     note right of Disabled
-        Ignored by all three plans: no seat, no fill,
+        Ignored by all four plans: no seat, no fill,
         no score. Links kept, and still define the
         cluster and its affinities. Any assignment is
         kept and follows the cluster, so toggling on
@@ -57,7 +57,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> Showing: open plans (GET /scenarios)
     Showing --> Generating: click Generate
-    Generating --> Previewing: 3 proposals returned (8, 10, 12)
+    Generating --> Previewing: 4 proposals returned (9, 10, 11, 12)
     Generating --> Showing: error (toast)
     Previewing --> Accepting: accept one / several / all
     Previewing --> Showing: discard
@@ -98,7 +98,7 @@ stateDiagram-v2
     end note
 ```
 
-*Legend:* the three Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` is tracked per plan and derived by the server (`summary.needsRecalculation` = any violation). In `NeedsRecalculation` the plan card and the floor plan show a "Przelicz / Generuj" call to action. There is never an automatic regeneration. Each proposal carries `basedOnVersion`, and each accept is an independent PUT, so "accept all" is three calls and a conflict affects only that scenario. Generate always produces all three plans (user requirement). `Previewing` replaces an undo stack for accepting. **Delete plan** (UC-17) has no undo either; a confirmation dialog stands in for it. `Empty` is a display state, not a stored one: the server still derives `needsRecalculation` (true when any enabled guest exists), the UI additionally recognises `tableCount = 0` to show the empty state and disable "Usuń plan". Discarding a preview ("Odrzuć", `Previewing → Showing`) is a different thing: it never touches a stored plan.
+*Legend:* the four Scenarios are aggregate roots with an **Optimistic Offline Lock** (`version`). `UpToDate` / `NeedsRecalculation` is tracked per plan and derived by the server (`summary.needsRecalculation` = any violation). In `NeedsRecalculation` the plan card and the floor plan show a "Przelicz / Generuj" call to action. There is never an automatic regeneration. Each proposal carries `basedOnVersion`, and each accept is an independent PUT, so "accept all" is four calls and a conflict affects only that scenario. Generate always produces all three plans (user requirement). `Previewing` replaces an undo stack for accepting. **Delete plan** (UC-17) has no undo either; a confirmation dialog stands in for it. `Empty` is a display state, not a stored one: the server still derives `needsRecalculation` (true when any enabled guest exists), the UI additionally recognises `tableCount = 0` to show the empty state and disable "Usuń plan". Discarding a preview ("Odrzuć", `Previewing → Showing`) is a different thing: it never touches a stored plan.
 
 ## 3. Cluster drag & drop (UI)
 
@@ -155,9 +155,9 @@ stateDiagram-v2
     PrintView --> Plans: back
     state Plans {
         [*] --> Compare
-        Compare --> PlanDetail: open 8 / 10 / 12
+        Compare --> PlanDetail: open 9 / 10 / 11 / 12
         PlanDetail --> Compare: back
-        PlanDetail --> PlanDetail: switch 8 / 10 / 12
+        PlanDetail --> PlanDetail: switch 9 / 10 / 11 / 12
     }
     state Guests {
         [*] --> List
@@ -168,7 +168,7 @@ stateDiagram-v2
 ```
 
 *Legend:* there is no login state (tailnet-only access).
-- `Compare` shows the three plans side by side: table count, fill bars, satisfaction and violation count, plus the **Generate** button.
+- `Compare` shows the four plans side by side (2×2 on medium screens, 4 across on wide ones): table count, fill bars, satisfaction and violation count, plus the **Generate** button.
 - `PlanDetail` is the floor plan of one plan, with the unseated tray, guest search and a details panel showing where a guest's preferred companions sit, with "via group 0 of X" provenance.
 - `Guests` is the editable list. It has per-row enable switches, a child marker, the relationships panel with per-group link checklists, and data warnings ([003-frontend-design.md](003-frontend-design.md) §5).
 

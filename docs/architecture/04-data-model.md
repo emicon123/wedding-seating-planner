@@ -61,7 +61,7 @@ type ImportLink struct {     // link between guests that have no ids yet (CSV im
 // package scenarios
 type PlanState struct {      // one stored plan, as loaded for evaluation
     Version int64
-    Plan    seating.Plan     // Capacity (8/10/12) + Tables (ordered 1..k) + Seats{Guest, Pinned}
+    Plan    seating.Plan     // Capacity (9/10/11/12) + Tables (ordered 1..k) + Seats{Guest, Pinned}
 }
 ```
 
@@ -156,12 +156,12 @@ type GuestStore interface {
     ReplaceAll(ctx context.Context, gs []guests.NewGuest, ls []guests.ImportLink) error   // DEFERRED (import)
                                                                             // import commit: delete assignments, tables, links, guests;
                                                                             // insert guests (ids assigned), resolve ImportLink indexes → ids,
-                                                                            // insert links; bump all three scenario versions
+                                                                            // insert links; bump all four scenario versions
 }
 
 // ScenarioStore — aggregate root: Scenario (+ tables, assignments)
 type ScenarioStore interface {
-    List(ctx context.Context) ([]scenarios.PlanState, error)               // always 3, ordered by capacity
+    List(ctx context.Context) ([]scenarios.PlanState, error)               // always 4, ordered by capacity (9, 10, 11, 12)
     Get(ctx context.Context, capacity int) (scenarios.PlanState, error)
     ReplacePlan(ctx context.Context, capacity int, expectedVersion int64, p seating.Plan) (scenarios.PlanState, error)
                                                                             // ErrVersionConflict; delete tables (cascade) → insert tables 1..k + assignments; version+1
@@ -193,6 +193,6 @@ Notes for implementers:
 | DTO + Mapper | **adopted** | Plain functions per boundary |
 | Optimistic Offline Lock | **adopted** | `version` on guest and scenario |
 | Identity Map / caching | rejected | ~100 rows; reload per request |
-| Bulk endpoints in general | rejected except toggle | Only "disable all children" needs bulk (`PATCH /guests`). "Usuń wszystkie plany" is three per-plan calls, like "accept all" |
+| Bulk endpoints in general | rejected except toggle | Only "disable all children" needs bulk (`PATCH /guests`). "Usuń wszystkie plany" is four per-plan calls, like "accept all" |
 | Separate `/guest-links` list endpoint | rejected | Links are embedded in `Guest.links`, so the guest screen needs one call |
-| Separate `GET /scenarios/{capacity}` | rejected | `GET /scenarios` returns all three (small payload); mutations return the single updated scenario |
+| Separate `GET /scenarios/{capacity}` | rejected | `GET /scenarios` returns all four (small payload); mutations return the single updated scenario |

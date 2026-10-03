@@ -1,20 +1,20 @@
 post:
   tags: [scenarios]
   operationId: calculateProposals
-  summary: Generate proposals for all three plans (UC-10)
+  summary: Generate proposals for all four plans (UC-10)
   description: |
-    Pure computation — nothing is stored. Runs auto-seating for capacity 8, 10 and 12 from the
+    Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
     current guests, links and pins. Accept a proposal with `PUT /scenarios/{capacity}/assignments`.
   responses:
     '200':
-      description: Exactly three proposals, ordered 8, 10, 12.
+      description: Exactly four proposals, ordered 9, 10, 11, 12.
       content:
         application/json:
           schema:
             $ref: ../components/schemas.yaml#/ProposalListResponse
           example:
             data:
-              - capacity: 8
+              - capacity: 9
                 basedOnVersion: 7
                 plan:
                   summary:
@@ -45,7 +45,7 @@ post:
             meta:
               requestId: 01JB8Z6Q0K3N
             page:
-              total: 3
+              total: 4
     '400':
       $ref: ../components/responses.yaml#/BadRequest
     '500':

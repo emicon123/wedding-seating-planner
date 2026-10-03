@@ -21,7 +21,7 @@ post:
   tags: [guests]
   operationId: createGuest
   summary: Add a guest (UC-02)
-  description: The new guest is enabled by default and unseated in all three plans.
+  description: The new guest is enabled by default and unseated in all four plans.
   requestBody:
     required: true
     content:

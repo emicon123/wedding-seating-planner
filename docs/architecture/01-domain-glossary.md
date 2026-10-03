@@ -6,7 +6,7 @@ Stoliki plans the table seating of **one** wedding. This document is the shared 
 
 ## 1. Requirements summary
 
-**Goal.** Seat **~85–100 guests** at round tables. Every "must sit together" group stays intact, and plans use as few tables as possible with no table below 6 guests. Within that, as many preferred companions as possible sit together. Three plans are always produced side by side, one each for 8-, 10- and 12-seat tables. The result must be visual and easy to adjust by hand.
+**Goal.** Seat **~85–100 guests** at round tables. Every "must sit together" group stays intact, and plans use as few tables as possible with no table below 8 guests. Within that, as many preferred companions as possible sit together. Three plans are always produced side by side, one each for 8-, 10- and 12-seat tables. The result must be visual and easy to adjust by hand.
 
 **Actors**
 
@@ -25,29 +25,29 @@ Stoliki plans the table seating of **one** wedding. This document is the shared 
 | **Guest** | Gość | A person who may attend. Fields: **firstName** (required), **lastName** (optional), **notes** (free text), **isChild**, **enabled**. Children are ordinary guests who take a seat. |
 | **Display name** | Nazwa | `firstName` + optional ` lastName`. It must be **unique, ignoring case and surrounding whitespace** (stored as `nameKey`). Names are how links are typed and imported, so two "Ania" must become "Ania Kowalska" / "Ania Nowak" (or "Ania K."). |
 | **isChild** | Dziecko | A marker used for filtering and bulk toggling (e.g. "disable all children"). It has no effect on seating rules. |
-| **Enabled** | Uwzględniony (przełącznik) | A quick on/off switch per guest. A **disabled** guest stays on the list, keeps all links and is **ignored by all three plans**: not seated, not counted in table fill, not scored. Typical uses: a decline, a child who cannot come, a "what-if without the children" variant. Toggling is instant and reversible. It replaces a separate attending/declined status: one switch covers both and there is nothing else to track. |
+| **Enabled** | Uwzględniony (przełącznik) | A quick on/off switch per guest. A **disabled** guest stays on the list, keeps all links and is **ignored by all four plans**: not seated, not counted in table fill, not scored. Typical uses: a decline, a child who cannot come, a "what-if without the children" variant. Toggling is instant and reversible. It replaces a separate attending/declined status: one switch covers both and there is nothing else to track. |
 | **Link** | Powiązanie | An **undirected** relation between two guests with a **LinkLevel**. There is at most one link per pair. It can be entered from either guest and shows on both. The API stores **one symmetric row per pair with no author**, so the UI cannot tell who entered a link ("wpisany przez Emilkę"); it can only say whether the link is the shown guest's own ("wpisany bezpośrednio") or reached through someone ("przez grupę 0: X" / "przez powiązanie: X"). Showing the author would need a new contract field (possible future change, not planned). |
 | **LinkLevel** | Grupa 0 / 1 / 2 | `0` = *must sit together* (hard). `1` = *preferred* (soft, weight 1.0). `2` = *acceptable if unavoidable* (soft, weight 0.5). Order of happiness: group 1 > group 2 > no link ("stranger"). |
 | **Group-0/1/2 list** | Grupa 0/1/2 gościa | The *view* of one guest's relations of a given level. Not stored separately. **Group 0 of a guest is their whole cluster** (every other member, also those reached through someone else's links, e.g. Justynka's group 0 = Emilka + Maks + os. tow. when Emilka linked all three), never only the guest's own stored group-0 links. Group 1/2 = every member of each cluster with that affinity. |
 | **Cluster** | Paczka | A connected component of the **group-0 graph over all guests, disabled ones included** (user-confirmed). It is the **seating unit**: all its enabled members sit at one table. Disabling the "hub" guest (e.g. Rafał, who listed his wife and mother-in-law) therefore does **not** split the family. A cluster whose members are all disabled disappears from the plans. A guest without group-0 links is a cluster of one. Derived, never stored. |
 | **Seated size** | Liczba miejsc paczki | The number of **enabled** members of a cluster: the seats it takes. |
 | **Cluster affinity** | Sympatia między paczkami | The group-1/2 relation **between whole clusters** (user rule): if any member of cluster A has a level-1 (or level-2) link to any member of cluster B, then **all of A** has that level with **all of B**. The relation is symmetric and not transitive. Links of disabled members still count, because the families know each other regardless. **Defensive rule for bad data only:** if links between two clusters carry different levels, the strongest wins (1 over 2) and a `conflicting_link_levels` **data warning** is shown. This is what makes partners "come along automatically" and lets the UI show "Ola — przez grupę 0: Michał". Derived, never stored. |
-| **Oversized cluster** | Za duża paczka | A cluster whose seated size exceeds a scenario's capacity. That cluster cannot be seated in that scenario (violation). A data warning is also raised when the seated size exceeds 8 (does not fit the 8-seat plan), so a stray link that merges two families is noticed. |
-| **Scenario** | Plan (8 / 10 / 12) | One seating plan in which **every table has the same capacity**. Exactly three exist permanently, identified by capacity: **8, 10, 12**. They share the guest list and links; each has its own tables, assignments and pins. They are always shown and generated together. |
-| **Delete a plan** | Usuń plan / Usuń wszystkie plany | Resets one scenario to an **empty plan**: all its tables, assignments and pins are removed (disabled guests' assignments too) and its `version` is bumped. The scenario itself is never deleted (there are always three). Irreversible (no undo). An empty plan with enabled guests has an `unseated_guests` violation, so it shows **Needs recalculation**. "Usuń wszystkie plany" = the same for 8, 10 and 12. Not to be confused with discarding a **Proposal** ("Odrzuć"), which never touches a stored plan. |
-| **Capacity** | Liczba miejsc | Seats per table in a scenario (8, 10 or 12). Hard upper bound. |
-| **Floor** | Minimalne obłożenie | **6 guests**, a hard lower bound for every table in all three scenarios, waived only when the whole scenario needs a single table. Any fill between 6 and capacity is equally good: evenness is not rewarded. |
+| **Oversized cluster** | Za duża paczka | A cluster whose seated size exceeds a scenario's capacity. That cluster cannot be seated in that scenario (violation). A data warning is also raised when the seated size exceeds 9 (does not fit the smallest, 9-seat plan), so a stray link that merges two families is noticed. |
+| **Scenario** | Plan (9 / 10 / 11 / 12) | One seating plan in which **every table has the same capacity**. Exactly four exist permanently, identified by capacity: **9, 10, 11, 12** (always listed in that order). They share the guest list and links; each has its own tables, assignments and pins. They are always shown and generated together. |
+| **Delete a plan** | Usuń plan / Usuń wszystkie plany | Resets one scenario to an **empty plan**: all its tables, assignments and pins are removed (disabled guests' assignments too) and its `version` is bumped. The scenario itself is never deleted (there are always four). Irreversible (no undo). An empty plan with enabled guests has an `unseated_guests` violation, so it shows **Needs recalculation**. "Usuń wszystkie plany" = the same for 9, 10, 11 and 12. Not to be confused with discarding a **Proposal** ("Odrzuć"), which never touches a stored plan. |
+| **Capacity** | Liczba miejsc | Seats per table in a scenario (9, 10, 11 or 12). Hard upper bound. |
+| **Floor** | Minimalne obłożenie | **8 guests** (was 6 until 2026-10-03), a hard lower bound for every table in all four scenarios, waived only when the whole scenario needs a single table. Any fill between 8 and capacity is equally good: evenness is not rewarded. Some guest counts cannot meet it with small tables (e.g. 10–15 guests at capacity 9); the plan then shows `under_floor` violations ([03-seating-model.md](03-seating-model.md) § Feasibility). |
 | **Table** | Stół | A table in a scenario, numbered 1…k with no gaps (removing a table renumbers the later ones). No seat positions inside a table. |
 | **Assignment** | Przydział | "Guest g sits at table t in scenario s." At most one per guest per scenario. Assignments are always changed **per cluster**. Disabled members keep their assignment and move with their cluster. A re-enabled guest **must** sit with their cluster, so they reappear at the family's table even if it is full. That table then gets an `over_capacity` violation, and the plan is flagged **Needs recalculation** (user-confirmed). |
 | **Unseated** | Bez stołu | An enabled guest with no assignment in a scenario (e.g. added after the plan was accepted). Shown in the unseated tray. |
 | **Pin** | Przypięcie | "Keep this cluster at this table when plans are regenerated." Stored on the members' assignments. A cluster is pinned if any member is pinned; pinning or unpinning always applies to the whole cluster. |
-| **Generate** | Generuj plany | Runs auto-seating for **all three scenarios at once** and returns three **Proposals**. Pure computation: nothing changes until a proposal is accepted. Rules: [03-seating-model.md](03-seating-model.md). |
+| **Generate** | Generuj plany | Runs auto-seating for **all four scenarios at once** and returns four **Proposals**. Pure computation: nothing changes until a proposal is accepted. Rules: [03-seating-model.md](03-seating-model.md). |
 | **Proposal** | Propozycja | The transient output of Generate for one scenario: tables, assignments and an evaluation, plus the scenario `version` it was based on. **Accepting** it replaces that scenario's tables and assignments (pins kept). Never stored. |
 | **Evaluation** | Ocena | Derived facts about a scenario or proposal: table count, fill per table, **satisfaction**, **violations**. Recomputed by the backend whenever a scenario is read or changed. |
 | **Satisfaction** | Zadowolenie | For an enabled guest g: the sum over enabled table-mates h outside g's cluster of `w(affinity)`, where `w1 = 1.0`, `w2 = 0.5` and a stranger counts 0. Also reported as "k of n preferred companions at this table". Table and scenario scores are sums. |
 | **Violation** | Naruszenie | A broken hard rule in a stored plan: cluster split, over capacity, under floor, unseated guests, oversized cluster. Violations never block saving; they are displayed. |
 | **Needs recalculation** | Wymaga przeliczenia | Derived flag on a stored plan: true when the plan has at least one violation (e.g. a re-enabled guest overfills the family's table, or a new guest is unseated). The UI shows a prominent "Przelicz / Generuj" call to action. The server **never regenerates on its own**: the user clicks Generate and accepts. Exposed as `SeatingPlan.summary.needsRecalculation`. |
-| **Data warning** | Ostrzeżenie | A problem in the guest data rather than the plan: cluster > 8, cluster > 12, conflicting link levels. |
+| **Data warning** | Ostrzeżenie | A problem in the guest data rather than the plan: cluster > 9 (`cluster_exceeds_9`), cluster > 12 (`cluster_exceeds_12`), conflicting link levels. |
 | **Guest import** | Import listy | **Deferred (post-MVP).** For the MVP, guests and links are entered manually. Loads the guest list from a CSV export of the Google Sheet. A **dry run** returns an **Import report**. A **commit** replaces all guests and links and clears all three scenarios. |
 | **Import report** | Raport importu | Counts (guests, children, links, clusters) and problems per row. **Errors** block the commit: missing first name, duplicate name, malformed file. **Warnings** do not: an unmatched or ambiguous name reference (that link is dropped), a self-link, conflicting levels for one pair (the strongest is kept). |
 
@@ -58,7 +58,7 @@ Stoliki plans the table seating of **one** wedding. This document is the shared 
 | Guest | **Entity** (aggregate root of the guest list) | Surrogate id. Created, edited, enabled/disabled, deleted. `version` for optimistic locking | yes |
 | Link | Value object owned by the guest pair | Unordered pair + level; replaced, not mutated | yes (one row per pair) |
 | LinkLevel, Capacity, display name | Value objects | — | columns |
-| Scenario | **Entity** (aggregate root) | Fixed three, keyed by capacity. `version` | yes (seeded by migration) |
+| Scenario | **Entity** (aggregate root) | Fixed four, keyed by capacity. `version` | yes (seeded by migration) |
 | Table | Entity inside Scenario | Number within the scenario | yes |
 | Assignment (+ pin) | Entity inside Scenario | (scenario, guest) | yes |
 | Cluster, Cluster affinity, Seated size | Value objects, **derived** | Recomputed from guests + links | no |
@@ -81,15 +81,15 @@ All paths are relative to `/wesele/api`. The contract is [`docs/openapi.yaml`](.
 | UC-07 | **Review and edit a guest's relationships**: the relationships panel ("Powiązania: X") shows groups 0/1/2 with the reason for each person ("wpisany bezpośrednio" / "przez grupę 0: X" / "przez powiązanie: X"); names open that person. Editing one group is a **checklist** of all guests (search, "Tylko zaznaczeni"); "Zapisz" applies the difference (removals first, then moves/adds). A missing guest can be created from the search ("Dodaj «X» jako nowego gościa": created and ticked, linked on Zapisz). "Pokaż na liście" filters the guest list to this person and their relations | `PUT` / `DELETE /guest-links/{linkKey}` (one call per changed pair); create: `POST /guests` |
 | UC-08 | **Review clusters and data warnings** | `GET /clusters` |
 | — | Liveness | `GET /health` |
-| UC-09 | **View / compare the three plans**: table count, fill, satisfaction, violations | `GET /scenarios` |
-| UC-10 | **Generate all three plans**, preview them side by side, then **accept** one, several or all (each version-checked), or discard | `POST /scenarios/calculate` → `PUT /scenarios/{capacity}/assignments` per accepted plan |
+| UC-09 | **View / compare the four plans**: table count, fill, satisfaction, violations | `GET /scenarios` |
+| UC-10 | **Generate all four plans**, preview them side by side, then **accept** one, several or all (each version-checked), or discard | `POST /scenarios/calculate` → `PUT /scenarios/{capacity}/assignments` per accepted plan |
 | UC-11 | **Move a cluster** to another table or back to the tray (drag & drop or keyboard) | `PUT` / `DELETE /scenarios/{capacity}/assignments/{guestId}` |
 | UC-12 | **Pin / unpin a cluster** at its table | `PUT /scenarios/{capacity}/assignments/{guestId}` with `pinned` |
 | UC-13 | **Add or remove a table** in a plan (removing one unseats its guests and renumbers) | `POST /scenarios/{capacity}/tables`, `DELETE /scenarios/{capacity}/tables/{tableNumber}` |
 | UC-14 | **Inspect satisfaction** of a guest or table | part of the scenario payload |
 | UC-15 | **Print** a plan (browser print of a print view) | client only |
 | UC-16 | **Find a guest** ("where does Ania sit?") | client-side over the cached data |
-| UC-17 | **Delete a plan** ("Usuń plan") or all three ("Usuń wszystkie plany") after a confirmation: the plan becomes empty (no tables, everyone unseated, pins gone) | `DELETE /scenarios/{capacity}/tables` (one call per plan; "all" = three calls) |
+| UC-17 | **Delete a plan** ("Usuń plan") or all four ("Usuń wszystkie plany") after a confirmation: the plan becomes empty (no tables, everyone unseated, pins gone) | `DELETE /scenarios/{capacity}/tables` (one call per plan; "all" = four calls) |
 
 ```mermaid
 flowchart LR
@@ -103,9 +103,9 @@ flowchart LR
         UC07[UC-07 Relationships + link checklists]
         UC08[UC-08 Clusters and warnings]
     end
-    subgraph SC[Plans 8 / 10 / 12]
+    subgraph SC[Plans 9 / 10 / 11 / 12]
         UC09[UC-09 Compare plans]
-        UC10[UC-10 Generate all three, accept]
+        UC10[UC-10 Generate all four, accept]
         UC11[UC-11 Move cluster]
         UC12[UC-12 Pin]
         UC13[UC-13 Add / remove table]
@@ -127,7 +127,7 @@ flowchart LR
 
 ## Assumptions
 
-Confirmed by the user on 2026-10-02 and folded in above: tailnet-only with no app login and equal rights; three single-size plans, always generated together; no hard "must not sit together"; the couple is not on the list, so no head table or seat order; floor 6 on every table, and fewest tables always beats satisfaction; whole-cluster moves + pins + preview, no undo; CSV replace-all import with a dry run; browser print; weights 1.0 / 0.5; ~85–100 guests; cluster-to-cluster link semantics; enabled toggle + child flag.
+Confirmed by the user on 2026-10-02 and folded in above: tailnet-only with no app login and equal rights; single-size plans, always generated together (four sizes, 9/10/11/12, since 2026-10-03; originally 8/10/12); no hard "must not sit together"; the couple is not on the list, so no head table or seat order; floor 6 on every table, and fewest tables always beats satisfaction; whole-cluster moves + pins + preview, no undo; CSV replace-all import with a dry run; browser print; weights 1.0 / 0.5; ~85–100 guests; cluster-to-cluster link semantics; enabled toggle + child flag.
 
 Also confirmed (2026-10-02, second round): clusters are computed over all guests, disabled included (A-13); a re-enabled guest returns to their cluster's table, and an overfilled table flags the plan **Needs recalculation** with no automatic regeneration (A-14 + A-17); CSV import is **deferred** to post-MVP, and the MVP relies on fast manual entry (A-15).
 

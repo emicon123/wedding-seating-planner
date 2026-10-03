@@ -42,7 +42,7 @@ DryRun:
   required: false
   description: |
     `true` (default) only validates and returns the report. `false` commits:
-    replaces ALL guests and links and clears all three plans.
+    replaces ALL guests and links and clears all four plans.
   schema:
     type: boolean
     default: true

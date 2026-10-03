@@ -107,7 +107,7 @@ Guest:
       example: false
     enabled:
       type: boolean
-      description: Disabled guests stay on the list but are ignored by all three plans.
+      description: Disabled guests stay on the list but are ignored by all four plans.
       example: true
     version:
       type: integer
@@ -306,17 +306,21 @@ DataWarning:
   properties:
     code:
       type: string
-      enum: [cluster_exceeds_8, cluster_exceeds_12, conflicting_link_levels]
-      example: cluster_exceeds_8
+      enum: [cluster_exceeds_9, cluster_exceeds_12, conflicting_link_levels]
+      description: |
+        `cluster_exceeds_9`: a group-0 cluster of 10–12 enabled guests does not fit the smallest
+        (9-seat) plan. `cluster_exceeds_12`: 13+ enabled guests, fits no plan.
+        `conflicting_link_levels`: two clusters are linked at both level 1 and level 2.
+      example: cluster_exceeds_9
     message:
       type: string
-      example: A group-0 cluster of 9 enabled guests does not fit the 8-seat plan.
+      example: A group-0 cluster of 10 enabled guests does not fit the 9-seat plan.
     guestIds:
       type: array
       items:
         type: integer
         format: int64
-      example: [1, 2, 3, 9, 10, 11, 12, 13, 14]
+      example: [1, 2, 3, 9, 10, 11, 12, 13, 14, 15]
 ClusterOverview:
   type: object
   required: [clusters, warnings]
@@ -408,8 +412,8 @@ ImportReportResponse:
 # ---------- scenarios ----------
 Capacity:
   type: integer
-  enum: [8, 10, 12]
-  description: Seats per table; identifies one of the three plans.
+  enum: [9, 10, 11, 12]
+  description: Seats per table; identifies one of the four plans.
   example: 10
 ClusterPlacement:
   type: object
@@ -489,7 +493,7 @@ Violation:
       example: under_floor
     message:
       type: string
-      example: Table 3 has 4 guests (minimum 6).
+      example: Table 3 has 6 guests (minimum 8).
     tableNumber:
       type: [integer, 'null']
       example: 3
@@ -604,7 +608,7 @@ ProposalListResponse:
   properties:
     data:
       type: array
-      description: Always exactly three proposals, ordered 8, 10, 12.
+      description: Always exactly four proposals, ordered 9, 10, 11, 12.
       items:
         $ref: '#/Proposal'
     meta:

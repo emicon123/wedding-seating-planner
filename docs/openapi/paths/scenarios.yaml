@@ -1,17 +1,17 @@
 get:
   tags: [scenarios]
   operationId: listScenarios
-  summary: The three plans (8, 10, 12) with their evaluations (UC-09, UC-14)
+  summary: The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
   responses:
     '200':
-      description: Always three scenarios, ordered 8, 10, 12.
+      description: Always four scenarios, ordered 9, 10, 11, 12.
       content:
         application/json:
           schema:
             $ref: ../components/schemas.yaml#/ScenarioListResponse
           example:
             data:
-              - capacity: 8
+              - capacity: 9
                 version: 1
                 plan:
                   summary:
@@ -35,7 +35,7 @@ get:
             meta:
               requestId: 01JB8Z6Q0K3N
             page:
-              total: 3
+              total: 4
     '400':
       $ref: ../components/responses.yaml#/BadRequest
     '500':

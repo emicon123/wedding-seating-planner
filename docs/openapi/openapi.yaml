@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Stoliki API
   version: 0.1.0
-  summary: Wedding table-seating planner (guests, links, three plans for 8/10/12-seat tables).
+  summary: Wedding table-seating planner (guests, links, four plans for 9/10/11/12-seat tables).
   description: |
     Source of truth for the Stoliki REST API. Edit the files under `docs/openapi/`
     and run `make openapi` to regenerate the bundle `docs/openapi.yaml` (never edit the bundle).
@@ -30,7 +30,7 @@ tags:
   - name: imports
     description: CSV import with dry run (UC-01) — DEFERRED, post-MVP
   - name: scenarios
-    description: The three plans (8/10/12), generate, accept, move, pin, tables, delete plan (UC-09…UC-14, UC-17)
+    description: The four plans (9/10/11/12), generate, accept, move, pin, tables, delete plan (UC-09…UC-14, UC-17)
   - name: health
     description: Liveness
 security: []

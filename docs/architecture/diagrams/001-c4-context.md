@@ -12,7 +12,7 @@ C4Context
     Person(viewer, "Viewer at the venue", "Same people on a phone: find a guest, check a table")
 
     System_Boundary(pi, "Raspberry Pi home server (ARM64, Docker)") {
-        System(stoliki, "Stoliki", "Wedding seating planner: guest list, group 0/1/2 links, three scenarios (8/10/12 seats), auto-seating")
+        System(stoliki, "Stoliki", "Wedding seating planner: guest list, group 0/1/2 links, four scenarios (9/10/11/12 seats), auto-seating")
         System_Ext(otherapps, "Other apps on the Pi", "investing-app edge Nginx (/ , /sibling-a, /sibling-b) — must stay untouched")
     }
 

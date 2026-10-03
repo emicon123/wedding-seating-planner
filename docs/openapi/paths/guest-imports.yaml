@@ -12,7 +12,7 @@ post:
     A name reference matches a full display name, or a first name if exactly one guest has it.
 
     `dryRun=true` (default): validate only, return the report.
-    `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all three plans,
+    `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all four plans,
     in one transaction; with errors → 422 and nothing changes.
   parameters:
     - $ref: ../components/parameters.yaml#/DryRun

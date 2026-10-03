@@ -78,7 +78,7 @@ The user decided on 2026-10-02 that no public access is needed. **If the app is 
 - One implementation, table-driven tests.
 - The evaluation returned on every read is the same code the generator optimises.
 - Rejected: running it in the browser (scores would have to be duplicated or trusted).
-- Generating runs the same function three times, with capacity 8, 10 and 12. At ~100 guests, that takes well under a second on the Pi.
+- Generating runs the same function three times, with capacity 8, 10 and 12. At ~100 guests, that takes well under a second on the Pi. *(Amended 2026-10-03: four times, capacities 9, 10, 11, 12 — see "Amendment 2026-10-03" below.)*
 
 **Consequences:**
 - + Minimal ops: one container, one SQLite file, **no secrets at all** (the `.env` holds only non-secret config).
@@ -86,3 +86,5 @@ The user decided on 2026-10-02 that no public access is needed. **If the app is 
 - − Access depends entirely on the tailnet and on the mapping never being funnelled. Re-exposing publicly requires adding auth first (see §2).
 - − SQLite type conventions differ from the generic "TIMESTAMPTZ/NUMERIC" rule.
 - − No per-person audit trail.
+
+**Amendment (2026-10-03, task 006, user decision):** table capacities are **9, 10, 11 and 12** (was 8, 10, 12): four permanent plans, always shown, generated and compared together. The **floor rises from 6 to 8 guests per table** (user decision the same day), for every capacity, still waived for a single-table plan; for small guest counts some N have no feasible table count (e.g. 10–15 guests at capacity 9) and the plan then carries `under_floor` violations instead of failing. Generating runs the seating function four times from one graph (still well under a second at ~100 guests). Schema change by migration `00002_capacity_9_10_11_12.sql`, which keeps all existing data (8-seat plan converted to 9, version bumped; new empty plan 11). Contract: `Capacity` enum `[9, 10, 11, 12]`, four scenarios / proposals ordered by capacity, and the data warning `cluster_exceeds_8` is renamed `cluster_exceeds_9` (its threshold follows the smallest plan). Pattern check: no new patterns; capacity stays a parameter (Strategy still rejected).

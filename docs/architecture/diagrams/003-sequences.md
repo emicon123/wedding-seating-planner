@@ -2,13 +2,13 @@
 
 Task 003, Phase 5. The participants are the components and packages from [003-frontend-design.md](003-frontend-design.md) and [003-backend-design.md](003-backend-design.md). All HTTP paths are relative to `/wesele/api` ([`docs/openapi.yaml`](../../openapi.yaml)).
 
-1. [Generate all three plans → preview → accept](#1-generate-all-three-plans--preview--accept)
+1. [Generate all four plans → preview → accept](#1-generate-all-four-plans--preview--accept)
 2. [Move a cluster (drag & drop, optimistic)](#2-move-a-cluster-drag--drop-optimistic)
 3. [Re-enable a guest → plan needs recalculation → regenerate](#3-re-enable-a-guest--plan-needs-recalculation--regenerate)
 4. [Quick-add a guest and link them through the group checklist](#4-quick-add-a-guest-and-link-them-through-the-group-checklist)
 5. [Delete a plan](#5-delete-a-plan-task-005-uc-17)
 
-## 1. Generate all three plans → preview → accept
+## 1. Generate all four plans → preview → accept
 
 ```mermaid
 sequenceDiagram
@@ -31,7 +31,7 @@ sequenceDiagram
     S->>P: List(ctx)
     P-->>S: 3 PlanState (versions, pins)
     S->>C: BuildGraph(guests, links)
-    loop capacity 8, 10, 12
+    loop capacity 9, 10, 11, 12
         S->>C: Propose(graph, current plan)
         C-->>S: proposed Plan
         S->>C: Evaluate(graph, proposed)
@@ -40,7 +40,7 @@ sequenceDiagram
     S-->>H: 3 Proposals (basedOnVersion)
     H-->>Q: 200 ProposalListResponse
     Q->>Q: setQueryData(keys.proposals)
-    UI-->>E: 3 proposals side by side vs current plans
+    UI-->>E: 4 proposals side by side vs current plans
     E->>UI: "Akceptuj wszystkie"
     loop each accepted capacity
         UI->>Q: useAcceptProposal().mutate(capacity, basedOnVersion, tables)
@@ -65,7 +65,7 @@ sequenceDiagram
     UI->>Q: clear keys.proposals
 ```
 
-*Legend:* Generate is a pure **query** (CQS) that stores nothing. Each accept is an independent **command** guarded by the **Optimistic Offline Lock**. All three proposals come from one `Graph` built once (DRY, consistent input).
+*Legend:* Generate is a pure **query** (CQS) that stores nothing. Each accept is an independent **command** guarded by the **Optimistic Offline Lock**. All four proposals come from one `Graph` built once (DRY, consistent input).
 
 ## 2. Move a cluster (drag & drop, optimistic)
 
@@ -226,7 +226,7 @@ sequenceDiagram
         Q->>Q: replace scenario 10, drop proposal 10 from keys.proposals
         UI-->>E: "Brak stołów w tym planie." + "Przelicz / Generuj"
     end
-    Note over E,UI: "Usuń wszystkie plany" = same dialog with a must-tick checkbox, then three DELETE calls (8, 10, 12) via Promise.allSettled
+    Note over E,UI: "Usuń wszystkie plany" = same dialog with a must-tick checkbox, then four DELETE calls (9, 10, 11, 12) via Promise.allSettled
 ```
 
-*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so older proposals become stale. Unknown capacity → 404 `not_found`. No undo (Command/Memento rejected); the confirmation dialog stands in for it. "Delete all" is three independent commands, not a batch endpoint (independent aggregates, idempotent calls, same reasoning as "accept all").
+*Legend:* a **command** with no body and no version check (like the other manual plan edits); it bumps the version, so older proposals become stale. Unknown capacity → 404 `not_found`. No undo (Command/Memento rejected); the confirmation dialog stands in for it. "Delete all" is four independent commands, not a batch endpoint (independent aggregates, idempotent calls, same reasoning as "accept all").

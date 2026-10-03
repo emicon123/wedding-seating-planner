@@ -1,6 +1,6 @@
 # 003 — Frontend design (React SPA): modules, components, state ownership, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
+Task 003, Phase 5 (Skills 13–16); updated for task 005 (delete a plan, §7), task 006 (four table sizes, §8) and to match the shipped relationships panel / link checklists (§5). Contract: [`docs/openapi.yaml`](../../openapi.yaml). Interaction states: [001-state-machine.md](001-state-machine.md). Flows: [003-sequences.md](003-sequences.md). The UI language is Polish. Frontend-web loads the `frontend-design` skill before building screens.
 
 ## 1. Modules and dependency rule
 
@@ -63,7 +63,7 @@ useApplyLinkChanges()     // ONE mutation for a checklist Save or a single remov
 // api/clusters.ts
 useClusterOverview(): UseQueryResult<ClusterOverview>
 // api/scenarios.ts
-useScenarios(): UseQueryResult<Scenario[]>                                    // 3, ordered 8/10/12
+useScenarios(): UseQueryResult<Scenario[]>                                    // 4, ordered 9/10/11/12
 useCalculateProposals()   // onSuccess: setQueryData(keys.proposals, proposals)  (transient preview lives in the query cache)
 useAcceptProposal()       // onSuccess: replace that scenario in keys.scenarios; on 409: refetch scenarios + toast
 useSetAssignment(), useDeleteAssignment()                                     // OPTIMISTIC (domain/optimistic.ts), rollback on error,
@@ -88,7 +88,7 @@ pickerRows(guest, guests, overview): PickerRow[]                 // every other 
 selectedAt(guest, level); diffSelection(guest, level, selected): LinkDiff {add, move, remove}; diffIsEmpty(diff)
 linkChangesOf(level, diff): LinkChange[]                         // removals first, then moves and adds (same upsert)
 joiningViaCluster(guestId, selected, overview)                   // group 1/2 preview: who comes along with the ticked
-clusterAfter(guest, guests, selected); clusterSizeWarning(seatedSize)   // group 0 preview: cluster after Save, > 8 / > 12
+clusterAfter(guest, guests, selected); clusterSizeWarning(seatedSize)   // group 0 preview: cluster after Save, > 9 / > 12
 // domain/optimistic.ts
 applyMove(plan: SeatingPlan, cluster: ClusterPlacement, toTable: number | null): SeatingPlan   // moves the placement, recomputes fills only
 // domain/dropPreview.ts
@@ -106,7 +106,7 @@ classDiagram
     direction LR
     class PlansPage {
         <<component>>
-        compare 3 plans + Generate
+        compare 4 plans + Generate
     }
     class PlanCard {
         <<component>>
@@ -122,7 +122,7 @@ classDiagram
     }
     class PlanDetailPage {
         <<component>>
-        +capacity 8 or 10 or 12
+        +capacity 9, 10, 11 or 12
     }
     class FloorPlan {
         <<component>>
@@ -174,7 +174,7 @@ classDiagram
     }
     class DeletePlanDialog {
         <<component>>
-        confirm delete one plan or all three
+        confirm delete one plan or all four
     }
     class ApiHooks {
         <<module api/>>
@@ -244,11 +244,11 @@ classDiagram
 
 - **QuickAddBar:** a single input at the top of the guest list. "Imię Nazwisko" + Enter creates the guest (`POST /guests`) and the input stays focused. A **sticky "Dziecko" checkbox** next to the input marks every following add as a child until it is unticked; while it is on, the whole bar is tinted and shows a "Dodajesz dzieci" pill, and the confirmation reads "Dodano dziecko: …" (otherwise "Dodano: …", with the session count). A duplicate name shows the server's `duplicate_name` inline and keeps the text so it can be fixed. Typing speed is the limit; there is no batch endpoint (A-20).
 - **LinkEditor = relationships panel** ("Powiązania: X"), opened from a guest row. It shows "Łącznie powiązanych: N" and three `RelationBlock`s: **Grupa 0 – siedzą razem**, **Grupa 1 – chcą siedzieć razem**, **Grupa 2 – ewentualnie**. In each block people are grouped by family (their group-0 cluster) and every person carries the reason: **"wpisany bezpośrednio"** (a link of this guest), **"przez grupę 0: X"** (in X's cluster), or **"przez powiązanie: X"** (a cluster-mate X's own link brings them). Direct links have a remove button (one `useApplyLinkChanges` call with `level: null`). Every name is clickable and opens that person in the same panel; a **"Wróć: <name>"** trail walks back. **"Pokaż na liście"** closes the panel and narrows the guest list to this person and their relations (`?powiazani=<id>`). Data warnings of the guest's cluster show inline (`ClusterWarnings`).
-- **LinkPicker = per-group checklist** ("Edytuj" / "Wybierz gości…" on a block, a nested dialog). It lists **every other guest** (Polish collation) with a checkbox, a search box (case- and diacritics-insensitive) and a **"Tylko zaznaczeni"** toggle. It starts with the guest's direct links at that level ticked. A note under a name says what Save will do ("Powiązanie przejdzie z grupy 1 do grupy 0", since a pair has ONE link) or why the row is fixed (group 0: already in the cluster through someone else's link, "przez grupę 0: X. Zmień to przy: X"). A live preview shows who comes along (group 1/2: `joiningViaCluster`) or the cluster after saving and its size warning > 8 / > 12 (group 0: `clusterAfter`). **"Zapisz"** applies the difference (`diffSelection` → `linkChangesOf`): **removals first, then moves and adds**, all through one `useApplyLinkChanges` mutation (one request per changed pair); failures are listed and the rest stays saved. If the search matches nobody, **"Dodaj «X» jako nowego gościa"** only creates the guest (`POST /guests`) and ticks them; the link is sent with "Zapisz".
+- **LinkPicker = per-group checklist** ("Edytuj" / "Wybierz gości…" on a block, a nested dialog). It lists **every other guest** (Polish collation) with a checkbox, a search box (case- and diacritics-insensitive) and a **"Tylko zaznaczeni"** toggle. It starts with the guest's direct links at that level ticked. A note under a name says what Save will do ("Powiązanie przejdzie z grupy 1 do grupy 0", since a pair has ONE link) or why the row is fixed (group 0: already in the cluster through someone else's link, "przez grupę 0: X. Zmień to przy: X"). A live preview shows who comes along (group 1/2: `joiningViaCluster`) or the cluster after saving and its size warning > 9 / > 12 (group 0: `clusterAfter`). **"Zapisz"** applies the difference (`diffSelection` → `linkChangesOf`): **removals first, then moves and adds**, all through one `useApplyLinkChanges` mutation (one request per changed pair); failures are listed and the rest stays saved. If the search matches nobody, **"Dodaj «X» jako nowego gościa"** only creates the guest (`POST /guests`) and ticks them; the link is sent with "Zapisz".
 - **Rule: group 0 is the cluster.** For every guest, everywhere in the UI (relationships panel, guest-row summary, "Powiązani z" filter, picker), group 0 is derived from the server's **cluster membership** (`GET /clusters`, `clusterOf`), never from the guest's own stored group-0 links. Example: Emilka linked Justynka, Maks and os. tow. at level 0; Justynka has no link of her own, yet her group 0 is those three (Emilka "wpisany bezpośrednio" from Emilka's side, the others "przez grupę 0: Emilka"). Reading only `guest.links` here was a bug (Justynka showed 1 instead of 3). The guest's own links are used only to label *how* someone is reached and to decide what the checklist can untick.
 - **No link author.** The API stores one symmetric link per pair with no author, so the UI cannot show "who entered it"; "wpisany bezpośrednio" means "a link of the shown guest", from whichever side it was typed. Showing the author would need a contract change (possible future, not planned).
 - **BulkToggleBar:** filter "Dzieci" → select all → "Wyłącz zaznaczonych" (`PATCH /guests`). Per-row switches use the same endpoint with one id.
-- Data warnings (cluster > 8 / > 12, conflicting levels) are shown inline next to the guests involved.
+- Data warnings (cluster > 9 / > 12, conflicting levels) are shown inline next to the guests involved.
 
 ## 6. Pattern evaluation and audit (Skills 14, 16)
 
@@ -274,10 +274,21 @@ classDiagram
 
 Contract: `DELETE /scenarios/{capacity}/tables` → 200 `ScenarioResponse` with the empty plan (no body, no version). Rules: [../03-seating-model.md](../03-seating-model.md) § Manual edits.
 
-- **Where.** A destructive-styled **"Usuń plan"** button (trash icon + text) on each `PlanCard` (PlansPage, at the bottom next to "Otwórz plan") and in the `PlanDetailPage` header next to "Dodaj stół". A **"Usuń wszystkie plany"** button in the "Aktualne plany" section header of `PlansPage`. Each is **disabled when there is nothing to delete** (`summary.tableCount === 0`; for "all": all three).
-- **Confirmation (`DeletePlanDialog`, an `AlertDialog` like `DeleteTableDialog`).** One plan: title "Usunąć plan na {capacity} miejsc?"; body states what is cleared, from the cached scenario: "{tableCount} stołów i {seatedCount} osób przy stołach. Wszyscy trafią do pola „Bez stołu”. Pinezki znikną. Tego nie da się cofnąć." Buttons "Anuluj" (default focus) / "Usuń plan" (destructive). All plans: title "Usunąć wszystkie trzy plany?", a line per plan with its counts, the same irreversibility text, and a **stronger confirmation**: the "Usuń wszystkie plany" button stays disabled until the checkbox "Rozumiem, że tego nie da się cofnąć" is ticked.
-- **Calls.** One plan = one `useResetPlan().mutate({capacity})`. All plans = three calls (8, 10, 12) via `Promise.allSettled`; plans that failed are named in one error toast ("Nie udało się usunąć planu: 10"), the others stay deleted (each call is independent and idempotent, so retrying is safe).
+- **Where.** A destructive-styled **"Usuń plan"** button (trash icon + text) on each `PlanCard` (PlansPage, at the bottom next to "Otwórz plan") and in the `PlanDetailPage` header next to "Dodaj stół". A **"Usuń wszystkie plany"** button in the "Aktualne plany" section header of `PlansPage`. Each is **disabled when there is nothing to delete** (`summary.tableCount === 0`; for "all": all four).
+- **Confirmation (`DeletePlanDialog`, an `AlertDialog` like `DeleteTableDialog`).** One plan: title "Usunąć plan na {capacity} miejsc?"; body states what is cleared, from the cached scenario: "{tableCount} stołów i {seatedCount} osób przy stołach. Wszyscy trafią do pola „Bez stołu”. Pinezki znikną. Tego nie da się cofnąć." Buttons "Anuluj" (default focus) / "Usuń plan" (destructive). All plans: title "Usunąć wszystkie cztery plany?", a line per plan with its counts, the same irreversibility text, and a **stronger confirmation**: the "Usuń wszystkie plany" button stays disabled until the checkbox "Rozumiem, że tego nie da się cofnąć" is ticked.
+- **Calls.** One plan = one `useResetPlan().mutate({capacity})`. All plans = four calls (9, 10, 11, 12) via `Promise.allSettled`; plans that failed are named in one error toast ("Nie udało się usunąć planu: 10"), the others stay deleted (each call is independent and idempotent, so retrying is safe).
 - **After success.** The hook replaces the scenario in `keys.scenarios` with the server copy and drops that capacity's proposal from `keys.proposals` (its `basedOnVersion` is now stale; accepting it would be a 409). Toast "Usunięto plan na {capacity} miejsc." / "Usunięto wszystkie plany.". On `PlanDetailPage` the user stays on the page.
 - **What the empty plan shows.** Nothing new: the existing empty state "Brak stołów w tym planie." (`FillBars`), every cluster in `UnseatedTray`, and — when there are enabled guests — the server's `unseated_guests` violation, so `needsRecalculation` is true and `RecalculationBanner` offers "Przelicz / Generuj".
 - **Not the same as "Odrzuć".** Discarding a preview (`useDiscardProposals`, "Odrzuć") already exists and never touches a stored plan; "Usuń plan" never touches a preview except dropping its now-stale proposal.
 - Pattern check: no undo / Command (rejected, user-confirmed); a confirmation dialog stands in. No new client state beyond the dialog's open flag and checkbox (YAGNI).
+
+## 8. Four table sizes (task 006)
+
+Plans exist for **9, 10, 11 and 12** seats (was 8, 10, 12). Contract: `Capacity` enum `[9, 10, 11, 12]`; `GET /scenarios` and `POST /scenarios/calculate` return exactly four items, ordered 9, 10, 11, 12; the data warning for "too big for the smallest plan" is now `cluster_exceeds_9` (cluster > 9 enabled guests).
+
+- **One list of sizes.** `domain/capacity.ts` `CAPACITIES = [9, 10, 11, 12]` is the only place that lists them; every page, switcher, "delete all" and "accept all" iterates it (DRY). The `Capacity` type comes from `schema.d.ts`.
+- **Four cards, readable.** `PlansPage` (current plans) and `ProposalPreview` lay the cards out as 1 column on phones, **2 × 2 on medium screens**, **4 across on wide screens** (Tailwind `grid-cols-1 md:grid-cols-2 xl:grid-cols-4`). The cards keep the same content; nothing new is added to them. The plan switcher in `PlanDetailPage` and the print view list four sizes.
+- **Odd seat counts.** `TableSeats` / the round-table drawing, the drop preview and the move menu must place **9 and 11** seats evenly around the table (angle = 360° / capacity, no assumption of an even count or of pairs facing each other).
+- **Polish copy.** "Cztery plany naraz: stoły 9-, 10-, 11- i 12-osobowe"; "Zapisano plany: 9, 10, 11, 12 miejsc."; "Usunąć wszystkie cztery plany?" (four DELETE calls); warning label `cluster_exceeds_9`: "Ta paczka (grupa 0) jest za duża na stół 9-osobowy"; the client preview `clusterSizeWarning` uses > 9 / > 12.
+- **Floor 8** (was 6): `domain/dropPreview.ts` `MIN_TABLE_FILL = 8` is the single client constant (drop preview, table status, labels "minimum 8", `FillBars` floor line); the `PlanLegend` copy "minimum 6" becomes "minimum 8". Scores and violations still come from the server.
+- Pattern check: nothing new. No per-size component, no configuration endpoint for sizes (YAGNI: the sizes are fixed by the contract enum).
