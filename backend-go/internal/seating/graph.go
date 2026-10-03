@@ -1,6 +1,7 @@
 // Package seating is the pure functional core of Stoliki: clusters, scoring,
-// evaluation and auto-seating. It performs no I/O and has no clock, no
-// randomness and no package-level state; every result is a deterministic
+// evaluation and auto-seating. It performs no I/O and has no clock and no
+// package-level mutable state; the only randomness is a constant-seed PRNG
+// inside Propose (anneal.go), so every result is still a deterministic
 // function of its arguments (all tie-breaks are by ascending guest/cluster key
 // and table number).
 //

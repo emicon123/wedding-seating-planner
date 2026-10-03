@@ -94,7 +94,7 @@ flowchart TD
 - **Time budget (a target, not a cut-off).** Sized for ~85–100 guests: one `Propose` ≤ ~1 s on the Pi (ARM64) and Generate (four capacities) ≤ ~2–3 s, with at least ~400k anneal iterations per capacity. Checked by a Go benchmark on a synthetic ~100-guest fixture; the measured numbers are recorded below. If the four sequential runs exceed the Generate target, the `scenarios` service runs the four `Propose` calls in parallel goroutines (pure functions over a read-only `Graph`, results kept in capacity order 9–12); `seating` itself stays single-threaded.
 - **Patterns:** functional core — every box is a pure function over in-memory data; no Strategy/Template pattern (one algorithm, capacity is a parameter; annealing is a stage of that algorithm, not an alternative to it).
 
-*Measured (filled in by task 008 Phase B):* iterations per capacity, restarts, `Propose` time per capacity and Generate total on the Pi, capacity-12 score on the fixture.
+*Measured (task 008 Phase B, on the Pi, ARM64, 4 cores; `go test -bench ProposeFixture ./internal/seating`, synthetic fixture of 106 guests in 25 clusters):* 4 restarts × up to 400 000 steps per capacity (`min(400 000, 16 000 × movable items)`; 25 items hit the cap), temperature 6 → 0.8 geometric, constant seeds. `Propose` ≈ 57-64 ms per capacity (9: 63 ms, 10: 64 ms, 11: 57 ms, 12: 57 ms); `Generate` (four capacities, sequential, no goroutines needed) ≈ 240 ms. Capacity-12 score on the fixture: 306 (pack + repair + improve alone: 253), equal to the best of 12 independent 3M-step runs; a single restart reaches it in ~90% of seeds, so four restarts make a miss very unlikely.
 
 ## Manual edits and violations
 

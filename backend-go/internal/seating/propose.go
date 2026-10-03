@@ -374,8 +374,8 @@ func pinTargets(g Graph, current Plan, it items) map[int]int {
 // Propose computes a seating for current.Capacity: the fewest tables k that
 // admit a packing with every fill in [Floor, capacity] (floor waived for one
 // table), clusters intact, pinned clusters kept at their table (a pin to a
-// table number above k is released), then the best satisfaction a bounded
-// local search finds. Only enabled guests are seated; oversized clusters stay
+// table number above k is released), then the best satisfaction that a
+// bounded simulated-annealing run plus a local search finds. Only enabled guests are seated; oversized clusters stay
 // unseated. When no k works it returns the plan with the fewest violations
 // (Evaluate lists them) instead of failing. Only the pins of current are used.
 // Deterministic: same input, same plan. Writes nothing.
@@ -394,13 +394,13 @@ func Propose(g Graph, current Plan) Plan {
 		for _, affinity := range [2]bool{true, false} {
 			l := pack(it, k, pins, affinity)
 			if l.complete() && repairFloor(l) {
-				improve(l, maxPasses)
+				optimise(l)
 				return l.toPlan()
 			}
 			tries = append(tries, l)
 		}
 		if l := packExact(it, k, pins); l != nil { // tight fits the greedy passes miss
-			improve(l, maxPasses)
+			optimise(l)
 			return l.toPlan()
 		}
 		for _, l := range tries {
