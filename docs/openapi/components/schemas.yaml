@@ -452,8 +452,8 @@ PlanTable:
       example: 9
     score:
       type: number
-      description: Sum of the guests' satisfaction.
-      example: 21.5
+      description: Sum of the guests' satisfaction (a whole number; negative possible).
+      example: 21
     clusters:
       type: array
       items:
@@ -472,7 +472,11 @@ GuestScore:
       example: 1
     satisfaction:
       type: number
-      description: Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5).
+      description: >-
+        Σ w(affinity) over enabled table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5),
+        minus 1 when the guest is isolated: seated, with at least one enabled group-1/2 partner in the
+        guest list, and none of them at this table. Negative if and only if the guest is isolated
+        ("bez znajomych przy stole"); 0 for unseated guests.
       example: 5.5
     preferredTotal:
       type: integer
@@ -522,7 +526,8 @@ PlanSummary:
       example: 0
     score:
       type: number
-      example: 318.5
+      description: Sum of the table scores (a whole number; negative possible).
+      example: 318
     violationCount:
       type: integer
       example: 0

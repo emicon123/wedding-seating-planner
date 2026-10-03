@@ -64,13 +64,13 @@ Scenario10:
           tableCount: 10
           seatedCount: 92
           unseatedCount: 2
-          score: 318.5
+          score: 318
           violationCount: 1
           needsRecalculation: true
         tables:
           - number: 1
             fill: 9
-            score: 21.5
+            score: 21
             clusters:
               - clusterKey: 4
                 guestIds: [4, 5]

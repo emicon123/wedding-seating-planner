@@ -1,6 +1,6 @@
 # 003 — Backend design (Go): packages, core interfaces, class diagram, audit
 
-Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6), task 008 (anneal stage, §2.1) and task 009 (access gate, §7). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
+Task 003, Phase 5 (Skills 13–16); updated for task 007 (Generate stores at once, `PUT /scenarios`, §6), task 008 (anneal stage, §2.1), task 009 (access gate, §7) and task 011 (wykluczanie izolacji, §8). It builds on [../04-data-model.md](../04-data-model.md) (DTOs, mappers, stores), [../03-seating-model.md](../03-seating-model.md) (rules), [002-erd.md](002-erd.md) and the contract [`docs/openapi.yaml`](../../openapi.yaml). Backend-Go implements **exactly** these packages and signatures. If one turns out to be wrong, raise it rather than drifting.
 
 ## 1. Packages and dependency direction
 
@@ -59,6 +59,7 @@ type LinkLevel int
 const (Must LinkLevel = 0; Preferred LinkLevel = 1; Acceptable LinkLevel = 2)
 const Floor = 8                       // minimum guests per table when k > 1 (was 6 until task 006)
 func Weight(l LinkLevel) float64      // Preferred 1.0, Acceptable 0.5, else 0
+const IsolationPenalty = 1            // satisfaction taken from each isolated guest (task 011, §8)
 
 type Guest struct { ID GuestID; Enabled bool }
 type Link  struct { A, B GuestID; Level LinkLevel }
@@ -89,10 +90,10 @@ type Evaluation struct {
     GuestScores []GuestScore
     Violations  []Violation
 }
-type Summary struct { TableCount, Seated, Unseated, ViolationCount int; Score float64; NeedsRecalculation bool }
+type Summary struct { TableCount, Seated, Unseated, ViolationCount, Isolated int; Score float64; NeedsRecalculation bool } // Isolated: task 011, not in the contract
 type TableEval  struct { Number, Fill int; Score float64; Clusters []Placement }
 type Placement  struct { ClusterKey GuestID; Guests []GuestID; Pinned bool } // enabled members only
-type GuestScore struct { Guest GuestID; Table int /*0 = unseated*/; Satisfaction float64; PreferredTotal, PreferredAtTable, FallbackAtTable, StrangersAtTable int }
+type GuestScore struct { Guest GuestID; Table int /*0 = unseated*/; Satisfaction float64; PreferredTotal, PreferredAtTable, FallbackAtTable, StrangersAtTable int; Isolated bool /*task 011, not in the contract*/ }
 type Violation  struct { Code ViolationCode; Table int /*0 = none*/; Guests []GuestID }
 type DataWarning struct { Code WarningCode; Guests []GuestID }
 
@@ -577,3 +578,218 @@ classDiagram
 - Gate off (`gate == nil`): the existing test suite passes unchanged; `GET /session` → 200 `pinRequired:false`; no 401/403 anywhere.
 - Log hygiene: capture `slog` output during a wrong and a right login and assert the PIN string and the attempted value do not appear; error bodies never contain them.
 - `cmd/server`: `STOLIKI_PIN` empty → gate off + warning; set → `session.key` created next to `DB_PATH`.
+
+## 8. Task 011 — Wykluczanie izolacji (isolated guests)
+
+Rules and worked examples: [../03-seating-model.md](../03-seating-model.md) § Isolation (authoritative). In short: a seated enabled guest is **isolated** when their cluster has at least one partner cluster (group 1/2 affinity, ≥ 1 enabled member, seated or not) and none of those partners has an enabled guest at the table. Displayed satisfaction: −`IsolationPenalty` (= 1) per isolated guest. Optimiser: **lexicographic** — fewest isolated guests first, then the highest scenario score; hard rules, fewest tables and pins come before both. Not a violation. No migration; the contract changes only in descriptions (`GuestScore.satisfaction` may be negative and is negative **iff** the guest is isolated). Everything below lives in `internal/seating`; no other package changes, except that `httpapi` does **not** map the two new Go-only fields.
+
+### 8.1 `graph.go` / `evaluate.go`
+
+```go
+const IsolationPenalty = 1 // next to Weight and Floor; untyped, used as int (layout) and float (Evaluate)
+
+// hasPartners: cluster key -> true when some OTHER cluster with SeatedSize() > 0 has a
+// group-1/2 affinity to it. One function, used by Evaluate and newItems (DRY), next to preferredTotals.
+func (g Graph) hasPartners() map[GuestID]bool
+
+type GuestScore struct { /* … as before … */ Isolated bool }   // Go only, not mapped to the DTO
+type Summary    struct { /* … as before … */ Isolated int }    // seated enabled guests with Isolated; Go only
+```
+
+`Evaluate`, per table, per cluster key `k` at the table (after the existing `prefAt`/`fallAt`/`strangers` loop):
+
+```go
+isolated := hasPartner[k] && prefAt+fallAt == 0
+if isolated { sat -= IsolationPenalty }
+// each member's GuestScore gets Isolated = isolated; te.Score += sat as today;
+// ev.Summary.Isolated += len(members) when isolated
+```
+
+Unseated guests: `Satisfaction 0`, `Isolated false` (unchanged code path). Violations and `NeedsRecalculation`: unchanged.
+
+### 8.2 `propose.go`: items, layout, objective
+
+```go
+type items struct {
+    // … as before …
+    hasPartner []bool   // per item, from g.hasPartners() (counts partners that are NOT items too: oversized / unseated)
+    nbr        [][]int  // per item: indices b with gain[a][b] > 0, ascending (adjacency list for the deltas)
+}
+
+// objective is what the optimiser compares: fewer isolated seats first, then a higher score.
+// Value object; an explicit pair, never a weighted sum (no big-M, no overflow question).
+type objective struct {
+    iso   int // isolated enabled guests (seats) — lower is better
+    score int // displayed scenario score, penalty included (= Evaluate Summary.Score)
+}
+func (o objective) better(p objective) bool  // o.iso < p.iso || (o.iso == p.iso && o.score > p.score)
+
+// delta is the change of an objective caused by one step.
+type delta struct{ iso, score int }
+func (d delta) improves() bool                // d.iso < 0 || (d.iso == 0 && d.score > 0)
+func (d delta) better(e delta) bool           // same lexicographic order between two candidate steps
+
+func (l *layout) objective() objective        // from scratch, O(items)
+func (l *layout) score() int                  // = l.objective().score (kept: tests and callers)
+func (l *layout) moveDelta(a, tb int) delta   // a placed, tb != assign[a]
+func (l *layout) swapDelta(a, b int) delta    // a, b placed at different tables (replaces the int version)
+```
+
+`affTo`, `gain`, `place`, `unplace`, `move` are unchanged. **Units:** `gain[a][b]` and `affTo` are already in scenario-score points (`gain = 2·w·size_a·size_b` is the full contribution of the pair, counted once per pair); only the accumulator inside `score()` holds twice that (each pair is seen from both ends). The penalty is therefore `IsolationPenalty · size[a]` points in every delta, and `2 · IsolationPenalty · size[a]` only if someone adds it into that internal "twice" accumulator — the recommended `objective()` avoids the trap:
+
+```go
+func (l *layout) objective() objective {
+    twice, iso := 0, 0
+    for a, t := range l.assign {
+        if t < 0 { continue }
+        twice += l.affTo[a][t]
+        if l.it.hasPartner[a] && l.affTo[a][t] == 0 { iso += l.it.size[a] }
+    }
+    return objective{iso: iso, score: twice/2 - IsolationPenalty*iso}
+}
+```
+
+**Key fact:** all gains are positive integers (weights 1 or ½, sizes ≥ 1 → `gain ≥ 1`), and `gain[a][a] = 0`, so for a placed item `a` at `t`: **`affTo[a][t] == 0` ⇔ no partner item at t**. With `hasPartner[a]` this is exactly Evaluate's `prefAt + fallAt == 0` for layouts built by Propose (oversized clusters are never placed, so a partner that is not an item is never at the table).
+
+### 8.3 Delta rules (exact; `iso(c, v) = hasPartner[c] && v == 0`, `[x]` = 1 if true else 0)
+
+Every step changes only `affTo[·][ta]` and `affTo[·][tb]`, and only for neighbours of the moved items; every other cluster keeps its isolation status. Write `ΔI` for the change of isolated seats; then always
+
+```
+delta.iso   = ΔI
+delta.score = pairΔ − IsolationPenalty · ΔI
+```
+
+**Move `a`: `ta → tb`.** `pairΔ = affTo[a][tb] − affTo[a][ta]` (as today).
+
+| Affected cluster | Isolated before | Isolated after |
+|---|---|---|
+| `a` itself | `iso(a, affTo[a][ta])` | `iso(a, affTo[a][tb])` |
+| `c ∈ nbr[a]`, `assign[c] == ta` (left behind) | `false` (a is there) | `affTo[c][ta] == gain[c][a]` (a was its only partner there) |
+| `c ∈ nbr[a]`, `assign[c] == tb` (joined) | `affTo[c][tb] == 0` | `false` (a arrives) |
+| anything else | unchanged | unchanged |
+
+`ΔI = Σ size[x] · ([after] − [before])` over the affected rows. Cost O(|nbr[a]|).
+
+**Swap `a` (at `ta`) ↔ `b` (at `tb`), `ta ≠ tb`.** `pairΔ` = today's `swapDelta` formula `(affTo[a][tb] − g) − affTo[a][ta] + (affTo[b][ta] − g) − affTo[b][tb]`, `g = gain[a][b]`. New sums after the swap:
+
+| Affected cluster | `affTo` before → after (at the cluster's table after the step) |
+|---|---|
+| `a` (now at `tb`) | `affTo[a][ta]` → `affTo[a][tb] − gain[a][b]` |
+| `b` (now at `ta`) | `affTo[b][tb]` → `affTo[b][ta] − gain[b][a]` |
+| `c ∉ {a,b}`, `assign[c] == ta`, `c ∈ nbr[a] ∪ nbr[b]` | `affTo[c][ta]` → `affTo[c][ta] − gain[c][a] + gain[c][b]` |
+| `c ∉ {a,b}`, `assign[c] == tb`, `c ∈ nbr[a] ∪ nbr[b]` | `affTo[c][tb]` → `affTo[c][tb] − gain[c][b] + gain[c][a]` |
+
+Each row contributes `size[x] · ([iso(x, after)] − [iso(x, before)])`. **Count each `c` once**: walk `nbr[a]`, then `nbr[b]` skipping every `c` with `gain[c][a] > 0` (already seen). Cost O(|nbr[a]| + |nbr[b]|). A `c` that is a partner of both `a` and `b` is handled by the formula (it loses one and gains the other).
+
+```mermaid
+flowchart TD
+    S["step: move a ta→tb, or swap a(ta)↔b(tb)"] --> P["pairΔ from affTo / gain (unchanged formulas)"]
+    S --> N["affected = {a} (+ {b}) ∪ neighbours of a (and b) seated at ta or tb, each once"]
+    N --> X["for each affected x: before = affTo[x][old table], after = new sum from the table above"]
+    X --> I["ΔI += size[x]·([hasPartner[x] ∧ after = 0] − [hasPartner[x] ∧ before = 0])"]
+    P --> D["delta = (iso: ΔI, score: pairΔ − IsolationPenalty·ΔI)"]
+    I --> D
+    D --> C{"used by"}
+    C --> R["repairFloor: best candidate by delta.better (ties: lowest indices)"]
+    C --> A["anneal: accept / track best by objective"]
+    C --> M["improve: apply iff delta.improves()"]
+```
+
+*Legend:* pure functions over the incremental state; no pattern beyond a small value object (`objective`/`delta`). The two tables above are the specification; the property test in §8.7 is its oracle (`delta == objective(after) − objective(before)` component-wise).
+
+### 8.4 Where the objective is used
+
+- **`pack`: unchanged.** It builds a starting layout from a partial assignment, where isolation is not yet defined (partners may still be unplaced). Everything after it repairs/optimises with the full objective.
+- **`repairFloor`** (`liftByMove`, `liftBySwap`): candidates are filtered by the hard rules as today; the chosen one is the best by `delta.better` (fewest new isolated seats, then least score loss), ties lowest indices. `liftByMove` uses `moveDelta` instead of the inline `affTo` difference.
+- **`anneal`:** keeps `cur objective` and `best objective` (+ `bestAssign`). Per step with `d` = `moveDelta` / `swapDelta`:
+  - accept if `d.iso < 0 || (d.iso == 0 && d.score >= 0)` (lexicographically not worse — includes today's "ties accepted");
+  - otherwise accept with probability `exp(Δacc / T)`, where `Δacc = d.score − annealIsoWeight · d.iso` (`d.iso ≥ 0` here). New constant `annealIsoWeight = 8` (score points per isolated seat; a tuning knob for the *walk only* — it never decides which layout is returned). With T from 6 to 0.8 a step isolating one more guest is still taken now and then early on (≈ e^(−9/6) ≈ 0.2) and almost never at the end, so the walk can cross a barrier that improve alone cannot. Backend-Go may retune it with the fixtures (constants only).
+  - after applying: `cur = cur + d`; if `cur.better(best)` → snapshot. `l.restore(bestAssign)` at the end as today.
+- **`optimise`:** restart winner = the restart whose final `objective()` is `better` than the best so far (start layout included, earliest on ties). Postcondition: `objective(result)` is not worse than `objective(start)` lexicographically; k, pins and hard rules unchanged.
+- **`improve`:** a move / swap is applied iff `delta.improves()` (replaces `affTo[a][t]-affTo[a][x] > 0` and `swapDelta(a, b) > 0`). Still first-improvement, still capped at `maxPasses`. Because it scans every move and every swap, **the returned layout has no single feasible move or swap that lowers the isolated count** — a testable guarantee (§8.7 P6).
+- **k selection and the best-effort fallback:** unchanged (rule 3 before rule 5: isolation never adds a table).
+
+### 8.5 `Propose`: extract the per-k solver (pure refactor, needed by the diagnostic)
+
+```go
+// feasibleAt tries one table count: pack with and without affinity (+ repairFloor), then packExact.
+// Returns the optimised feasible layout, or nil plus the greedy tries (for the best-effort fallback).
+func feasibleAt(it items, k int, pins map[int]int) (best *layout, tries []*layout)
+```
+
+`Propose` becomes the k loop around `feasibleAt` with the same fallback logic; behaviour identical except for the new objective inside `optimise`/`repairFloor`.
+
+### 8.6 Diagnostic for Phase C: is isolation avoidable with k + 1 tables?
+
+Not a product feature (the user decides whether an extra table is worth it; Propose never adds one). A **test-only** report, skipped unless an input file is given, so it never runs in CI and never touches the DB:
+
+```go
+// diagnose_test.go
+// TestDiagnoseIsolation: t.Skip unless STOLIKI_DIAG_INPUT is set. Input JSON (ids only, no names):
+//   {"guests":[{"id":1,"enabled":true},…], "links":[{"a":1,"b":2,"level":1},…]}
+// For capacity 9, 10, 11, 12 (no pins), t.Logf one line each for k and for k+1 (only when (k+1)·Floor ≤ N).
+// Format (numbers invented):
+//   cap=12 k=9  isolated=4 (clusters: key 17 size 4) score=287
+//   cap=12 k=10 isolated=0 score=281
+//   or "k+1 infeasible". k = len(Propose(...).Tables); k+1 via feasibleAt(newItems(g, cap), k+1, nil),
+//   numbers via Evaluate. Prints guest ids and counts only, never names.
+```
+
+Phase C recipe (logged in with the session cookie as in AGENTS.md; the temp file holds ids and flags only and is deleted afterwards):
+
+```bash
+D=$(mktemp -d)
+curl -s -b "$COOKIE_JAR" http://127.0.0.1:8094/wesele/api/guests \
+ | jq '{guests: [.data[] | {id, enabled}],
+        links:  [.data[] as $g | $g.links[] | select($g.id < .guestId) | {a: $g.id, b: .guestId, level}]}' > "$D/in.json"
+(cd backend-go && STOLIKI_DIAG_INPUT="$D/in.json" go test -run TestDiagnoseIsolation -v ./internal/seating)
+rm -rf "$D"
+```
+
+Report to the user per capacity: isolated guests at k (and which cluster, by name only in the chat with the user if needed), and whether k + 1 removes them at what score. Implementing a "k + 1 if it removes isolation" option is **out of scope** (user decision first).
+
+### 8.7 Tests (B1) — real code paths, no mocks
+
+**Evaluate** (`evaluate_test.go`, small hand-built graphs):
+
+| # | Case | Expected |
+|---|---|---|
+| E1 | cluster {1,2} —1— {3}; 1,2 at table 1 with strangers, 3 at table 2 | guests 1, 2: `Satisfaction −1`, `Isolated`; table 1 score includes −2; `Summary.Isolated` counts 1, 2 (and 3 if it is isolated too) |
+| E2 | same, 3 at table 1 | 1, 2: +1 each, not isolated |
+| E3 | only a group-2 partner at the table | +0.5, not isolated |
+| E4 | guest with no group-1/2 link at all, strangers only | 0, not isolated |
+| E5 | only partner cluster fully disabled | 0, not isolated |
+| E6 | partner enabled but unseated | isolated (−1) |
+| E7 | isolated-looking guest who is unseated | 0, not isolated, no new violation |
+| E8 | partner cluster with one enabled member at the table, others elsewhere (split) | not isolated |
+| E9 | any isolated plan | `Violations` and `NeedsRecalculation` unchanged versus the same plan before task 011 |
+
+**Deltas** (`propose_test.go` / `anneal_test.go`): hand-built layouts, each asserting `moveDelta`/`swapDelta` == `objective(after) − objective(before)` and the expected `ΔI`:
+D1 isolated `a` moves to its partner's table (ΔI = −size a); D2 partner leaving: `c`'s only partner `a` leaves `ta` (+size c); D3 partner arriving at an isolated `c` (−size c); D4 `c` has two partners at `ta`, one leaves (0); D5 swap where `c` at `ta` is a partner of `b` only (−size c) and `d` at `tb` is a partner of `b` only (+size d); D6 swap of mutual partners `a`—`b` at different tables; D7 `c` at `ta` partner of both `a` and `b` in a swap (counted once, stays non-isolated); D8 moving an item with no partners and no neighbours (ΔI = 0); D9 an item whose only partner is oversized (not an item): isolated at every table, ΔI = 0 when it moves.
+
+**Property** (extends `TestProposeScoreMatchesEvaluate`): for 40+ generated instances, after pack/repair and after ≥ 2 000 random steps each (moves and swaps, hard rules ignored — deltas must be right everywhere), every predicted delta equals the recomputed `objective()` difference; and `Evaluate(toPlan)` gives `Summary.Score == objective().score` and `Summary.Isolated == objective().iso`.
+
+**Propose** (synthetic fixtures from 03-seating-model § Isolation):
+- P1 *Michał case* (example A, capacity 12): k = 2, `Summary.Isolated == 0`, `Summary.Score == 40` (the old objective would return 48 with M isolated).
+- P2 *Unavoidable* (example B: M[4] —1— X[10], strangers [2], [4], [4]): k = 2, 14 isolated guests, no violation, `NeedsRecalculation == false`.
+- P3 *k beats isolation* (example C): k = 2, `Summary.Isolated == 8`; `feasibleAt(…, 3, nil)` gives 0 isolated (the diagnostic's primitive).
+- P4 *Pins beat isolation*: example A with M pinned to table 1 and P pinned to table 2 → pins kept, M isolated.
+- P5 *Determinism*: run twice, identical plans (all fixtures above + the ~100-guest fixture).
+- P6 *Local optimality*: on generated inputs, the returned layout has no single feasible move/swap with `delta.iso < 0`.
+- Existing tests: `fixtureOldScore12` / `fixtureBestScore12` (253 / 306) are re-derived under the new score (penalty included) and the best-known value becomes an `objective` (isolated, score) from 12 long runs; other expected scores (e.g. 116, 200, `8·couples`) change only where those fixtures contain isolated guests — say so per test in the commit message.
+- Benchmark `BenchmarkProposeFixture` re-measured on the Pi; target unchanged (≤ ~1 s per Propose, Generate ≤ ~2–3 s; it was ≈ 60 ms / 240 ms). Record the numbers in 03-seating-model § Auto-seating (replace the "Measured before task 011" paragraph).
+
+### 8.8 Pattern evaluation and audit (task 011)
+
+| Candidate | Verdict | Reason |
+|---|---|---|
+| Soft penalty weight in one scalar objective | rejected | The user asked to *exclude* isolation when possible. Example A needs > 2 per guest; other data needs more; no fixed weight guarantees it. |
+| Big-M scalarisation (`score − M·iso`) | rejected | Equivalent but needs a proven bound for M and hides intent; the explicit pair is as cheap and cannot overflow. |
+| `objective` / `delta` value objects with a lexicographic `better` | **adopted** | Makes the priority (rule 5 before rule 6) explicit at every comparison site. |
+| Strategy for objectives | rejected | One objective (YAGNI). |
+| New violation code `isolated_guests` | rejected | It would set `needsRecalculation`, and "Przelicz" cannot fix an isolation that is unavoidable at the fewest tables. |
+| Contract field `GuestScore.isolated` / `summary.isolatedCount` | rejected | Derivable: `satisfaction < 0` ⇔ isolated (stated in the schema description). Go-only fields serve tests and the diagnostic. |
+| Product option "add a table to remove isolation" | deferred | Trade-off belongs to the user; Phase C brings the numbers (§8.6). |
+
+Audit: SRP kept (`seating` only); DRY — one `hasPartners()` for Evaluate and items, one `objective()` from scratch, deltas specified once (§8.3) and checked by the property test; no new package, no new dependency; determinism and the fixed budgets unchanged.

@@ -451,3 +451,31 @@ Legend: no GoF pattern — a pure function with a small graph walk (KISS). Rejec
 2. **One big block.** If group-1 links chain much of the guest list together (A wants B, B wants C, …), the whole chain is one component and reads in DFS order, not alphabetically. That is what "second by group 1" means; finding a person by name stays the job of the search box (which keeps its own ranking).
 3. **Hidden bridge splits a block.** Per the task, an affinity through a hidden cluster does not connect its partners (test #7), so changing a filter can reorder blocks. Accepted: the list shows what is visible.
 4. **Affinity is cluster-level** (03-seating-model § "Who counts"): a level-1 link of *any* member, disabled ones included, makes the whole clusters partners. So a family can be placed next to another family because of one disabled member's link. Consistent with the seating model; no change.
+
+## 12. Wykluczanie izolacji: the "bez znajomych przy stole" cue (task 011)
+
+Rule: [../03-seating-model.md](../03-seating-model.md) § Isolation. The server now excludes isolation whenever the hard rules allow it; what is left (unavoidable, or made by a hand move) must be **visible**. Not a violation: no banner, no "Przelicz".
+
+**No contract change — derive it.** `GuestScore.satisfaction` is negative **if and only if** the guest is isolated (the schema description states this; without the penalty satisfaction is ≥ 0, and a guest with any partner at the table has ≥ 0.5). Counting fields cannot do it: `preferredTotal` covers group 1 only, so a guest whose partners are group 2 only is undetectable from `preferredTotal`/`preferredAtTable`/`fallbackAtTable`. The test is independent of the penalty's value (any value > 0).
+
+```ts
+// domain/isolation.ts (pure, unit-tested)
+export const isIsolated = (score: GuestScore): boolean => score.satisfaction < 0
+export const isolatedCount = (scores: readonly GuestScore[]): number => scores.filter(isIsolated).length
+export const ISOLATED_LABEL = 'Bez znajomych przy stole'   // in domain/labels.ts with the other copy
+```
+
+**Where it shows** (cheapest meaningful cue: icon + text, never colour alone, same style family as the existing marks):
+
+| Place | Component | What |
+|---|---|---|
+| Each guest in a table / tray chip | `GuestScoreMark` | When `isIsolated(score)`: a brick badge with `UserXIcon` (lucide), `title` and `sr-only` "Bez znajomych przy stole". Drawn **before** the hearts. The early return `preferredTotal === 0 && fallbackAtTable === 0 → null` must not hide it (a group-2-only guest is exactly that case). The existing brick "0/n" hearts stay as they are. |
+| Guest details panel | `GuestDetailsPanel` → `Satisfaction` | First line, brick, when isolated: "Bez znajomych przy stole — nikt z grup 1 i 2 tu nie siedzi." |
+| Plan card (overview) and plan detail header | `PlanFigures` | New optional prop `isolated?: number`; when > 0, a small brick line under the three figures: "Bez znajomych przy stole: N os." (`peopleLabel`). Not a fourth big figure, not in the violation count. Callers pass `isolatedCount(plan.guestScores)`. |
+| Print view | — | No change (YAGNI). |
+
+**Negative scores.** `scoreLabel` already formats negatives (`toLocaleString('pl-PL')`); table and plan scores can now be below zero or drop after the change (the displayed score includes −1 per isolated guest). Fix the comment "301 or 318,5" → table/plan scores are whole numbers, only a guest's own satisfaction can end in ,5 (not shown). While a save is in flight `scores` is `undefined` (existing rule), so the badge disappears with the other marks; no client-side guessing.
+
+**Tests (B2):** `isIsolated` / `isolatedCount` (−1, 0, 0.5, −0.5 edge, empty list); `GuestScoreMark` renders the badge for `{satisfaction: −1, preferredTotal: 0, fallbackAtTable: 0}` (group-2-only guest) and for `{satisfaction: −1, preferredTotal: 3, preferredAtTable: 0}` (badge + brick hearts), not for `satisfaction: 0` or `2.5`; accessible name contains "Bez znajomych przy stole"; `PlanFigures` shows "Bez znajomych przy stole: 4 os." for `isolated: 4` and nothing for 0/undefined; `GuestDetailsPanel` line; a negative plan score renders as "-3". Fixtures in `features/plans/fixtures.ts`: give guests 4 and 5 (partners elsewhere, nobody at the table) `satisfaction: -1`.
+
+Pattern check: two pure helpers and props; no new hook, no context, no state. Rejected: a contract field `isolated` (derivable; would need a backend DTO change and `schema.d.ts` regeneration for nothing); a violation-style banner (nothing to "fix" by recalculating).
