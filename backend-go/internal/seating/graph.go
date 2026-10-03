@@ -30,6 +30,11 @@ const (
 // more than one table.
 const Floor = 8
 
+// IsolationPenalty is the satisfaction taken from each isolated guest: a seated
+// guest whose cluster has partners (group-1/2 affinity) but none at the table
+// (task 011). Untyped: used as an int by the optimiser and as a float by Evaluate.
+const IsolationPenalty = 1
+
 // Weight is the satisfaction a table-mate of the given affinity level adds.
 func Weight(l LinkLevel) float64 {
 	switch l {

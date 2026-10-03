@@ -237,21 +237,26 @@ func TestRepairFloor(t *testing.T) {
 }
 
 func TestImprove(t *testing.T) {
-	t.Run("never lowers the score and reaches the optimum on a swap case", func(t *testing.T) {
-		// two Preferred cliques of 4 mixed across two tables; floors/capacity forbid single moves.
+	t.Run("never worsens the objective and improves a swap case", func(t *testing.T) {
+		// two Preferred cliques of 8 mixed across two tables of capacity 8; capacity forbids single moves.
+		// Since task 011 improve accepts a swap only if it strictly improves (isolated, score), and
+		// the path to the optimum 112 (two whole cliques) passes through tables with a lone member
+		// of the other clique (isolated), which improve will not enter: it stops at the local optimum
+		// 64 with nobody isolated. Reaching 112 is the anneal's job (TestAnnealFindsSwapOptimum).
 		g := BuildGraph(enabledRange(1, 16), links(clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8), clique(Preferred, 9, 10, 11, 12, 13, 14, 15, 16)))
 		it := newItems(g, 8)
 		l := newLayout(it, 2)
 		for id := GuestID(1); id <= 16; id++ {
 			l.place(it.idx[id], int((id-1)%2)) // worst case: alternate
 		}
-		before := l.score()
+		before := l.objective()
 		improve(l, maxPasses)
-		if l.score() < before {
-			t.Fatalf("score fell from %d to %d", before, l.score())
+		after := l.objective()
+		if before.better(after) {
+			t.Fatalf("objective got worse: %+v -> %+v", before, after)
 		}
-		if want := 2 * 2 * 28; l.score() != want { // two cliques of 8: C(8,2)=28 pairs * 2 each
-			t.Errorf("score = %d, want optimum %d", l.score(), want)
+		if want := (objective{iso: 0, score: 64}); after != want {
+			t.Errorf("objective = %+v, want the local optimum %+v (start %+v)", after, want, before)
 		}
 	})
 	t.Run("respects capacity, floor and pins", func(t *testing.T) {
@@ -504,7 +509,9 @@ func TestProposeMaciekKarolinaGroupOneList(t *testing.T) {
 	}
 	g := BuildGraph(enabledRange(1, 20), ls)
 
-	// With the pair's table holding c couples (capacity C = 2 + 2c): score = c * 2*2*2*1 = 8c.
+	// With the pair's table holding c couples (capacity C = 2 + 2c): group-1 points = c * 2*2*2*1 = 8c.
+	// The 9-c couples at the other table know only Maciek and Karolina, so they are isolated
+	// (task 011): 2*(9-c) isolated guests, score = 8c - 2*(9-c); fewest isolated = most couples with the pair.
 	// 20 guests with floor 8: two tables (10+10 or 12+8); nine seats at capacity 9 would need
 	// three tables of >= 8, which 20 guests cannot fill, so that capacity is not part of this case.
 	tests := []struct {
@@ -518,8 +525,12 @@ func TestProposeMaciekKarolinaGroupOneList(t *testing.T) {
 		if len(ev.Tables) != tc.wantTables {
 			t.Errorf("capacity %d: %d tables, want %d", tc.capacity, len(ev.Tables), tc.wantTables)
 		}
-		if want := float64(8 * tc.wantCouples); ev.Summary.Score != want {
+		wantIso := 2 * (9 - tc.wantCouples)
+		if want := float64(8*tc.wantCouples - wantIso); ev.Summary.Score != want {
 			t.Errorf("capacity %d: score = %v, want %v", tc.capacity, ev.Summary.Score, want)
+		}
+		if ev.Summary.Isolated != wantIso {
+			t.Errorf("capacity %d: %d isolated guests, want %d (the couples that cannot sit with the pair)", tc.capacity, ev.Summary.Isolated, wantIso)
 		}
 		if gs := guestScore(t, ev, 1); gs.PreferredAtTable != 2*tc.wantCouples || gs.PreferredTotal != 18 {
 			t.Errorf("capacity %d: Maciek %+v, want %d of 18 preferred at table", tc.capacity, gs, 2*tc.wantCouples)
@@ -822,7 +833,7 @@ func TestProposeScoreMatchesEvaluate(t *testing.T) {
 	improvedSomewhere := 0
 	defer func() {
 		if improvedSomewhere == 0 {
-			t.Error("improve never raised the score on any generated input; the test would not notice a no-op improve")
+			t.Error("improve never improved the objective on any generated input; the test would not notice a no-op improve")
 		}
 	}()
 	for seed := int64(1); seed <= 40; seed++ {
@@ -834,17 +845,18 @@ func TestProposeScoreMatchesEvaluate(t *testing.T) {
 		if !l.complete() || !repairFloor(l) {
 			continue
 		}
-		before := l.score()
+		before := l.objective()
 		improve(l, maxPasses)
-		if l.score() < before {
-			t.Errorf("seed %d: improve lowered the score %d -> %d", seed, before, l.score())
+		after := l.objective()
+		if before.better(after) {
+			t.Errorf("seed %d: improve worsened the objective %+v -> %+v", seed, before, after)
 		}
-		if l.score() > before {
+		if after.better(before) {
 			improvedSomewhere++
 		}
 		ev := Evaluate(g, l.toPlan())
-		if ev.Summary.Score != float64(l.score()) {
-			t.Errorf("seed %d: internal score %d != Evaluate %v", seed, l.score(), ev.Summary.Score)
+		if ev.Summary.Score != float64(after.score) || ev.Summary.Isolated != after.iso {
+			t.Errorf("seed %d: internal objective %+v != Evaluate score %v isolated %d", seed, after, ev.Summary.Score, ev.Summary.Isolated)
 		}
 	}
 }

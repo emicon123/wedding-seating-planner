@@ -2,19 +2,28 @@ package seating
 
 import "math"
 
-// Simulated-annealing stage of Propose (task 008). It only raises the score of
-// a layout that is already feasible: same k, same pins, every fill inside
+// Simulated-annealing stage of Propose (task 008, objective task 011). It only
+// improves the objective (fewest isolated seats, then highest score) of a layout that is already feasible: same k, same pins, every fill inside
 // [floor, capacity], clusters atomic. Everything is deterministic: a tiny PRNG
 // with constant seeds and a fixed iteration budget (no clock, no math/rand).
 
 const (
-	annealSeed         uint64  = 0x5EA7_1A9C_2026_1003 // restart i uses annealSeed + i*splitmixStep
+	annealSeed         uint64  = 0x5EA7_1A9C_2026_1003 // restart i: see restartPRNG
 	annealIters                = 400_000               // steps per restart, upper bound
 	annealItersPerItem         = 16_000                // steps per movable item until the bound is reached
 	annealRestarts             = 4
 	annealTempHigh     float64 = 6   // start temperature, in score units
 	annealTempLow      float64 = 0.8 // end temperature
-	splitmixStep       uint64  = 0x9E3779B97F4A7C15
+	// annealIsoWeight: extra score points one added isolated seat counts for in the
+	// acceptance probability of a worse step (on top of the IsolationPenalty already
+	// inside the score delta). A tuning knob for the walk only: it never decides which
+	// layout is returned (that is the lexicographic objective). The design suggested 8;
+	// measured on 164 generated (instance, capacity) cases (total isolated seats left,
+	// lower is better): w=0: 800, 1: 801, 2: 809, 4: 822, 8: 837, so a high weight
+	// freezes the walk inside isolation barriers. 1 keeps the knob alive and costs
+	// nothing against 0.
+	annealIsoWeight float64 = 1
+	splitmixStep    uint64  = 0x9E3779B97F4A7C15
 )
 
 // prng is a self-contained splitmix64 generator.
@@ -33,6 +42,14 @@ func (r *prng) intn(n int) int { return int(r.next() % uint64(n)) }
 
 // float is uniform in [0, 1).
 func (r *prng) float() float64 { return float64(r.next()>>11) / (1 << 53) }
+
+// restartPRNG is the generator of restart i. Seeds that differ by a multiple of
+// splitmixStep give the same stream shifted by a few draws, so the restart seeds
+// are scrambled through one splitmix draw each to make the walks independent.
+func restartPRNG(i int) *prng {
+	seed := &prng{s: annealSeed + uint64(i)}
+	return &prng{s: seed.next()}
+}
 
 // clone is an independent copy of the layout (the items table is shared, it is read-only).
 func (l *layout) clone() *layout {
@@ -71,18 +88,19 @@ func (l *layout) movable() []int {
 
 // anneal runs one annealing pass over the movable items of l (feasible on
 // entry) and leaves l at the best layout it saw, which is never worse than the
-// layout it started from. A step moves one item to another table or swaps two
-// items on different tables; only steps that keep capacity and the floor are
-// tried. Improvements and ties are always accepted, a worse step by
-// probability exp(Δ/T) with T cooling geometrically from annealTempHigh to
-// annealTempLow over `iters` steps.
+// layout it started from in (isolated seats, score) order. A step moves one item
+// to another table or swaps two items on different tables; only steps that keep
+// capacity and the floor are tried. Steps that are not worse in that order are
+// always accepted, a worse step by probability exp(Δ/T), Δ = score change minus
+// annealIsoWeight per added isolated seat, with T cooling geometrically from
+// annealTempHigh to annealTempLow over `iters` steps.
 func anneal(l *layout, iters int, r *prng) {
 	mv := l.movable()
 	if len(mv) < 2 || l.k <= 1 || iters <= 0 {
 		return
 	}
 	floor, capacity := l.floor(), l.it.capacity
-	cur := l.score()
+	cur := l.objective()
 	best, bestAssign := cur, append([]int(nil), l.assign...)
 	temp := annealTempHigh
 	cool := math.Pow(annealTempLow/annealTempHigh, 1/float64(iters))
@@ -90,7 +108,8 @@ func anneal(l *layout, iters int, r *prng) {
 		temp *= cool
 		a := mv[r.intn(len(mv))]
 		ta, sa := l.assign[a], l.it.size[a]
-		var delta, b, tb int
+		var d delta
+		var b, tb int
 		if r.next()&1 == 0 { // move a to another table
 			tb = r.intn(l.k - 1)
 			if tb >= ta {
@@ -100,7 +119,7 @@ func anneal(l *layout, iters int, r *prng) {
 				continue
 			}
 			b = -1
-			delta = l.affTo[a][tb] - l.affTo[a][ta]
+			d = l.moveDelta(a, tb)
 		} else { // swap a with an item at another table
 			b = mv[r.intn(len(mv))]
 			tb = l.assign[b]
@@ -112,9 +131,9 @@ func anneal(l *layout, iters int, r *prng) {
 				l.fill[ta]-sa+sb < floor || l.fill[tb]-sb+sa < floor {
 				continue
 			}
-			delta = l.swapDelta(a, b)
+			d = l.swapDelta(a, b)
 		}
-		if delta < 0 && r.float() >= math.Exp(float64(delta)/temp) {
+		if !d.notWorse() && r.float() >= math.Exp((float64(d.score)-annealIsoWeight*float64(d.iso))/temp) {
 			continue
 		}
 		if b < 0 {
@@ -123,8 +142,9 @@ func anneal(l *layout, iters int, r *prng) {
 			l.move(a, tb)
 			l.move(b, ta)
 		}
-		cur += delta
-		if cur > best {
+		cur.iso += d.iso
+		cur.score += d.score
+		if cur.better(best) {
 			best = cur
 			copy(bestAssign, l.assign)
 		}
@@ -146,21 +166,22 @@ func (l *layout) restore(assign []int) {
 	}
 }
 
-// optimise raises the score of a feasible layout in place: several annealing
-// restarts from copies of the start layout (each with its own constant seed,
-// the best wins, the earliest on ties), then the strict-improvement local
-// search. Postcondition: score(l) ≥ score at entry; k, pins and the hard rules
-// are untouched. Skipped for a single table or fewer than two movable items.
+// optimise improves a feasible layout in place: several annealing restarts
+// from copies of the start layout (each with its own constant seed, the best
+// objective wins, the earliest on ties), then the strict-improvement local
+// search. Postcondition: objective(l) is not worse than at entry in (isolated
+// seats, score) order; k, pins and the hard rules are untouched. Skipped for a
+// single table or fewer than two movable items.
 func optimise(l *layout) {
 	if movable := len(l.movable()); l.k > 1 && movable >= 2 {
 		iters := min(annealIters, annealItersPerItem*movable)
-		bestScore := l.score()
+		bestObj := l.objective()
 		var winner *layout
 		for i := 0; i < annealRestarts; i++ {
 			c := l.clone()
-			anneal(c, iters, &prng{s: annealSeed + uint64(i)*splitmixStep})
-			if s := c.score(); s > bestScore {
-				bestScore, winner = s, c
+			anneal(c, iters, restartPRNG(i))
+			if o := c.objective(); o.better(bestObj) {
+				bestObj, winner = o, c
 			}
 		}
 		if winner != nil {

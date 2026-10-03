@@ -17,6 +17,11 @@ type items struct {
 	gain     [][]int // gain[a][b] = score of a and b sharing a table = 2*size_a*size_b*Weight(affinity)
 	idx      map[GuestID]int
 	total    int // seats needed by all items
+	// hasPartner[a]: item a's cluster has a group-1/2 partner cluster with an
+	// enabled member. Counts partners that are not items too (oversized ones).
+	hasPartner []bool
+	// nbr[a]: indices b with gain[a][b] > 0, ascending (adjacency list for the deltas).
+	nbr [][]int
 }
 
 func newItems(g Graph, capacity int) items {
@@ -32,6 +37,11 @@ func newItems(g Graph, capacity int) items {
 		it.total += c.SeatedSize()
 	}
 	m := len(it.keys)
+	partners := g.hasPartners()
+	it.hasPartner = make([]bool, m)
+	for a, key := range it.keys {
+		it.hasPartner[a] = partners[key]
+	}
 	it.gain = make([][]int, m)
 	for i := range it.gain {
 		it.gain[i] = make([]int, m)
@@ -44,6 +54,14 @@ func newItems(g Graph, capacity int) items {
 		}
 		v := int(2 * Weight(lvl) * float64(it.size[a]*it.size[b])) // always an integer: weights are 1 or 1/2
 		it.gain[a][b], it.gain[b][a] = v, v
+	}
+	it.nbr = make([][]int, m)
+	for a := range it.gain {
+		for b, v := range it.gain[a] {
+			if v > 0 {
+				it.nbr[a] = append(it.nbr[a], b)
+			}
+		}
 	}
 	return it
 }
@@ -108,16 +126,121 @@ func (l *layout) complete() bool {
 	return true
 }
 
-// score is the scenario score (Σ over tables of Σ guest satisfaction), as an
-// integer: every unit is a multiple of 0.5 * 2.
-func (l *layout) score() int {
-	twice := 0
+// objective is what the optimiser compares: fewer isolated seats first, then a
+// higher score. An explicit pair, never a weighted sum (no big-M, no overflow).
+type objective struct {
+	iso   int // isolated enabled guests (seats): lower is better
+	score int // displayed scenario score, isolation penalty included (= Evaluate Summary.Score)
+}
+
+// better is the lexicographic order: fewer isolated seats, then a higher score.
+func (o objective) better(p objective) bool {
+	return o.iso < p.iso || (o.iso == p.iso && o.score > p.score)
+}
+
+// delta is the change of an objective caused by one step.
+type delta struct{ iso, score int }
+
+// improves: the step makes the objective strictly better.
+func (d delta) improves() bool { return d.iso < 0 || (d.iso == 0 && d.score > 0) }
+
+// notWorse: the step does not make the objective worse (ties included).
+func (d delta) notWorse() bool { return d.iso < 0 || (d.iso == 0 && d.score >= 0) }
+
+// better orders two candidate steps the same way objectives are ordered.
+func (d delta) better(e delta) bool {
+	return d.iso < e.iso || (d.iso == e.iso && d.score > e.score)
+}
+
+// objective computes the pair from scratch, O(items). Since every gain is a
+// positive integer and gain[a][a] = 0, affTo[a][t] == 0 means "no partner item
+// at a's table", which is exactly Evaluate's prefAt+fallAt == 0.
+func (l *layout) objective() objective {
+	twice, iso := 0, 0
 	for a, t := range l.assign {
-		if t >= 0 {
-			twice += l.affTo[a][t]
+		if t < 0 {
+			continue
+		}
+		twice += l.affTo[a][t]
+		if l.it.hasPartner[a] && l.affTo[a][t] == 0 {
+			iso += l.it.size[a]
 		}
 	}
-	return twice / 2 // each pair is counted from both of its ends
+	// each pair is counted from both of its ends
+	return objective{iso: iso, score: twice/2 - IsolationPenalty*iso}
+}
+
+// score is the displayed scenario score (Σ over tables of Σ guest satisfaction,
+// isolation penalty included) as an integer: every unit is a multiple of 0.5 * 2.
+func (l *layout) score() int { return l.objective().score }
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// moveDelta is the objective change of moving the placed item a to table tb
+// (tb != assign[a]), exact, in O(|nbr[a]|). See design 003-backend-design §8.3:
+// only a and its neighbours at ta or tb can change their isolation status.
+func (l *layout) moveDelta(a, tb int) delta {
+	ta := l.assign[a]
+	pair := l.affTo[a][tb] - l.affTo[a][ta]
+	dI := 0
+	if l.it.hasPartner[a] {
+		dI += l.it.size[a] * (b2i(l.affTo[a][tb] == 0) - b2i(l.affTo[a][ta] == 0))
+	}
+	for _, c := range l.it.nbr[a] {
+		switch l.assign[c] {
+		case ta: // a leaves: c is isolated if a was its only partner there
+			dI += l.it.size[c] * b2i(l.affTo[c][ta] == l.it.gain[c][a])
+		case tb: // a arrives: c stops being isolated
+			dI -= l.it.size[c] * b2i(l.affTo[c][tb] == 0)
+		}
+	}
+	return delta{iso: dI, score: pair - IsolationPenalty*dI}
+}
+
+// swapDelta is the objective change of exchanging the tables of a and b (both
+// placed, different tables), exact, in O(|nbr[a]| + |nbr[b]|).
+func (l *layout) swapDelta(a, b int) delta {
+	ta, tb := l.assign[a], l.assign[b]
+	g := l.it.gain[a][b]
+	pair := (l.affTo[a][tb] - g) - l.affTo[a][ta] + (l.affTo[b][ta] - g) - l.affTo[b][tb]
+	dI := 0
+	if l.it.hasPartner[a] {
+		dI += l.it.size[a] * (b2i(l.affTo[a][tb]-g == 0) - b2i(l.affTo[a][ta] == 0))
+	}
+	if l.it.hasPartner[b] {
+		dI += l.it.size[b] * (b2i(l.affTo[b][ta]-g == 0) - b2i(l.affTo[b][tb] == 0))
+	}
+	// others: a third item c at ta or tb whose sum changes; each counted once
+	other := func(c int) {
+		var before, after int
+		switch l.assign[c] {
+		case ta:
+			before = l.affTo[c][ta]
+			after = before - l.it.gain[c][a] + l.it.gain[c][b]
+		case tb:
+			before = l.affTo[c][tb]
+			after = before - l.it.gain[c][b] + l.it.gain[c][a]
+		default:
+			return
+		}
+		dI += l.it.size[c] * (b2i(after == 0) - b2i(before == 0))
+	}
+	for _, c := range l.it.nbr[a] {
+		if c != b {
+			other(c)
+		}
+	}
+	for _, c := range l.it.nbr[b] {
+		if c != a && l.it.gain[c][a] == 0 {
+			other(c)
+		}
+	}
+	return delta{iso: dI, score: pair - IsolationPenalty*dI}
 }
 
 func (l *layout) toPlan() Plan {
@@ -194,7 +317,8 @@ func pack(it items, k int, pins map[int]int, affinity bool) *layout {
 // repairFloor lifts every table below Floor to Floor by moving an unpinned
 // cluster in, or swapping a larger one in for a smaller one, never pushing a
 // donor below Floor or any table above capacity; it picks the candidate with
-// the least score loss (ties: lowest indices). Each step strictly reduces the
+// the best objective change: fewest new isolated seats, then the least score
+// loss (ties: lowest indices). Each step strictly reduces the
 // total deficit, so it terminates. Returns false when some table cannot be
 // lifted. Floor is waived for a single table.
 func repairFloor(l *layout) bool {
@@ -226,7 +350,7 @@ func repairFloor(l *layout) bool {
 }
 
 func (l *layout) liftByMove(t int) bool {
-	bestA, bestDelta := -1, 0
+	bestA, bestDelta := -1, delta{}
 	for a := range l.assign {
 		x := l.assign[a]
 		if x < 0 || x == t || l.pinned[a] {
@@ -236,7 +360,7 @@ func (l *layout) liftByMove(t int) bool {
 		if l.fill[t]+s > l.it.capacity || l.fill[x]-s < Floor {
 			continue
 		}
-		if d := l.affTo[a][t] - l.affTo[a][x]; bestA < 0 || d > bestDelta {
+		if d := l.moveDelta(a, t); bestA < 0 || d.better(bestDelta) {
 			bestA, bestDelta = a, d
 		}
 	}
@@ -248,7 +372,7 @@ func (l *layout) liftByMove(t int) bool {
 }
 
 func (l *layout) liftBySwap(t int) bool {
-	bestA, bestB, bestDelta := -1, -1, 0
+	bestA, bestB, bestDelta := -1, -1, delta{}
 	for a := range l.assign {
 		x := l.assign[a]
 		if x < 0 || x == t || l.pinned[a] {
@@ -262,7 +386,7 @@ func (l *layout) liftBySwap(t int) bool {
 			if sa <= sb || l.fill[t]+sa-sb > l.it.capacity || l.fill[x]-sa+sb < Floor {
 				continue
 			}
-			if d := l.swapDelta(a, b); bestA < 0 || d > bestDelta {
+			if d := l.swapDelta(a, b); bestA < 0 || d.better(bestDelta) {
 				bestA, bestB, bestDelta = a, b, d
 			}
 		}
@@ -276,16 +400,10 @@ func (l *layout) liftBySwap(t int) bool {
 	return true
 }
 
-// swapDelta is the score change of exchanging the tables of a and b (different tables).
-func (l *layout) swapDelta(a, b int) int {
-	ta, tb := l.assign[a], l.assign[b]
-	g := l.it.gain[a][b]
-	return (l.affTo[a][tb] - g) - l.affTo[a][ta] + (l.affTo[b][ta] - g) - l.affTo[b][tb]
-}
-
 // improve is a first-improvement local search: single-cluster moves, then
-// pairwise swaps, each accepted only if it strictly raises the score and keeps
+// pairwise swaps, each accepted only if it strictly improves (isolated, score) and keeps
 // capacity and floor; pinned clusters never move. At most `passes` passes.
+// "Improves" is the lexicographic objective: fewer isolated seats, then a higher score.
 func improve(l *layout, passes int) {
 	m := len(l.assign)
 	floor := Floor
@@ -304,7 +422,7 @@ func improve(l *layout, passes int) {
 				if t == x || l.fill[t]+s > l.it.capacity || l.fill[x]-s < floor {
 					continue
 				}
-				if l.affTo[a][t]-l.affTo[a][x] > 0 {
+				if l.moveDelta(a, t).improves() {
 					l.move(a, t)
 					changed = true
 				}
@@ -324,7 +442,7 @@ func improve(l *layout, passes int) {
 				if newA > l.it.capacity || newB > l.it.capacity || newA < floor || newB < floor {
 					continue
 				}
-				if l.swapDelta(a, b) > 0 {
+				if l.swapDelta(a, b).improves() {
 					l.move(a, tb)
 					l.move(b, ta)
 					changed = true
@@ -371,14 +489,35 @@ func pinTargets(g Graph, current Plan, it items) map[int]int {
 	return out
 }
 
+// feasibleAt tries one table count k: pack with and without affinity (+
+// repairFloor), then packExact. It returns the optimised feasible layout, or
+// nil plus the greedy tries (for the best-effort fallback of Propose).
+func feasibleAt(it items, k int, pins map[int]int) (best *layout, tries []*layout) {
+	for _, affinity := range [2]bool{true, false} {
+		l := pack(it, k, pins, affinity)
+		if l.complete() && repairFloor(l) {
+			optimise(l)
+			return l, nil
+		}
+		tries = append(tries, l)
+	}
+	if l := packExact(it, k, pins); l != nil { // tight fits the greedy passes miss
+		optimise(l)
+		return l, nil
+	}
+	return nil, tries
+}
+
 // Propose computes a seating for current.Capacity: the fewest tables k that
 // admit a packing with every fill in [Floor, capacity] (floor waived for one
 // table), clusters intact, pinned clusters kept at their table (a pin to a
-// table number above k is released), then the best satisfaction that a
-// bounded simulated-annealing run plus a local search finds. Only enabled guests are seated; oversized clusters stay
-// unseated. When no k works it returns the plan with the fewest violations
-// (Evaluate lists them) instead of failing. Only the pins of current are used.
-// Deterministic: same input, same plan. Writes nothing.
+// table number above k is released), then, among those layouts, the fewest
+// isolated guests and then the best satisfaction that a bounded
+// simulated-annealing run plus a local search finds. Only enabled guests are
+// seated; oversized clusters stay unseated. When no k works it returns the plan
+// with the fewest violations (Evaluate lists them) instead of failing. Only
+// the pins of current are used. Deterministic: same input, same plan. Writes
+// nothing.
 func Propose(g Graph, current Plan) Plan {
 	capacity := current.Capacity
 	it := newItems(g, capacity)
@@ -390,17 +529,8 @@ func Propose(g Graph, current Plan) Plan {
 	var best Plan
 	bestViolations := -1
 	for k := minTables(it.total, capacity); ; k++ {
-		var tries []*layout
-		for _, affinity := range [2]bool{true, false} {
-			l := pack(it, k, pins, affinity)
-			if l.complete() && repairFloor(l) {
-				optimise(l)
-				return l.toPlan()
-			}
-			tries = append(tries, l)
-		}
-		if l := packExact(it, k, pins); l != nil { // tight fits the greedy passes miss
-			optimise(l)
+		l, tries := feasibleAt(it, k, pins)
+		if l != nil {
 			return l.toPlan()
 		}
 		for _, l := range tries {

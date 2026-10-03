@@ -35,26 +35,35 @@ func annealFixture() Graph {
 	return BuildGraph(guests, ls)
 }
 
-// Capacity 12 on annealFixture, computed offline once:
-//   - fixtureOldScore12: pack + repairFloor + improve only (the pre-task-008 result);
-//   - fixtureBestScore12: the best score of 12 independent anneal runs of 3M
+// Capacity 12 on annealFixture, computed offline (task 011 objective: isolated
+// seats first, then the displayed score with the isolation penalty included):
+//   - fixtureOldObjective12: pack + repairFloor + improve only;
+//   - fixtureBestObjective12: the best objective of 12 independent anneal runs of 3M
 //     steps each from the packed layout (all 12 agreed), taken as the optimum.
 //
+// Before task 011 these were the plain scores 253 and 306. 253 -> {23 isolated, 208}:
+// the same pipeline now optimises isolation first and the score shown includes -1
+// per isolated guest. 306 -> {12, 278}: the old best layout seated 23+ guests
+// without any acquaintance; the new one isolates 12 and scores 278 (displayed).
 // Thresholds, not bit-for-bit plans: the accept rule uses math.Exp.
-const (
-	fixtureOldScore12  = 253
-	fixtureBestScore12 = 306
+var (
+	fixtureOldObjective12  = objective{iso: 23, score: 208}
+	fixtureBestObjective12 = objective{iso: 12, score: 278}
 )
 
-// oldLocalSearchScore is the pre-task-008 pipeline: pack + repairFloor + improve.
-func oldLocalSearchScore(g Graph, capacity int) (score int, ok bool) {
+// oldLocalSearchObjective is the pre-task-008 pipeline: pack + repairFloor + improve.
+func oldLocalSearchObjective(g Graph, capacity int) (o objective, ok bool) {
 	it := newItems(g, capacity)
 	l := pack(it, minTables(it.total, capacity), nil, true)
 	if !l.complete() || !repairFloor(l) {
-		return 0, false
+		return objective{}, false
 	}
 	improve(l, maxPasses)
-	return l.score(), true
+	return l.objective(), true
+}
+
+func evalObjective(ev Evaluation) objective {
+	return objective{iso: ev.Summary.Isolated, score: int(ev.Summary.Score)}
 }
 
 func TestPRNG(t *testing.T) {
@@ -88,20 +97,21 @@ func TestAnnealFixtureCapacity12(t *testing.T) {
 	if got := len(g.Clusters()); got != 25 {
 		t.Fatalf("fixture has %d clusters, want 25", got)
 	}
-	old, ok := oldLocalSearchScore(g, 12)
-	if !ok || old != fixtureOldScore12 {
-		t.Fatalf("old local-search score = %d (ok %v), fixture constant says %d", old, ok, fixtureOldScore12)
+	old, ok := oldLocalSearchObjective(g, 12)
+	if !ok || old != fixtureOldObjective12 {
+		t.Fatalf("old local-search objective = %+v (ok %v), fixture constant says %+v", old, ok, fixtureOldObjective12)
 	}
 	p := Propose(g, emptyPlan(12))
 	ev := assertHardRules(t, g, p)
 	if len(p.Tables) != 9 {
 		t.Errorf("%d tables, want 9", len(p.Tables))
 	}
-	if ev.Summary.Score < float64(old) {
-		t.Errorf("annealed score %v is below the old local-search score %d", ev.Summary.Score, old)
+	got := evalObjective(ev)
+	if old.better(got) {
+		t.Errorf("annealed objective %+v is worse than the old local-search %+v", got, old)
 	}
-	if ev.Summary.Score != fixtureBestScore12 {
-		t.Errorf("annealed score %v, want the optimum %d", ev.Summary.Score, fixtureBestScore12)
+	if got != fixtureBestObjective12 {
+		t.Errorf("annealed objective %+v, want the best known %+v", got, fixtureBestObjective12)
 	}
 }
 
@@ -112,8 +122,8 @@ func TestAnnealFixtureAllCapacities(t *testing.T) {
 			p := Propose(g, emptyPlan(capacity))
 			ev := Evaluate(g, p)
 			assertWellFormed(t, g, p)
-			if old, ok := oldLocalSearchScore(g, capacity); ok && ev.Summary.Score < float64(old) {
-				t.Errorf("score %v below old local search %d", ev.Summary.Score, old)
+			if old, ok := oldLocalSearchObjective(g, capacity); ok && old.better(evalObjective(ev)) {
+				t.Errorf("objective %+v worse than old local search %+v", evalObjective(ev), old)
 			}
 			if again := Propose(g, emptyPlan(capacity)); !reflect.DeepEqual(again, p) {
 				t.Error("two calls differ")
@@ -185,17 +195,16 @@ func TestOptimiseProperties(t *testing.T) {
 				pins[a] = l.assign[a]
 				l.pinned[a] = true
 			}
-			before := l.score()
+			before := l.objective()
 			start := l.clone()
 			optimise(l)
 			checkLayout(t, l, pins)
 			if l.k != start.k {
 				t.Fatalf("k changed")
 			}
-			if l.score() < before {
-				t.Errorf("seed %d cap %d: score fell %d -> %d", seed, capacity, before, l.score())
-			}
-			if l.score() > before {
+			if after := l.objective(); before.better(after) {
+				t.Errorf("seed %d cap %d: objective got worse %+v -> %+v", seed, capacity, before, after)
+			} else if after.better(before) {
 				improved++
 			}
 			again := start.clone()
@@ -206,7 +215,7 @@ func TestOptimiseProperties(t *testing.T) {
 		}
 	}
 	if improved == 0 {
-		t.Error("optimise never raised a score; the test would not notice a no-op")
+		t.Error("optimise never improved the objective; the test would not notice a no-op")
 	}
 }
 
@@ -241,8 +250,8 @@ func TestAnnealFindsSwapOptimum(t *testing.T) {
 		l.place(it.idx[id], int((id-1)%2))
 	}
 	anneal(l, 20_000, &prng{s: 7})
-	if want := 2 * 2 * 28; l.score() != want {
-		t.Errorf("score %d, want %d", l.score(), want)
+	if want := (objective{iso: 0, score: 2 * 2 * 28}); l.objective() != want {
+		t.Errorf("objective %+v, want %+v", l.objective(), want)
 	}
 	checkLayout(t, l, nil)
 }

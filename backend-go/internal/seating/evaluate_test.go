@@ -66,13 +66,19 @@ func TestEvaluateSatisfaction(t *testing.T) {
 }
 
 func TestEvaluateScoreLevelsOrdering(t *testing.T) {
-	// group 1 (1.0) > group 2 (0.5) > stranger (0), for single guests.
+	// group 1 (1.0) > group 2 (0.5) > only strangers (0 contribution, but the guest has
+	// partners and none at the table: isolated, -IsolationPenalty since task 011), for single guests.
 	g := BuildGraph(enabledRange(1, 5), []Link{lk(1, 2, Preferred), lk(1, 3, Acceptable)})
 	score := func(mate GuestID) float64 {
 		return guestScore(t, Evaluate(g, Plan{Capacity: 10, Tables: []Table{tbl(1, 1, mate)}}), 1).Satisfaction
 	}
-	if p, a, s := score(2), score(3), score(4); !(p > a && a > s) || p != 1.0 || a != 0.5 || s != 0 {
-		t.Errorf("preferred/acceptable/stranger = %v/%v/%v, want 1.0/0.5/0", p, a, s)
+	if p, a, s := score(2), score(3), score(4); !(p > a && a > s) || p != 1.0 || a != 0.5 || s != -IsolationPenalty {
+		t.Errorf("preferred/acceptable/stranger-only = %v/%v/%v, want 1.0/0.5/%v", p, a, s, -IsolationPenalty)
+	}
+	// a stranger next to a partner adds nothing: the contribution of a stranger is still 0.
+	ev := Evaluate(g, Plan{Capacity: 10, Tables: []Table{tbl(1, 1, 2, 4)}})
+	if got := guestScore(t, ev, 1).Satisfaction; got != 1.0 {
+		t.Errorf("guest 1 with a partner and a stranger = %v, want 1.0", got)
 	}
 }
 

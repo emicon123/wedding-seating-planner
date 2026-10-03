@@ -35,6 +35,9 @@ type Summary struct {
 	TableCount, Seated, Unseated, ViolationCount int
 	Score                                        float64
 	NeedsRecalculation                           bool
+	// Isolated counts the seated enabled guests who are isolated (see
+	// GuestScore.Isolated). Go only: the API derives it from satisfaction < 0.
+	Isolated int
 }
 
 // TableEval is the evaluation of one table.
@@ -53,6 +56,11 @@ type GuestScore struct {
 	PreferredAtTable int
 	FallbackAtTable  int
 	StrangersAtTable int
+	// Isolated: the guest's cluster has at least one partner cluster (group-1/2
+	// affinity, any enabled member, seated or not) and none of them has an
+	// enabled guest at the table. Always the whole cluster at once; costs
+	// IsolationPenalty of satisfaction. Go only (task 011): not mapped to the DTO.
+	Isolated bool
 }
 
 // Evaluation is everything derived from a Plan.
@@ -94,6 +102,7 @@ func Evaluate(g Graph, p Plan) Evaluation {
 	}
 
 	preferredTotal := g.preferredTotals()
+	hasPartner := g.hasPartners()
 	ev := Evaluation{Tables: make([]TableEval, len(p.Tables))}
 	var scores []GuestScore
 
@@ -124,13 +133,21 @@ func Evaluate(g Graph, p Plan) Evaluation {
 					strangers += n
 				}
 			}
+			isolated := hasPartner[k] && prefAt+fallAt == 0
+			if isolated {
+				sat -= IsolationPenalty
+			}
 			for _, gid := range sortedIDs(atTable[ti][k]) {
 				scores = append(scores, GuestScore{
 					Guest: gid, Table: t.Number, Satisfaction: sat,
 					PreferredTotal: preferredTotal[k], PreferredAtTable: prefAt,
 					FallbackAtTable: fallAt, StrangersAtTable: strangers,
+					Isolated: isolated,
 				})
 				te.Score += sat
+				if isolated {
+					ev.Summary.Isolated++
+				}
 			}
 		}
 		ev.Tables[ti] = te
@@ -214,6 +231,21 @@ func (g Graph) preferredTotals() map[GuestID]int {
 		}
 		out[pk.lo] += g.clusters[g.index[pk.hi]].SeatedSize()
 		out[pk.hi] += g.clusters[g.index[pk.lo]].SeatedSize()
+	}
+	return out
+}
+
+// hasPartners: cluster key -> true when some OTHER cluster with at least one
+// enabled member has a group-1/2 affinity to it. Used by Evaluate and newItems.
+func (g Graph) hasPartners() map[GuestID]bool {
+	out := map[GuestID]bool{}
+	for pk := range g.affinity {
+		if g.clusters[g.index[pk.hi]].SeatedSize() > 0 {
+			out[pk.lo] = true
+		}
+		if g.clusters[g.index[pk.lo]].SeatedSize() > 0 {
+			out[pk.hi] = true
+		}
 	}
 	return out
 }
