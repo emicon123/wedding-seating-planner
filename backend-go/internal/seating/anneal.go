@@ -1,6 +1,9 @@
 package seating
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 // Simulated-annealing stage of Propose (task 008, objective task 011). It only
 // improves the objective (fewest isolated seats, then highest score) of a layout that is already feasible: same k, same pins, every fill inside
@@ -8,12 +11,12 @@ import "math"
 // with constant seeds and a fixed iteration budget (no clock, no math/rand).
 
 const (
-	annealSeed         uint64  = 0x5EA7_1A9C_2026_1003 // restart i: see restartPRNG
-	annealIters                = 400_000               // steps per restart, upper bound
-	annealItersPerItem         = 16_000                // steps per movable item until the bound is reached
-	annealRestarts             = 4
-	annealTempHigh     float64 = 6   // start temperature, in score units
-	annealTempLow      float64 = 0.8 // end temperature
+	annealSeed           uint64  = 0x5EA7_1A9C_2026_1003 // restart i: see restartPRNG
+	annealIters                  = 1_500_000             // steps per restart, upper bound
+	annealItersPerItemSq         = 700                   // steps per (movable items)^2, the swap neighbourhood, until the bound is reached
+	annealRestarts               = 32                    // independent walks, run in parallel (task 012)
+	annealTempHigh       float64 = 6                     // start temperature, in score units
+	annealTempLow        float64 = 3                     // end temperature (task 012: was 0.8, a warmer end finds the deep basins of full tables more often)
 	// annealIsoWeight: extra score points one added isolated seat counts for in the
 	// acceptance probability of a worse step (on top of the IsolationPenalty already
 	// inside the score delta). A tuning knob for the walk only: it never decides which
@@ -173,13 +176,47 @@ func (l *layout) restore(assign []int) {
 // seats, score) order; k, pins and the hard rules are untouched. Skipped for a
 // single table or fewer than two movable items.
 func optimise(l *layout) {
-	if movable := len(l.movable()); l.k > 1 && movable >= 2 {
-		iters := min(annealIters, annealItersPerItem*movable)
+	optimiseWith(l, annealRestarts, annealSteps(len(l.movable())), 0)
+}
+
+// hasAffinity reports whether any of the items has a neighbour: without one the
+// objective is the constant (0, 0) at every arrangement and there is nothing to search.
+func (l *layout) hasAffinity(items []int) bool {
+	for _, a := range items {
+		if len(l.it.nbr[a]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// annealSteps is the steps per restart for m movable items: m^2 (the number of
+// swaps) times annealItersPerItemSq, at most annealIters. 46 items (a real
+// ~107-guest list) get ~1.48M, 20 items 280k, 10 items 70k.
+func annealSteps(m int) int { return min(annealIters, annealItersPerItemSq*m*m) }
+
+// optimiseWith is optimise with an explicit budget: `restarts` annealing runs of
+// `iters` steps each; restart i uses restartPRNG(seedBase+i).
+// The restarts run in parallel goroutines, each on its own clone with its own PRNG
+// (the items table is read-only), and the winner is picked afterwards in index
+// order, so the result does not depend on scheduling.
+func optimiseWith(l *layout, restarts, iters, seedBase int) {
+	if movable := l.movable(); l.k > 1 && len(movable) >= 2 && l.hasAffinity(movable) {
+		results := make([]*layout, restarts)
+		var wg sync.WaitGroup
+		for i := range results {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				c := l.clone()
+				anneal(c, iters, restartPRNG(seedBase+i))
+				results[i] = c
+			}()
+		}
+		wg.Wait()
 		bestObj := l.objective()
 		var winner *layout
-		for i := 0; i < annealRestarts; i++ {
-			c := l.clone()
-			anneal(c, iters, restartPRNG(i))
+		for _, c := range results {
 			if o := c.objective(); o.better(bestObj) {
 				bestObj, winner = o, c
 			}

@@ -35,6 +35,60 @@ func annealFixture() Graph {
 	return BuildGraph(guests, ls)
 }
 
+// tightFixture is a synthetic stand-in for a real ~107-guest list at capacity 12
+// (no real data): 46 clusters (4x1, 28x2, 9x3, 5x4 guests, shuffled by the seed),
+// 100 random group-1/2 affinities between clusters. At capacity 12 it needs 9
+// tables with one free seat, so almost only equal-size swaps are possible and the
+// walk needs a long search (task 012).
+func tightFixture(seed int64) Graph {
+	sizes := []int{}
+	for _, c := range [][2]int{{1, 4}, {2, 28}, {3, 9}, {4, 5}} {
+		for i := 0; i < c[1]; i++ {
+			sizes = append(sizes, c[0])
+		}
+	}
+	r := rand.New(rand.NewSource(seed))
+	r.Shuffle(len(sizes), func(i, j int) { sizes[i], sizes[j] = sizes[j], sizes[i] })
+	var guests []Guest
+	var ls []Link
+	var firsts []GuestID
+	next := GuestID(1)
+	for _, s := range sizes {
+		firsts = append(firsts, next)
+		for i := 0; i < s; i++ {
+			guests = append(guests, Guest{ID: next, Enabled: true})
+			if i > 0 {
+				ls = append(ls, lk(next-GuestID(i), next, Must))
+			}
+			next++
+		}
+	}
+	for i := 0; i < 100; i++ {
+		a, b := firsts[r.Intn(len(firsts))], firsts[r.Intn(len(firsts))]
+		ls = append(ls, lk(a, b, LinkLevel(1+r.Intn(2))))
+	}
+	return BuildGraph(guests, ls)
+}
+
+// tightBestObjective12 is the best objective on tightFixture(4) at capacity 12: three
+// independent runs of 128 restarts x 3M steps each reached it (so did Propose);
+// the former pipeline (4 restarts x <=400k steps, end temperature 0.8) returned 392.
+var tightBestObjective12 = objective{iso: 0, score: 408}
+
+// The annealing budget (annealRestarts x annealSteps) must reach the long-run
+// objective on an instance shaped like a real list; a smaller budget does not (task 012).
+func TestAnnealBudgetReachesLongRunObjective(t *testing.T) {
+	g := tightFixture(4)
+	p := Propose(g, emptyPlan(12))
+	ev := assertHardRules(t, g, p)
+	if len(p.Tables) != 9 {
+		t.Errorf("%d tables, want 9", len(p.Tables))
+	}
+	if got := evalObjective(ev); got != tightBestObjective12 {
+		t.Errorf("Propose objective %+v, want the long-run optimum %+v", got, tightBestObjective12)
+	}
+}
+
 // Capacity 12 on annealFixture, computed offline (task 011 objective: isolated
 // seats first, then the displayed score with the isolation penalty included):
 //   - fixtureOldObjective12: pack + repairFloor + improve only;
@@ -242,18 +296,22 @@ func TestProposeKeepsPinsAfterAnneal(t *testing.T) {
 
 func TestAnnealFindsSwapOptimum(t *testing.T) {
 	// Two cliques of 8 mixed over two tables of capacity 8: every move breaks capacity,
-	// only swaps work; anneal alone (no improve) must unmix them.
+	// only swaps work; anneal alone (no improve) must unmix them. 100k steps: the walk
+	// ends at annealTempLow = 3 (task 012; it was 0.8 and 20k steps were enough), so a lone
+	// pass needs a longer walk to visit the optimum; in Propose improve() settles it.
 	g := BuildGraph(enabledRange(1, 16), links(clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8), clique(Preferred, 9, 10, 11, 12, 13, 14, 15, 16)))
 	it := newItems(g, 8)
-	l := newLayout(it, 2)
-	for id := GuestID(1); id <= 16; id++ {
-		l.place(it.idx[id], int((id-1)%2))
+	for _, seed := range []uint64{7, 8, 9, 10} {
+		l := newLayout(it, 2)
+		for id := GuestID(1); id <= 16; id++ {
+			l.place(it.idx[id], int((id-1)%2))
+		}
+		anneal(l, 100_000, &prng{s: seed})
+		if want := (objective{iso: 0, score: 2 * 2 * 28}); l.objective() != want {
+			t.Errorf("seed %d: objective %+v, want %+v", seed, l.objective(), want)
+		}
+		checkLayout(t, l, nil)
 	}
-	anneal(l, 20_000, &prng{s: 7})
-	if want := (objective{iso: 0, score: 2 * 2 * 28}); l.objective() != want {
-		t.Errorf("objective %+v, want %+v", l.objective(), want)
-	}
-	checkLayout(t, l, nil)
 }
 
 func TestOptimiseSkips(t *testing.T) {

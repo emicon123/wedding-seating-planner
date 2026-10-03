@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync"
 
 	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/guests"
@@ -91,7 +92,7 @@ func (s *Service) List(ctx context.Context) ([]Evaluated, error) {
 }
 
 // Calculate runs auto-seating for all four capacities from ONE graph and the current pins.
-// It writes nothing.
+// The four capacities are proposed in parallel. It writes nothing.
 func (s *Service) Calculate(ctx context.Context) ([]Proposal, error) {
 	g, err := s.graph(ctx)
 	if err != nil {
@@ -101,11 +102,20 @@ func (s *Service) Calculate(ctx context.Context) ([]Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Propose and Evaluate are pure functions over the read-only graph, so the capacities run
+	// in parallel goroutines; each writes its own slot, so the result stays in capacity order
+	// and does not depend on scheduling.
 	out := make([]Proposal, len(states))
+	var wg sync.WaitGroup
 	for i, st := range states {
-		proposed := seating.Propose(g, st.Plan)
-		out[i] = Proposal{BasedOnVersion: st.Version, Plan: proposed, Eval: seating.Evaluate(g, proposed)}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			proposed := seating.Propose(g, st.Plan)
+			out[i] = Proposal{BasedOnVersion: st.Version, Plan: proposed, Eval: seating.Evaluate(g, proposed)}
+		}()
 	}
+	wg.Wait()
 	return out, nil
 }
 

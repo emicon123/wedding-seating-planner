@@ -887,8 +887,9 @@ func TestResetMakesOlderProposalsStale(t *testing.T) {
 }
 
 // BenchmarkCalculate100 measures the whole Calculate path (one graph, four proposals, real
-// SQLite reads) for ~100 guests in families of 1..5 with partner links. Task 006 budget: well
-// under a second on the Pi.
+// SQLite reads) for ~100 guests in families of 1..5 with partner links. The four capacities run
+// in parallel. This list has ~25 clusters, so the budget scaled by annealSteps is small (~0.3 s on the
+// Pi); the 46-cluster real-shaped case takes ~3.3 s (BenchmarkProposeTight/generate4, task 012).
 func BenchmarkCalculate100(b *testing.B) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(b.TempDir(), "stoliki.db"))

@@ -114,8 +114,10 @@ func (r *rng) intn(n int) int             // uniform in [0, n)
 func (r *rng) float() float64             // uniform in [0, 1)
 
 const annealSeed = <constant>             // fixed; restart i uses a seed derived from annealSeed and i
-const annealIters = <constant>            // per restart; ≥ 400k at ~100 guests (may be a pure function of item count)
-const annealRestarts = <constant>         // ≥ 1
+const annealIters = 1_500_000             // per restart, upper bound
+const annealItersPerItemSq = 700          // steps per (movable items)², until annealIters is reached (task 012)
+const annealRestarts = 32                 // independent walks, run in parallel goroutines (task 012)
+const annealTempHigh, annealTempLow = 6, 3 // geometric cooling (task 012: the end was 0.8)
 
 // anneal: simulated annealing over unpinned placed items, from l (feasible).
 // Steps: move one item to another table, or swap two items on different tables;
@@ -124,13 +126,15 @@ const annealRestarts = <constant>         // ≥ 1
 // T cooling geometrically over the iteration budget. Leaves l at the BEST layout seen.
 func anneal(l *layout, iters int, r *rng)
 
-// optimise = for each restart: copy of the start layout → anneal → keep the best;
-// then improve(best, maxPasses). Skips anneal when fewer than 2 movable items or k = 1.
+// optimise = for each restart (parallel goroutines, own clone + PRNG each): copy of the start layout
+// → anneal → winner by objective, earliest index on ties; then improve(best, maxPasses).
+// Skips anneal when fewer than 2 movable items, k = 1, or no movable item has an affinity.
+// Steps per restart = min(annealIters, annealItersPerItemSq · m²), m = movable items.
 // Postcondition: score(result) ≥ score(start); k, pins, fills within [floor, capacity] unchanged.
 func optimise(l *layout)
 ```
 
-Names and the exact schedule (T0, T_end, move/swap mix, restart count) are Backend-Go's choice, tuned with the benchmark; the contract is the postcondition plus determinism. `layout` needs a cheap copy (assign, fill, affTo) for best-seen snapshots and restarts. Determinism note: `math.Exp` results feed the accept decision, so "same input → same plan" is guaranteed for the same build/architecture (tests run on the Pi); tests assert run-twice equality and score thresholds rather than relying on cross-architecture bit identity. Target: one `Propose` ≤ ~1 s on the Pi, `Calculate` (four capacities) ≤ ~2–3 s; if sequential runs miss it, `scenarios.Service.Calculate` runs the four `Propose` calls in goroutines (read-only `Graph`; results kept in order 9, 10, 11, 12) — `seating` stays single-threaded. Update the package doc in `graph.go` ("no clock, no randomness") to: no clock, no I/O, no package-level mutable state; the only randomness is a constant-seed PRNG inside `Propose`, so results are still a pure function of the input.
+Names and the exact schedule (T0, T_end, move/swap mix, restart count) are Backend-Go's choice, tuned with the benchmark; the contract is the postcondition plus determinism. `layout` needs a cheap copy (assign, fill, affTo) for best-seen snapshots and restarts. Determinism note: `math.Exp` results feed the accept decision, so "same input → same plan" is guaranteed for the same build/architecture (tests run on the Pi); tests assert run-twice equality and score thresholds rather than relying on cross-architecture bit identity. Target (task 012): `Calculate` (four capacities) ≲ 3–5 s on the Pi for ~107 guests; `scenarios.Service.Calculate` runs the four `Propose` calls in goroutines (read-only `Graph`; each writes its own slot, results in order 9, 10, 11, 12) and `optimise` runs the restarts of one `Propose` in goroutines too (each restart owns its clone and PRNG, the winner is picked after `wg.Wait()` in index order, so the result is independent of scheduling). Measured numbers: 03-seating-model § Auto-seating. Update the package doc in `graph.go` ("no clock, no randomness") to: no clock, no I/O, no package-level mutable state; the only randomness is a constant-seed PRNG inside `Propose`, so results are still a pure function of the input.
 
 ### 2.2 `internal/guests`
 
@@ -704,7 +708,7 @@ flowchart TD
 - **`repairFloor`** (`liftByMove`, `liftBySwap`): candidates are filtered by the hard rules as today; the chosen one is the best by `delta.better` (fewest new isolated seats, then least score loss), ties lowest indices. `liftByMove` uses `moveDelta` instead of the inline `affTo` difference.
 - **`anneal`:** keeps `cur objective` and `best objective` (+ `bestAssign`). Per step with `d` = `moveDelta` / `swapDelta`:
   - accept if `d.iso < 0 || (d.iso == 0 && d.score >= 0)` (lexicographically not worse — includes today's "ties accepted");
-  - otherwise accept with probability `exp(Δacc / T)`, where `Δacc = d.score − annealIsoWeight · d.iso` (`d.iso ≥ 0` here). New constant `annealIsoWeight = 8` (score points per isolated seat; a tuning knob for the *walk only* — it never decides which layout is returned). With T from 6 to 0.8 a step isolating one more guest is still taken now and then early on (≈ e^(−9/6) ≈ 0.2) and almost never at the end, so the walk can cross a barrier that improve alone cannot. Backend-Go may retune it with the fixtures (constants only).
+  - otherwise accept with probability `exp(Δacc / T)`, where `Δacc = d.score − annealIsoWeight · d.iso` (`d.iso ≥ 0` here). New constant `annealIsoWeight = 8` (score points per isolated seat; a tuning knob for the *walk only* — it never decides which layout is returned). With T from 6 to 0.8 (task 012: 6 to 3) a step isolating one more guest is still taken now and then early on (≈ e^(−9/6) ≈ 0.2) and almost never at the end, so the walk can cross a barrier that improve alone cannot. Backend-Go may retune it with the fixtures (constants only).
   - after applying: `cur = cur + d`; if `cur.better(best)` → snapshot. `l.restore(bestAssign)` at the end as today.
 - **`optimise`:** restart winner = the restart whose final `objective()` is `better` than the best so far (start layout included, earliest on ties). Postcondition: `objective(result)` is not worse than `objective(start)` lexicographically; k, pins and hard rules unchanged.
 - **`improve`:** a move / swap is applied iff `delta.improves()` (replaces `affTo[a][t]-affTo[a][x] > 0` and `swapDelta(a, b) > 0`). Still first-improvement, still capped at `maxPasses`. Because it scans every move and every swap, **the returned layout has no single feasible move or swap that lowers the isolated count** — a testable guarantee (§8.7 P6).
@@ -778,7 +782,7 @@ D1 isolated `a` moves to its partner's table (ΔI = −size a); D2 partner leavi
 - P5 *Determinism*: run twice, identical plans (all fixtures above + the ~100-guest fixture).
 - P6 *Local optimality*: on generated inputs, the returned layout has no single feasible move/swap with `delta.iso < 0`.
 - Existing tests: `fixtureOldScore12` / `fixtureBestScore12` (253 / 306) are re-derived under the new score (penalty included) and the best-known value becomes an `objective` (isolated, score) from 12 long runs; other expected scores (e.g. 116, 200, `8·couples`) change only where those fixtures contain isolated guests — say so per test in the commit message.
-- Benchmark `BenchmarkProposeFixture` re-measured on the Pi; target unchanged (≤ ~1 s per Propose, Generate ≤ ~2–3 s; it was ≈ 60 ms / 240 ms). Record the numbers in 03-seating-model § Auto-seating (replace the "Measured before task 011" paragraph).
+- Benchmark `BenchmarkProposeFixture` re-measured on the Pi; target then ≤ ~1 s per Propose, Generate ≤ ~2–3 s (it was ≈ 60 ms / 240 ms; task 012 raised the budget, see §8.3 and 03-seating-model). Record the numbers in 03-seating-model § Auto-seating (replace the "Measured before task 011" paragraph).
 
 ### 8.8 Pattern evaluation and audit (task 011)
 
