@@ -5,6 +5,7 @@ import type { components } from '@/api/schema'
 type Schemas = components['schemas']
 
 export type Capacity = Schemas['Capacity']
+export type PlanKey = Schemas['PlanKey']
 export type LinkLevel = Schemas['LinkLevel']
 export type Guest = Schemas['Guest']
 export type GuestLinkRef = Schemas['GuestLinkRef']
@@ -31,10 +32,10 @@ export type ScenarioLayout = Schemas['ScenarioLayout']
 export type ScenariosReplace = Schemas['ScenariosReplace']
 
 /**
- * The one-slot undo snapshot of the last Generate (task 007): the four plans as they were before it,
+ * The one-slot undo snapshot of the last Generate (task 007): the five plans as they were before it,
  * and the version each plan has right after it (what Cofnij must find unchanged).
  */
 export type GenerateUndo = {
   previous: Scenario[]
-  generatedVersions: Record<Capacity, number>
+  generatedVersions: Record<PlanKey, number>
 }

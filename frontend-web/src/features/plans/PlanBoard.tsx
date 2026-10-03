@@ -33,10 +33,10 @@ export function PlanBoard({
   compact,
   details,
 }: PlanBoardProps) {
-  const { plan, capacity } = scenario
+  const { plan } = scenario
   const { dndProps, dragging, activeCluster, over, hint } = useClusterDrag({
     plan,
-    capacity,
+    kind: view.kind,
     overview,
     nameOf: view.nameOf,
     onMove: view.onMove,

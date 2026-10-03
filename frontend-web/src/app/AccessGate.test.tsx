@@ -3,7 +3,7 @@ import { http } from 'msw'
 import { App } from '@/app/App'
 import { keys } from '@/api/keys'
 import { serveGuests } from '@/features/guests/fixtures'
-import { fourScenarios, serveScenarios } from '@/features/plans/fixtures'
+import { fiveScenarios, serveScenarios } from '@/features/plans/fixtures'
 import { renderPage } from '@/test/renderPage'
 import { apiUrl, failure, HttpResponse, mockApi, server, single } from '@/test/server'
 import { FAKE_PIN, serveOpenSession, serveSessionLocked } from '@/test/session'
@@ -66,7 +66,7 @@ describe('AccessGate', () => {
 
   it('gates the print view too', async () => {
     serveSessionLocked()
-    serveScenarios(fourScenarios())
+    serveScenarios(fiveScenarios())
     renderPage(<App />, '/druk/10')
 
     expect(await screen.findByRole('heading', { name: 'Podaj PIN' })).toBeInTheDocument()

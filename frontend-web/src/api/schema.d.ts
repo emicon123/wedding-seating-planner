@@ -19,7 +19,7 @@ export interface paths {
         put?: never;
         /**
          * Add a guest (UC-02)
-         * @description The new guest is enabled by default and unseated in all four plans.
+         * @description The new guest is enabled by default and unseated in all five plans.
          */
         post: operations["createGuest"];
         delete?: never;
@@ -128,7 +128,7 @@ export interface paths {
          *     A name reference matches a full display name, or a first name if exactly one guest has it.
          *
          *     `dryRun=true` (default): validate only, return the report.
-         *     `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all four plans,
+         *     `dryRun=false`: if the report has no errors, REPLACE all guests and links and clear all five plans,
          *     in one transaction; with errors → 422 and nothing changes.
          */
         post: operations["importGuests"];
@@ -145,16 +145,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14) */
+        /** The five plans (9, 10, 11, 12, mixed) with their evaluations (UC-09, UC-14) */
         get: operations["listScenarios"];
         /**
-         * Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
-         * @description Atomic: all four plans (9, 10, 11, 12) are replaced in ONE transaction, or nothing changes.
+         * Replace all five plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+         * @description Atomic: all five plans (9, 10, 11, 12, mixed) are replaced in ONE transaction, or nothing changes.
          *     Used twice by the SPA:
          *
-         *     * **"Generuj plany"**: the four `POST /scenarios/calculate` results, with `basedOnVersion` =
+         *     * **"Generuj plany"**: the five `POST /scenarios/calculate` results, with `basedOnVersion` =
          *       the versions of the plans the user had on screen before generating.
-         *     * **"Cofnij"**: the four plans as they were before that Generate, with `basedOnVersion` =
+         *     * **"Cofnij"**: the five plans as they were before that Generate, with `basedOnVersion` =
          *       the versions this call returned when the Generate was stored.
          *
          *     For each plan: its tables and assignments are replaced by `tables` (numbers 1..k without gaps,
@@ -164,10 +164,10 @@ export interface paths {
          *     `pinnedGuestIds`; the pin is stored on every seat of the cluster at that table. Unlisted
          *     guests end up unseated. Violations never block saving. Each plan's version is bumped by 1.
          *
-         *     Checks, in order, before anything is written: body shape and each capacity exactly once (422);
+         *     Checks, in order, before anything is written: body shape and each plan key exactly once (422);
          *     every guest id known and not seated twice in a plan, `pinnedGuestIds` ⊆ that table's
          *     `guestIds` (422 `validation_failed`); every `basedOnVersion` equals the stored version (409
-         *     `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all four plans
+         *     `version_conflict`; the message names a stale plan), checked inside the transaction. Any failure leaves all five plans
          *     untouched.
          */
         put: operations["replaceScenarios"];
@@ -188,11 +188,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
-         * @description Pure computation — nothing is stored. Runs auto-seating for capacity 9, 10, 11 and 12 from the
-         *     current guests, links and pins (pinned clusters stay at their table, `pinned: true`).
-         *     "Generuj plany" stores the four results straight away: the SPA sends them unchanged to
-         *     `PUT /scenarios` (one atomic call, version-checked) without showing a preview.
+         * Compute proposals for all five plans — step 1 of "Generuj plany" (UC-10)
+         * @description Pure computation — nothing is stored. Runs auto-seating for the plans 9, 10, 11, 12 and mixed
+         *     from the current guests, links and each plan's own pins (pinned clusters stay at their table,
+         *     `pinned: true`). The mixed plan uses the fewest tables of at most 12 guests, or one table more
+         *     when that strictly lowers the number of guests sitting without anyone from their groups 1/2
+         *     (docs/architecture/03-seating-model.md § The mixed plan). "Generuj plany" stores the five results
+         *     straight away: the SPA sends them unchanged to `PUT /scenarios` (one atomic call,
+         *     version-checked) without showing a preview.
          */
         post: operations["calculateProposals"];
         delete?: never;
@@ -201,16 +204,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scenarios/{capacity}/assignments/{guestId}": {
+    "/scenarios/{planKey}/assignments/{guestId}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
                 /**
                  * @description Guest id.
                  * @example 4
@@ -223,7 +227,7 @@ export interface paths {
         /**
          * Move the guest's whole cluster to a table and set its pin (UC-11, UC-12)
          * @description Applies to every member of the guest's cluster (disabled members included). Idempotent,
-         *     last write wins; bumps the scenario version. Exceeding capacity is allowed and reported as a violation.
+         *     last write wins; bumps the scenario version. Exceeding capacity (12 in the mixed plan) is allowed and reported as a violation.
          */
         put: operations["setAssignment"];
         post?: never;
@@ -237,16 +241,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scenarios/{capacity}/tables": {
+    "/scenarios/{planKey}/tables": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
             };
             cookie?: never;
         };
@@ -256,12 +261,12 @@ export interface paths {
         post: operations["addTable"];
         /**
          * Delete a plan — remove all its tables, assignments and pins (UC-17)
-         * @description "Usuń plan". The scenario itself stays (there are always four plans); it becomes an
+         * @description "Usuń plan". The scenario itself stays (there are always five plans); it becomes an
          *     empty plan: no tables, every guest unseated, pins cleared (disabled guests' assignments
          *     too). Bumps the scenario version, so a "Cofnij" of an earlier Generate is no longer
          *     possible (`PUT /scenarios` returns 409). Not version-checked, like the other manual plan edits: the result does not
          *     depend on what the client saw, and repeating it is harmless (idempotent apart from the
-         *     version bump). No request body. "Usuń wszystkie plany" is four calls, one per capacity.
+         *     version bump). No request body. "Usuń wszystkie plany" is five calls, one per plan key.
          */
         delete: operations["resetPlan"];
         options?: never;
@@ -269,16 +274,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scenarios/{capacity}/tables/{tableNumber}": {
+    "/scenarios/{planKey}/tables/{tableNumber}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
                 /**
                  * @description Table number within the plan (1..k).
                  * @example 3
@@ -396,7 +402,7 @@ export interface components {
             /** @example false */
             isChild: boolean;
             /**
-             * @description Disabled guests stay on the list but are ignored by all four plans.
+             * @description Disabled guests stay on the list but are ignored by all five plans.
              * @example true
              */
             enabled: boolean;
@@ -632,7 +638,19 @@ export interface components {
             meta: components["schemas"]["Meta"];
         };
         /**
-         * @description Seats per table; identifies one of the four plans.
+         * @description Identity of one of the five permanent plans, always listed in this order: the uniform plans
+         *     `9`, `10`, `11`, `12` (every table has that many seats) and `mixed` ("Mieszany": tables of 9–12
+         *     seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
+         * @example 10
+         * @enum {string}
+         */
+        PlanKey: "9" | "10" | "11" | "12" | "mixed";
+        /**
+         * @description Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
+         *     exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
+         *     9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
+         *     no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+         *     `PlanTable.fill`; no size is stored or sent.
          * @example 10
          * @enum {integer}
          */
@@ -681,7 +699,8 @@ export interface components {
             /** @example 1 */
             number: number;
             /**
-             * @description Enabled guests at the table.
+             * @description Enabled guests at the table. In the mixed plan it also gives the table's size (see
+             *     `Capacity`): the client derives it, nothing else is sent.
              * @example 9
              */
             fill: number;
@@ -744,6 +763,7 @@ export interface components {
             violations: components["schemas"]["Violation"][];
         };
         Scenario: {
+            key: components["schemas"]["PlanKey"];
             capacity: components["schemas"]["Capacity"];
             /** @example 7 */
             readonly version: number;
@@ -783,7 +803,7 @@ export interface components {
         };
         /** @description The full content of one plan to store (tables, assignments, pins). */
         ScenarioLayout: {
-            capacity: components["schemas"]["Capacity"];
+            key: components["schemas"]["PlanKey"];
             /**
              * @description The stored version this layout replaces (optimistic lock).
              * @example 7
@@ -793,7 +813,7 @@ export interface components {
             tables: components["schemas"]["TableLayout"][];
         };
         /**
-         * @description All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+         * @description All five plans, each key (9, 10, 11, 12, mixed) exactly once, in any order. Stored atomically
          *     by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
          */
         ScenariosReplace: {
@@ -804,6 +824,7 @@ export interface components {
          *     call). "Generuj plany" stores it at once through `PUT /scenarios`; there is no preview.
          */
         Proposal: {
+            key: components["schemas"]["PlanKey"];
             capacity: components["schemas"]["Capacity"];
             /**
              * @description Scenario version the proposal was computed from.
@@ -813,7 +834,7 @@ export interface components {
             plan: components["schemas"]["SeatingPlan"];
         };
         ProposalListResponse: {
-            /** @description Always exactly four proposals, ordered 9, 10, 11, 12. */
+            /** @description Always exactly five proposals, ordered 9, 10, 11, 12, mixed. */
             data: components["schemas"]["Proposal"][];
             meta: components["schemas"]["Meta"];
             page: components["schemas"]["Page"];
@@ -1127,15 +1148,16 @@ export interface components {
         LinkKey: string;
         /**
          * @description `true` (default) only validates and returns the report. `false` commits:
-         *     replaces ALL guests and links and clears all four plans.
+         *     replaces ALL guests and links and clears all five plans.
          * @example true
          */
         DryRun: boolean;
         /**
-         * @description Identifies the plan by its table capacity.
+         * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+         *     or `mixed`. Any other value → 404 `not_found`.
          * @example 10
          */
-        Capacity: components["schemas"]["Capacity"];
+        PlanKey: components["schemas"]["PlanKey"];
         /**
          * @description Table number within the plan (1..k).
          * @example 3
@@ -1488,7 +1510,7 @@ export interface operations {
             query?: {
                 /**
                  * @description `true` (default) only validates and returns the report. `false` commits:
-                 *     replaces ALL guests and links and clears all four plans.
+                 *     replaces ALL guests and links and clears all five plans.
                  * @example true
                  */
                 dryRun?: components["parameters"]["DryRun"];
@@ -1562,7 +1584,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Always four scenarios, ordered 9, 10, 11, 12. */
+            /** @description Always five scenarios, ordered 9, 10, 11, 12, mixed. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1572,6 +1594,7 @@ export interface operations {
                      * @example {
                      *       "data": [
                      *         {
+                     *           "key": "9",
                      *           "capacity": 9,
                      *           "version": 1,
                      *           "plan": {
@@ -1613,7 +1636,7 @@ export interface operations {
                      *         "requestId": "01JB8Z6Q0K3N"
                      *       },
                      *       "page": {
-                     *         "total": 4
+                     *         "total": 5
                      *       }
                      *     }
                      */
@@ -1638,7 +1661,7 @@ export interface operations {
                  * @example {
                  *       "plans": [
                  *         {
-                 *           "capacity": 9,
+                 *           "key": "9",
                  *           "basedOnVersion": 7,
                  *           "tables": [
                  *             {
@@ -1675,12 +1698,12 @@ export interface operations {
                  *           ]
                  *         },
                  *         {
-                 *           "capacity": 10,
+                 *           "key": "10",
                  *           "basedOnVersion": 4,
                  *           "tables": []
                  *         },
                  *         {
-                 *           "capacity": 11,
+                 *           "key": "11",
                  *           "basedOnVersion": 1,
                  *           "tables": [
                  *             {
@@ -1703,7 +1726,7 @@ export interface operations {
                  *           ]
                  *         },
                  *         {
-                 *           "capacity": 12,
+                 *           "key": "12",
                  *           "basedOnVersion": 3,
                  *           "tables": [
                  *             {
@@ -1725,6 +1748,29 @@ export interface operations {
                  *               "pinnedGuestIds": []
                  *             }
                  *           ]
+                 *         },
+                 *         {
+                 *           "key": "mixed",
+                 *           "basedOnVersion": 1,
+                 *           "tables": [
+                 *             {
+                 *               "number": 1,
+                 *               "guestIds": [
+                 *                 1,
+                 *                 2,
+                 *                 3,
+                 *                 4,
+                 *                 5,
+                 *                 6,
+                 *                 7,
+                 *                 10,
+                 *                 11,
+                 *                 12,
+                 *                 13
+                 *               ],
+                 *               "pinnedGuestIds": []
+                 *             }
+                 *           ]
                  *         }
                  *       ]
                  *     }
@@ -1733,7 +1779,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The four stored plans with their evaluations, ordered 9, 10, 11, 12 (each version + 1). */
+            /** @description The five stored plans with their evaluations, ordered 9, 10, 11, 12, mixed (each version + 1). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1743,6 +1789,7 @@ export interface operations {
                      * @example {
                      *       "data": [
                      *         {
+                     *           "key": "9",
                      *           "capacity": 9,
                      *           "version": 8,
                      *           "plan": {
@@ -1791,7 +1838,7 @@ export interface operations {
                      *         "requestId": "01JB8Z6Q0K3N"
                      *       },
                      *       "page": {
-                     *         "total": 4
+                     *         "total": 5
                      *       }
                      *     }
                      */
@@ -1830,7 +1877,7 @@ export interface operations {
             };
             413: components["responses"]["PayloadTooLarge"];
             /**
-             * @description Invalid layout (capacity missing or repeated, unknown guest — e.g. deleted after the
+             * @description Invalid layout (plan key missing or repeated, unknown guest — e.g. deleted after the
              *     Generate being undone —, guest seated twice, table numbers not 1..k, pinned guest not at
              *     that table). Nothing was written.
              */
@@ -1868,7 +1915,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Exactly four proposals, ordered 9, 10, 11, 12. */
+            /** @description Exactly five proposals, ordered 9, 10, 11, 12, mixed. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1878,6 +1925,7 @@ export interface operations {
                      * @example {
                      *       "data": [
                      *         {
+                     *           "key": "9",
                      *           "capacity": 9,
                      *           "basedOnVersion": 7,
                      *           "plan": {
@@ -1926,7 +1974,7 @@ export interface operations {
                      *         "requestId": "01JB8Z6Q0K3N"
                      *       },
                      *       "page": {
-                     *         "total": 4
+                     *         "total": 5
                      *       }
                      *     }
                      */
@@ -1945,10 +1993,11 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
                 /**
                  * @description Guest id.
                  * @example 4
@@ -1992,10 +2041,11 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
                 /**
                  * @description Guest id.
                  * @example 4
@@ -2028,10 +2078,11 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
             };
             cookie?: never;
         };
@@ -2059,10 +2110,11 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
             };
             cookie?: never;
         };
@@ -2093,10 +2145,11 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Identifies the plan by its table capacity.
+                 * @description Identifies the plan: `9`, `10`, `11`, `12` (uniform plans; the same URLs as before task 013)
+                 *     or `mixed`. Any other value → 404 `not_found`.
                  * @example 10
                  */
-                capacity: components["parameters"]["Capacity"];
+                planKey: components["parameters"]["PlanKey"];
                 /**
                  * @description Table number within the plan (1..k).
                  * @example 3

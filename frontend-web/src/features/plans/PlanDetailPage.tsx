@@ -16,7 +16,6 @@ import {
   useSetAssignment,
 } from '@/api/scenarios'
 import { Button, buttonVariants } from '@/components/ui/button'
-import type { Capacity } from '@/domain/capacity'
 import { tableElementId } from '@/domain/dropTargets'
 import { guestDetails, placeOf } from '@/domain/guestDetails'
 import { buildGuestIndex } from '@/domain/guestIndex'
@@ -28,8 +27,9 @@ import {
   tableCountLabel,
   violationCountLabel,
 } from '@/domain/labels'
+import { planHeading, planTitle } from '@/domain/plans'
 import { guestTableMap } from '@/domain/planView'
-import type { ClusterOverview, ClusterPlacement, Guest } from '@/domain/types'
+import type { ClusterOverview, ClusterPlacement, Guest, PlanKey } from '@/domain/types'
 import { DeletePlanButton } from '@/features/plans/DeletePlanButton'
 import { DeletePlanDialog } from '@/features/plans/DeletePlanDialog'
 import { DeleteTableDialog } from '@/features/plans/DeleteTableDialog'
@@ -40,6 +40,7 @@ import { PlanSearch } from '@/features/plans/PlanSearch'
 import { PlanSwitcher } from '@/features/plans/PlanSwitcher'
 import { type PlanView } from '@/features/plans/planViewContext'
 import { RecalculationBanner } from '@/features/plans/RecalculationBanner'
+import { TablesNeededLine } from '@/features/plans/TablesNeededLine'
 import { UndoGenerateBar } from '@/features/plans/UndoGenerateBar'
 
 const NO_GUESTS: Guest[] = []
@@ -63,7 +64,7 @@ function parseGuestParam(raw: string | null): number | null {
  * the board below only renders and reports moves. Scores and violations are the server's, so they
  * are shown only while no save is in flight.
  */
-export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
+export function PlanDetailPage({ planKey }: { planKey: PlanKey }) {
   const scenarios = useScenarios()
   const guestsQuery = useGuests()
   const overviewQuery = useClusterOverview()
@@ -83,7 +84,7 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [resetError, setResetError] = useState<string | null>(null)
 
-  const scenario = scenarios.data?.find((candidate) => candidate.capacity === capacity)
+  const scenario = scenarios.data?.find((candidate) => candidate.key === planKey)
   const plan = scenario?.plan
   const guests = guestsQuery.data ?? NO_GUESTS
   const overview = overviewQuery.data
@@ -143,14 +144,19 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
       const guestId = cluster.guestIds[0]
       if (guestId === undefined) return
       try {
-        if (toTable === null) await deleteAssignment({ capacity, guestId })
+        if (toTable === null) await deleteAssignment({ key: planKey, guestId })
         else
-          await setAssignment({ capacity, guestId, tableNumber: toTable, pinned: cluster.pinned })
+          await setAssignment({
+            key: planKey,
+            guestId,
+            tableNumber: toTable,
+            pinned: cluster.pinned,
+          })
       } catch (failure) {
         toast.error(`Nie udało się przenieść paczki. ${errorMessage(failure)}`)
       }
     },
-    [capacity, setAssignment, deleteAssignment],
+    [planKey, setAssignment, deleteAssignment],
   )
 
   const onTogglePin = useCallback(
@@ -158,17 +164,17 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
       const guestId = cluster.guestIds[0]
       if (guestId === undefined) return
       try {
-        await setAssignment({ capacity, guestId, tableNumber, pinned: !cluster.pinned })
+        await setAssignment({ key: planKey, guestId, tableNumber, pinned: !cluster.pinned })
       } catch (failure) {
         toast.error(`Nie udało się zmienić pinezki. ${errorMessage(failure)}`)
       }
     },
-    [capacity, setAssignment],
+    [planKey, setAssignment],
   )
 
   async function onAddTable() {
     try {
-      const updated = await addTable({ capacity })
+      const updated = await addTable({ key: planKey })
       toast.success(`Dodano stół ${updated.plan.tables.length}.`)
     } catch (failure) {
       toast.error(errorMessage(failure))
@@ -178,7 +184,7 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
   async function onConfirmDelete(tableNumber: number) {
     setTableToDelete(null)
     try {
-      await deleteTable({ capacity, tableNumber })
+      await deleteTable({ key: planKey, tableNumber })
       toast.success(`Usunięto stół ${tableNumber}. Jego goście są w polu „Bez stołu”.`)
     } catch (failure) {
       toast.error(errorMessage(failure))
@@ -188,8 +194,8 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
   async function onConfirmReset() {
     setResetError(null)
     try {
-      await resetPlan({ capacity })
-      toast.success(`Usunięto plan na ${capacity} miejsc.`)
+      await resetPlan({ key: planKey })
+      toast.success(`Usunięto ${planTitle(planKey)}.`)
       setConfirmingReset(false)
     } catch (failure) {
       const message = errorMessage(failure)
@@ -198,11 +204,21 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
     }
   }
 
+  const scenarioKey = scenario?.key
+  const scenarioCapacity = scenario?.capacity
+  const kind = useMemo(
+    () =>
+      scenarioKey !== undefined && scenarioCapacity !== undefined
+        ? { key: scenarioKey, capacity: scenarioCapacity }
+        : null,
+    [scenarioKey, scenarioCapacity],
+  )
+
   const view = useMemo<PlanView | null>(
     () =>
-      plan
+      plan && kind
         ? {
-            capacity,
+            kind,
             nameOf,
             scores: saving ? undefined : new Map(plan.guestScores.map((s) => [s.guestId, s])),
             selectedGuestId,
@@ -213,7 +229,7 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
             onDeleteTable: setTableToDelete,
           }
         : null,
-    [plan, capacity, nameOf, saving, selectedGuestId, selectGuest, onMove, onTogglePin],
+    [plan, kind, nameOf, saving, selectedGuestId, selectGuest, onMove, onTogglePin],
   )
 
   const details = useMemo(
@@ -238,8 +254,8 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
       </Link>
 
       <header className="flex flex-wrap items-end justify-between gap-3">
-        <h1 className="text-4xl font-semibold">Plan na {capacity} miejsc</h1>
-        {scenarios.data && <PlanSwitcher current={capacity} scenarios={scenarios.data} />}
+        <h1 className="text-4xl font-semibold">{planHeading(planKey)}</h1>
+        {scenarios.data && <PlanSwitcher current={planKey} scenarios={scenarios.data} />}
       </header>
 
       <UndoGenerateBar />
@@ -305,6 +321,8 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
             </div>
           </dl>
 
+          <TablesNeededLine scenario={scenario} />
+
           {!saving && plan.summary.needsRecalculation && (
             <RecalculationBanner violations={plan.violations} />
           )}
@@ -331,7 +349,7 @@ export function PlanDetailPage({ capacity }: { capacity: Capacity }) {
               <EyeIcon aria-hidden="true" />
               {compact ? 'Pokaż gości' : 'Tylko stoły'}
             </Button>
-            <Link to={`/druk/${capacity}`} className={buttonVariants({ variant: 'outline' })}>
+            <Link to={`/druk/${planKey}`} className={buttonVariants({ variant: 'outline' })}>
               <PrinterIcon aria-hidden="true" />
               Wersja do druku
             </Link>

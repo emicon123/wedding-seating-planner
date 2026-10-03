@@ -24,7 +24,7 @@ const plan = withoutViolations(
 )
 
 describe('buildPrintTables', () => {
-  const printed = buildPrintTables(plan, 10, index)
+  const printed = buildPrintTables(plan, { key: '10', capacity: 10 }, index)
 
   it('lists paczki first, members of a paczka by name, and carries the child flag', () => {
     const [first] = printed.tables
@@ -50,7 +50,19 @@ describe('buildPrintTables', () => {
     const crowded = withoutViolations(
       makePlan([{ number: 1, clusters: Array.from({ length: 10 }, (_, i) => placement(i, [i])) }]),
     )
-    expect(buildPrintTables(crowded, 9, index).tables[0]?.status).toBe('over')
+    expect(buildPrintTables(crowded, { key: '9', capacity: 9 }, index).tables[0]?.status).toBe(
+      'over',
+    )
+  })
+
+  it('derives the size of every table: the capacity in a uniform plan, the fill in the mixed one', () => {
+    expect(printed.tables.map((t) => t.size)).toEqual([10, 10])
+    const mixed = buildPrintTables(plan, { key: 'mixed', capacity: 12 }, index)
+    expect(mixed.tables.map((t) => t.size)).toEqual([9, 9])
+    const empty = withoutViolations(makePlan([{ number: 1, clusters: [] }]))
+    expect(
+      buildPrintTables(empty, { key: 'mixed', capacity: 12 }, index).tables[0]?.size,
+    ).toBeNull()
   })
 
   it('keeps the unseated paczki apart', () => {

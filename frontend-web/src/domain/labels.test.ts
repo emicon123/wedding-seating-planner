@@ -1,5 +1,11 @@
 import {
   dropHintLabel,
+  EXTRA_TABLE_NOTE,
+  GENERATE_SAVED_MESSAGE,
+  peopleCountLabel,
+  tablesNeededSummary,
+  tableSizeBadgeLabel,
+  tableSizePrintLabel,
   errorLabel,
   fillStatusLabel,
   groupLabel,
@@ -166,6 +172,12 @@ describe('plan labels', () => {
     expect(dropHintLabel({ ...preview, fillAfter: 11, overCapacity: true }, 10)).toBe(
       'Po przeniesieniu: 11/10, za dużo osób',
     )
+    expect(dropHintLabel({ ...preview, fillAfter: 11 }, 12, 11)).toBe(
+      'Po przeniesieniu: 11 os. → stół 11-os.',
+    )
+    expect(dropHintLabel({ ...preview, fillAfter: 13, overCapacity: true }, 12, 12)).toBe(
+      'Po przeniesieniu: 13 os., za dużo osób',
+    )
     expect(preferredHereLabel(3)).toBe('3 osoby z grupy 1')
     expect(preferredHereLabel(0)).toBe('Nikogo z grupy 1')
   })
@@ -217,6 +229,36 @@ describe('planContentsLabel', () => {
     )
     expect(planContentsLabel({ tableCount: 5, seatedCount: 1 })).toBe(
       '5 stołów i 1 osoba przy stołach',
+    )
+  })
+})
+
+describe('mixed plan copy (task 013)', () => {
+  it('words the "Potrzebne stoły" line with a Polish plural for the seats', () => {
+    expect(
+      tablesNeededSummary([
+        { size: 12, count: 5 },
+        { size: 11, count: 3 },
+        { size: 9, count: 1 },
+      ]),
+    ).toBe('Potrzebne stoły: 5 × 12, 3 × 11, 1 × 9 (102 miejsca)')
+    expect(tablesNeededSummary([{ size: 12, count: 9 }])).toBe(
+      'Potrzebne stoły: 9 × 12 (108 miejsc)',
+    )
+  })
+
+  it('words sizes, counters and the extra-table note', () => {
+    expect(tableSizeBadgeLabel(11)).toBe('stół 11-os.')
+    expect(tableSizePrintLabel(11)).toBe('11-osobowy')
+    expect(peopleCountLabel(11)).toBe('11 os.')
+    expect(EXTRA_TABLE_NOTE(1, 4)).toBe(
+      '1 stół więcej niż plan 12 — mniej osób bez znajomych (1 zamiast 4)',
+    )
+  })
+
+  it('names the saved plans, with the mixed one last', () => {
+    expect(GENERATE_SAVED_MESSAGE(['9', '10', '11', '12', 'mixed'])).toBe(
+      'Zapisano nowe plany: 9, 10, 11, 12 miejsc i mieszany.',
     )
   })
 })

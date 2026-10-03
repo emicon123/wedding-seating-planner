@@ -14,7 +14,7 @@ type GenerateButtonProps = {
 }
 
 /**
- * Generate always means all four plans (user requirement) and they are stored at once: the page
+ * Generate always means all five plans (user requirement) and they are stored at once: the page
  * you are on re-renders from the updated cache, nothing to accept, no navigation. "Cofnij" lives in
  * `UndoGenerateBar`. Any "Generuj" button on the screen disables while one is running.
  */
@@ -30,7 +30,7 @@ export function GenerateButton({
   async function generate() {
     try {
       const { stored } = await mutateAsync()
-      toast.success(GENERATE_SAVED_MESSAGE(stored.map((scenario) => scenario.capacity)))
+      toast.success(GENERATE_SAVED_MESSAGE(stored.map((scenario) => scenario.key)))
     } catch (error) {
       const conflict = error instanceof ApiError && error.status === 409
       toast.error(conflict ? GENERATE_CONFLICT_MESSAGE : errorMessage(error))

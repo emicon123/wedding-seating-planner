@@ -1,5 +1,5 @@
 import { fillStatus } from '@/domain/tableStatus'
-import { CAPACITIES } from '@/domain/capacity'
+import { PLAN_KEYS } from '@/domain/plans'
 import {
   canUndoGenerate,
   guestTableMap,
@@ -9,7 +9,7 @@ import {
   toTableLayouts,
   versionsOf,
 } from '@/domain/planView'
-import type { Capacity, GenerateUndo, Scenario, Violation } from '@/domain/types'
+import type { GenerateUndo, PlanKey, Scenario, Violation } from '@/domain/types'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 
 describe('fillStatus', () => {
@@ -47,58 +47,66 @@ describe('toTableLayouts', () => {
 })
 
 describe('toScenariosReplace', () => {
-  it('builds one layout per plan with its own basedOnVersion', () => {
+  it('builds one layout per plan, named by key (no capacity), with its own basedOnVersion', () => {
     const plan = makePlan([{ number: 1, clusters: [placement(4, [4], true)] }])
 
     expect(
       toScenariosReplace([
-        { capacity: 9, basedOnVersion: 3, plan },
-        { capacity: 12, basedOnVersion: 5, plan: makePlan([]) },
+        { key: '9', basedOnVersion: 3, plan },
+        { key: 'mixed', basedOnVersion: 5, plan: makePlan([]) },
       ]),
     ).toEqual({
       plans: [
         {
-          capacity: 9,
+          key: '9',
           basedOnVersion: 3,
           tables: [{ number: 1, guestIds: [4], pinnedGuestIds: [4] }],
         },
-        { capacity: 12, basedOnVersion: 5, tables: [] },
+        { key: 'mixed', basedOnVersion: 5, tables: [] },
       ],
     })
   })
 })
 
 describe('versionsOf', () => {
-  it('maps each capacity to its version, whatever the order', () => {
+  it('maps each of the five plans to its version, whatever the order', () => {
     const plan = makePlan([])
-    const scenarios = [12, 9, 11, 10].map((c, i) => makeScenario(c as Capacity, plan, i + 1))
-    expect(versionsOf(scenarios)).toEqual({ 9: 2, 10: 4, 11: 3, 12: 1 })
+    const keys: PlanKey[] = ['12', 'mixed', '9', '11', '10']
+    const scenarios = keys.map((key, i) => makeScenario(key, plan, i + 1))
+    expect(versionsOf(scenarios)).toEqual({ 9: 3, 10: 5, 11: 4, 12: 1, mixed: 2 })
   })
 
-  it('throws when a plan is missing', () => {
+  it('throws when a plan is missing (also when only the mixed one is)', () => {
     expect(() => versionsOf([makeScenario(9, makePlan([]), 1)])).toThrow()
+    const four = (['9', '10', '11', '12'] as const).map((key) => makeScenario(key, makePlan([]), 1))
+    expect(() => versionsOf(four)).toThrow(/Mieszany/)
   })
 })
 
 describe('canUndoGenerate', () => {
   const plan = makePlan([])
-  const scenarios = (versions: [number, number, number, number]): Scenario[] =>
-    CAPACITIES.map((capacity, i) => makeScenario(capacity, plan, versions[i] ?? 0))
+  const scenarios = (versions: number[]): Scenario[] =>
+    PLAN_KEYS.map((key, i) => makeScenario(key, plan, versions[i] ?? 0))
   const undo: GenerateUndo = {
-    previous: scenarios([1, 1, 1, 1]),
-    generatedVersions: { 9: 2, 10: 2, 11: 3, 12: 2 },
+    previous: scenarios([1, 1, 1, 1, 1]),
+    generatedVersions: { 9: 2, 10: 2, 11: 3, 12: 2, mixed: 4 },
   }
 
   it('is true while every plan still has the version Generate produced', () => {
-    expect(canUndoGenerate(undo, scenarios([2, 2, 3, 2]))).toBe(true)
+    expect(canUndoGenerate(undo, scenarios([2, 2, 3, 2, 4]))).toBe(true)
   })
 
   it('is false as soon as one plan moved on (a move, pin, table change, delete, other Generate)', () => {
-    expect(canUndoGenerate(undo, scenarios([2, 3, 3, 2]))).toBe(false)
+    expect(canUndoGenerate(undo, scenarios([2, 3, 3, 2, 4]))).toBe(false)
+  })
+
+  it('is false when the mixed plan moved on, or when only four plans are loaded', () => {
+    expect(canUndoGenerate(undo, scenarios([2, 2, 3, 2, 5]))).toBe(false)
+    expect(canUndoGenerate(undo, scenarios([2, 2, 3, 2, 4]).slice(0, 4))).toBe(false)
   })
 
   it('is false without a snapshot or without loaded plans', () => {
-    expect(canUndoGenerate(undefined, scenarios([2, 2, 3, 2]))).toBe(false)
+    expect(canUndoGenerate(undefined, scenarios([2, 2, 3, 2, 4]))).toBe(false)
     expect(canUndoGenerate(undo, undefined)).toBe(false)
     expect(canUndoGenerate(undo, [])).toBe(false)
   })

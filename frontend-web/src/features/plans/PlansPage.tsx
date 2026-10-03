@@ -4,18 +4,18 @@ import { Trash2Icon } from 'lucide-react'
 import { useResetPlan, useScenarios } from '@/api/scenarios'
 import { errorMessage } from '@/api/errorMessage'
 import { Button } from '@/components/ui/button'
-import { CAPACITIES, type Capacity } from '@/domain/capacity'
-import type { Scenario } from '@/domain/types'
+import { PLAN_KEYS, planName, planTitle } from '@/domain/plans'
+import type { PlanKey, Scenario } from '@/domain/types'
 import { DeletePlanDialog } from '@/features/plans/DeletePlanDialog'
 import { GenerateButton } from '@/features/plans/GenerateButton'
 import { PlanCard } from '@/features/plans/PlanCard'
 import { UndoGenerateBar } from '@/features/plans/UndoGenerateBar'
 
-type DeleteTarget = { kind: 'one'; capacity: Capacity } | { kind: 'all' }
+type DeleteTarget = { kind: 'one'; key: PlanKey } | { kind: 'all' }
 
 /**
- * The four plans (9, 10, 11, 12 seats) side by side: the answer to "how many tables, how happy, what
- * is wrong". Generate always computes and stores all four at once (Cofnij undoes it). This
+ * The five plans (9, 10, 11, 12 seats and the mixed one) side by side: the answer to "how many tables, how happy, what
+ * is wrong". Generate always computes and stores all five at once (Cofnij undoes it). This
  * page also owns "Usuń plan" / "Usuń wszystkie plany" (task 005): the cards only report the
  * intent, the dialog confirms, and one reset call per plan empties it on the server.
  */
@@ -35,11 +35,11 @@ export function PlansPage() {
     setDialogError(null)
   }
 
-  async function confirmSingle(capacity: Capacity) {
+  async function confirmSingle(key: PlanKey) {
     setDialogError(null)
     try {
-      await reset.mutateAsync({ capacity })
-      toast.success(`Usunięto plan na ${capacity} miejsc.`)
+      await reset.mutateAsync({ key })
+      toast.success(`Usunięto ${planTitle(key)}.`)
       setTarget(null)
     } catch (failure) {
       const message = errorMessage(failure)
@@ -51,16 +51,14 @@ export function PlansPage() {
   async function confirmAll() {
     setDialogError(null)
     setResettingAll(true)
-    const settled = await Promise.allSettled(
-      CAPACITIES.map((capacity) => reset.mutateAsync({ capacity })),
-    )
+    const settled = await Promise.allSettled(PLAN_KEYS.map((key) => reset.mutateAsync({ key })))
     setResettingAll(false)
-    const failed = CAPACITIES.filter((_, index) => settled[index]?.status === 'rejected')
+    const failed = PLAN_KEYS.filter((_, index) => settled[index]?.status === 'rejected')
     if (failed.length === 0) {
       toast.success('Usunięto wszystkie plany.')
       setTarget(null)
     } else {
-      const message = `Nie udało się usunąć planu: ${failed.join(', ')}.`
+      const message = `Nie udało się usunąć planu: ${failed.map(planName).join(', ')}.`
       setDialogError(message)
       toast.error(message)
       // the plans that did go are empty on the server: show the truth, not a guess
@@ -72,9 +70,10 @@ export function PlansPage() {
     !target || !scenarios.data
       ? null
       : target.kind === 'one'
-        ? scenarios.data.filter((scenario) => scenario.capacity === target.capacity)
-        : [...scenarios.data].sort((a, b) => a.capacity - b.capacity)
+        ? scenarios.data.filter((scenario) => scenario.key === target.key)
+        : [...scenarios.data].sort((a, b) => PLAN_KEYS.indexOf(a.key) - PLAN_KEYS.indexOf(b.key))
   const pending = target?.kind === 'one' ? reset.isPending : resettingAll
+  const twelve = scenarios.data?.find((scenario) => scenario.key === '12')
   const allEmpty = scenarios.data?.every((s) => s.plan.summary.tableCount === 0) ?? false
 
   return (
@@ -83,8 +82,8 @@ export function PlansPage() {
         <div className="max-w-prose space-y-2">
           <h1 className="text-4xl font-semibold">Plany</h1>
           <p className="text-muted-foreground">
-            Cztery plany naraz: stoły 9-, 10-, 11- i 12-osobowe. Porównaj liczbę stołów, zadowolenie
-            gości i naruszenia, a potem otwórz plan, żeby zobaczyć salę.
+            Pięć planów naraz: stoły 9-, 10-, 11-, 12-osobowe i mieszany. Porównaj liczbę stołów,
+            zadowolenie gości i naruszenia, a potem otwórz plan, żeby zobaczyć salę.
           </p>
         </div>
         <GenerateButton size="lg" />
@@ -119,12 +118,13 @@ export function PlansPage() {
               Usuń wszystkie plany
             </Button>
           </div>
-          <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
             {scenarios.data.map((scenario) => (
-              <li key={scenario.capacity}>
+              <li key={scenario.key}>
                 <PlanCard
                   scenario={scenario}
-                  onDelete={(capacity) => openDelete({ kind: 'one', capacity })}
+                  twelve={twelve}
+                  onDelete={(key) => openDelete({ kind: 'one', key })}
                 />
               </li>
             ))}
@@ -137,9 +137,7 @@ export function PlansPage() {
           scenarios={target.kind === 'one' ? dialogScenarios.slice(0, 1) : dialogScenarios}
           pending={pending}
           error={dialogError}
-          onConfirm={() =>
-            void (target.kind === 'one' ? confirmSingle(target.capacity) : confirmAll())
-          }
+          onConfirm={() => void (target.kind === 'one' ? confirmSingle(target.key) : confirmAll())}
           onClose={closeDelete}
         />
       )}

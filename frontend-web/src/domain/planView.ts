@@ -1,8 +1,8 @@
-import { CAPACITIES } from '@/domain/capacity'
+import { PLAN_KEYS, planName } from '@/domain/plans'
 import type {
-  Capacity,
   ClusterPlacement,
   GenerateUndo,
+  PlanKey,
   Scenario,
   ScenariosReplace,
   SeatingPlan,
@@ -21,26 +21,26 @@ export function toTableLayouts(plan: SeatingPlan): TableLayout[] {
   }))
 }
 
-type PlanToStore = { capacity: Capacity; basedOnVersion: number; plan: SeatingPlan }
+type PlanToStore = { key: PlanKey; basedOnVersion: number; plan: SeatingPlan }
 
-/** The body of `PUT /scenarios`: all four plans, each replacing the stored version it names. */
+/** The body of `PUT /scenarios`: all five plans, each replacing the stored version it names. */
 export function toScenariosReplace(plans: PlanToStore[]): ScenariosReplace {
   return {
-    plans: plans.map(({ capacity, basedOnVersion, plan }) => ({
-      capacity,
+    plans: plans.map(({ key, basedOnVersion, plan }) => ({
+      key,
       basedOnVersion,
       tables: toTableLayouts(plan),
     })),
   }
 }
 
-/** The version of each plan, by capacity. Throws when a plan is missing (the API always sends four). */
-export function versionsOf(scenarios: Scenario[]): Record<Capacity, number> {
-  const versions = {} as Record<Capacity, number>
-  for (const capacity of CAPACITIES) {
-    const scenario = scenarios.find((candidate) => candidate.capacity === capacity)
-    if (!scenario) throw new Error(`Brak planu na ${capacity} miejsc`)
-    versions[capacity] = scenario.version
+/** The version of each plan, by key. Throws when a plan is missing (the API always sends five). */
+export function versionsOf(scenarios: Scenario[]): Record<PlanKey, number> {
+  const versions = {} as Record<PlanKey, number>
+  for (const key of PLAN_KEYS) {
+    const scenario = scenarios.find((candidate) => candidate.key === key)
+    if (!scenario) throw new Error(`Brak planu: ${planName(key)}`)
+    versions[key] = scenario.version
   }
   return versions
 }
@@ -55,8 +55,8 @@ export function canUndoGenerate(
 ): boolean {
   if (!undo || !scenarios || scenarios.length === 0) return false
   return (
-    scenarios.length === CAPACITIES.length &&
-    scenarios.every((scenario) => scenario.version === undo.generatedVersions[scenario.capacity])
+    scenarios.length === PLAN_KEYS.length &&
+    scenarios.every((scenario) => scenario.version === undo.generatedVersions[scenario.key])
   )
 }
 

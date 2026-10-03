@@ -1,8 +1,8 @@
 import { http } from 'msw'
 import type {
-  Capacity,
   Guest,
   GuestScore,
+  PlanKey,
   Proposal,
   Scenario,
   ScenariosReplace,
@@ -14,6 +14,7 @@ import {
   MACIEK_FAMILY_OVERVIEW,
   MICHAL,
   OLA,
+  fillsPlan,
   makeGuest,
   makePlan,
   makeScenario,
@@ -24,32 +25,29 @@ import { apiUrl, failure, HttpResponse, list, mockApi, server, single } from '@/
 
 /** `count` tables with `fill` single guests each; ids are unique per plan. */
 export function evenPlan(count: number, fill: number): SeatingPlan {
-  let id = 1
-  const tables = Array.from({ length: count }, (_, index) => ({
-    number: index + 1,
-    clusters: Array.from({ length: fill }, () => {
-      const guestId = id++
-      return placement(guestId, [guestId])
-    }),
-  }))
-  return withoutViolations(makePlan(tables))
+  return fillsPlan(Array.from({ length: count }, () => fill))
 }
 
-export function fourScenarios(overrides: Partial<Record<Capacity, SeatingPlan>> = {}): Scenario[] {
+/** The mixed plan of the fixtures: tables of 12, 8 (a 9-seat table) and 11 guests. */
+export const mixedFixturePlan = (): SeatingPlan => fillsPlan([12, 8, 11])
+
+export function fiveScenarios(overrides: Partial<Record<PlanKey, SeatingPlan>> = {}): Scenario[] {
   return [
-    makeScenario(9, overrides[9] ?? evenPlan(3, 8), 4),
-    makeScenario(10, overrides[10] ?? evenPlan(3, 8), 7),
-    makeScenario(11, overrides[11] ?? evenPlan(2, 11), 3),
-    makeScenario(12, overrides[12] ?? evenPlan(2, 12), 2),
+    makeScenario('9', overrides['9'] ?? evenPlan(3, 8), 4),
+    makeScenario('10', overrides['10'] ?? evenPlan(3, 8), 7),
+    makeScenario('11', overrides['11'] ?? evenPlan(2, 11), 3),
+    makeScenario('12', overrides['12'] ?? evenPlan(2, 12), 2),
+    makeScenario('mixed', overrides.mixed ?? mixedFixturePlan(), 5),
   ]
 }
 
-export function fourProposals(): Proposal[] {
+export function fiveProposals(): Proposal[] {
   return [
-    { capacity: 9, basedOnVersion: 4, plan: evenPlan(3, 8) },
-    { capacity: 10, basedOnVersion: 7, plan: evenPlan(3, 8) },
-    { capacity: 11, basedOnVersion: 3, plan: evenPlan(2, 11) },
-    { capacity: 12, basedOnVersion: 2, plan: evenPlan(2, 12) },
+    { key: '9', capacity: 9, basedOnVersion: 4, plan: evenPlan(3, 8) },
+    { key: '10', capacity: 10, basedOnVersion: 7, plan: evenPlan(3, 8) },
+    { key: '11', capacity: 11, basedOnVersion: 3, plan: evenPlan(2, 11) },
+    { key: '12', capacity: 12, basedOnVersion: 2, plan: evenPlan(2, 12) },
+    { key: 'mixed', capacity: 12, basedOnVersion: 5, plan: mixedFixturePlan() },
   ]
 }
 
@@ -78,8 +76,7 @@ export function serveGenerateFlow({ before, proposals, stored }: GenerateFlow) {
     const { plans } = body as ScenariosReplace
     const stale = plans.some(
       (plan) =>
-        current.find((scenario) => scenario.capacity === plan.capacity)?.version !==
-        plan.basedOnVersion,
+        current.find((scenario) => scenario.key === plan.key)?.version !== plan.basedOnVersion,
     )
     const next = answers.shift()
     if (stale || !next) {
@@ -140,8 +137,26 @@ export function detailScenario(): Scenario {
   return makeScenario(10, plan, 7)
 }
 
+/**
+ * The mixed plan in the detail fixture: table 1 has 10 guests (Maciek's paczka and eight guests
+ * the guest list does not name), table 2 has Michał and Ola, table 3 is empty.
+ */
+export function mixedDetailPlan(): SeatingPlan {
+  const others = Array.from({ length: 8 }, (_, i) => placement(20 + i, [20 + i]))
+  return withoutViolations(
+    makePlan([
+      { number: 1, clusters: [placement(4, [4, 5]), ...others] },
+      { number: 2, clusters: [placement(6, [6, 7])] },
+      { number: 3, clusters: [] },
+    ]),
+  )
+}
+
 /** GET /scenarios, /guests and /clusters for the plan-detail page. */
-export function serveDetail(scenario: Scenario = detailScenario()) {
+export function serveDetail(
+  scenario: Scenario = detailScenario(),
+  mixed: Scenario = makeScenario('mixed', mixedDetailPlan(), 1),
+) {
   server.use(
     http.get(apiUrl('/scenarios'), () =>
       HttpResponse.json(
@@ -150,6 +165,7 @@ export function serveDetail(scenario: Scenario = detailScenario()) {
           scenario,
           makeScenario(11, evenPlan(1, 6), 1),
           makeScenario(12, evenPlan(1, 6), 1),
+          mixed,
         ]),
       ),
     ),

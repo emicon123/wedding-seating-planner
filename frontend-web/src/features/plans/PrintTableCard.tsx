@@ -1,8 +1,8 @@
 import { TriangleAlertIcon } from 'lucide-react'
 import { GroupMark } from '@/components/GroupMark'
-import { fillStatusLabel } from '@/domain/labels'
+import { fillStatusLabel, tableSizePrintLabel } from '@/domain/labels'
+import { isMixed, type PlanKind } from '@/domain/plans'
 import type { PrintCluster, PrintTable } from '@/domain/printPlan'
-import type { Capacity } from '@/domain/types'
 import { PrintGuestName } from '@/features/plans/PrintGuestName'
 import { TableSeats } from '@/features/plans/TableSeats'
 
@@ -28,10 +28,15 @@ export function PrintCluster({ cluster }: { cluster: PrintCluster }) {
   )
 }
 
-type PrintTableCardProps = { table: PrintTable; capacity: Capacity }
+/** Seats drawn at an empty mixed-plan table (it needs no size). */
+const FALLBACK_SEATS = 9
+
+type PrintTableCardProps = { table: PrintTable; kind: PlanKind }
 
 /** One table on paper: number, seat glyph, fill and the guests. Never split across two pages. */
-export function PrintTableCard({ table, capacity }: PrintTableCardProps) {
+export function PrintTableCard({ table, kind }: PrintTableCardProps) {
+  const { capacity } = kind
+  const mixed = isMixed(kind)
   const statusText = fillStatusLabel(table.status, table.fill, capacity)
   return (
     <section
@@ -41,16 +46,19 @@ export function PrintTableCard({ table, capacity }: PrintTableCardProps) {
       <header className="flex items-center gap-3 border-b border-ink/30 pb-2 print:pb-1.5">
         <TableSeats
           number={table.number}
-          capacity={capacity}
+          capacity={mixed ? (table.size ?? FALLBACK_SEATS) : capacity}
           clusterSizes={table.clusters.map((cluster) => cluster.guests.length)}
           status={table.status}
           className="size-20 shrink-0 print:size-16"
         />
         <div className="min-w-0">
-          <h2 className="font-display text-2xl leading-none font-semibold">Stół {table.number}</h2>
+          <h2 className="font-display text-2xl leading-none font-semibold">
+            Stół {table.number}
+            {mixed && table.size !== null && ` · ${tableSizePrintLabel(table.size)}`}
+          </h2>
           <p className="mt-1 font-display text-xl leading-none">
             <span className="font-semibold">{table.fill}</span>
-            <span className="text-ink-soft print:text-black">/{capacity}</span>
+            {!mixed && <span className="text-ink-soft print:text-black">/{capacity}</span>}
             <span className="ml-1.5 font-sans text-sm text-ink-soft print:text-black">osób</span>
           </p>
           {statusText && (

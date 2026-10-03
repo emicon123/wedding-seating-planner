@@ -21,7 +21,9 @@ import {
   type DropTarget,
 } from '@/domain/dropTargets'
 import { dropHintLabel, peopleLabel } from '@/domain/labels'
-import type { Capacity, ClusterOverview, ClusterPlacement, SeatingPlan } from '@/domain/types'
+import type { PlanKind } from '@/domain/plans'
+import { sizeAfterDrop } from '@/domain/tableSizes'
+import type { ClusterOverview, ClusterPlacement, SeatingPlan } from '@/domain/types'
 import type { DropHint } from '@/features/plans/TableCard'
 
 const NO_OVERVIEW: ClusterOverview = { clusters: [], warnings: [] }
@@ -37,7 +39,7 @@ type Located = { cluster: ClusterPlacement; table: number | null }
 
 type Options = {
   plan: SeatingPlan
-  capacity: Capacity
+  kind: PlanKind
   overview: ClusterOverview | undefined
   nameOf: (guestId: number) => string
   onMove: (cluster: ClusterPlacement, toTable: number | null) => void
@@ -50,7 +52,7 @@ type Drag = { clusterKey: number; over: DropTarget | null }
  * sensors, Polish screen-reader announcements and the hover preview. Only `over` changes while
  * dragging, so a pointer move re-renders nothing but the dnd-kit overlay.
  */
-export function useClusterDrag({ plan, capacity, overview, nameOf, onMove }: Options) {
+export function useClusterDrag({ plan, kind, overview, nameOf, onMove }: Options) {
   const [drag, setDrag] = useState<Drag | null>(null)
   const cursor = useRef<string | undefined>(undefined)
 
@@ -103,7 +105,7 @@ export function useClusterDrag({ plan, capacity, overview, nameOf, onMove }: Opt
       plan,
       location.cluster,
       target.kind === 'table' ? target.number : null,
-      capacity,
+      kind.capacity,
       overview ?? NO_OVERVIEW,
     )
 
@@ -115,13 +117,13 @@ export function useClusterDrag({ plan, capacity, overview, nameOf, onMove }: Opt
         plan,
         activeLocation.cluster,
         over.number,
-        capacity,
+        kind.capacity,
         overview ?? NO_OVERVIEW,
       ),
       sameTable,
       sourceNumber: sameTable ? null : activeLocation.table,
     }
-  }, [activeLocation, over, plan, capacity, overview])
+  }, [activeLocation, over, plan, kind.capacity, overview])
 
   const locationOf = (id: string | number): Located | undefined => {
     const key = String(id).replace(/^cluster-/, '')
@@ -138,7 +140,9 @@ export function useClusterDrag({ plan, capacity, overview, nameOf, onMove }: Opt
       const location = locationOf(active.id)
       if (!target || !location) return 'Poza stołami.'
       if (target.kind === 'tray') return 'Pole „Bez stołu”. Upuszczenie zdejmie paczkę ze stołu.'
-      return `Stół ${target.number}. ${dropHintLabel(preview(location, target), capacity)}.`
+      const after = preview(location, target)
+      const size = sizeAfterDrop(after.fillAfter, kind)
+      return `Stół ${target.number}. ${dropHintLabel(after, kind.capacity, size)}.`
     },
     onDragEnd: ({ active, over: dropped }) => {
       const target = parseDropId(dropped?.id)

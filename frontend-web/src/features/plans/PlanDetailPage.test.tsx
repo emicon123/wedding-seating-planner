@@ -1,6 +1,12 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { PlanDetailPage } from '@/features/plans/PlanDetailPage'
-import { detailScenario, serveDetail, serveGenerateFlow } from '@/features/plans/fixtures'
+import {
+  detailScenario,
+  mixedDetailPlan,
+  serveDetail,
+  serveGenerateFlow,
+} from '@/features/plans/fixtures'
+import { PLAN_KEYS } from '@/domain/plans'
 import type { PlanTable, Scenario } from '@/domain/types'
 import { makePlan, makeScenario, placement, withoutViolations } from '@/test/builders'
 import { renderPage } from '@/test/renderPage'
@@ -29,7 +35,7 @@ function brokenDetail(): Scenario {
 
 async function renderDetail(path = '/plany/10') {
   serveDetail()
-  const rendered = renderPage(<PlanDetailPage capacity={10} />, path)
+  const rendered = renderPage(<PlanDetailPage planKey="10" />, path)
   await screen.findByRole('region', { name: 'Stół 1' })
   return rendered
 }
@@ -102,7 +108,7 @@ describe('PlanDetailPage: the hall (read)', () => {
     ).tables
     const base = detailScenario()
     serveDetail({ ...base, plan: { ...base.plan, tables, unseated: [] } })
-    renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
     await screen.findByRole('region', { name: 'Stół 1' })
 
     expect(within(table(1)).getByText('Za dużo osób: 11/10')).toBeInTheDocument()
@@ -120,7 +126,7 @@ describe('PlanDetailPage: the hall (read)', () => {
       summary: { ...base.plan.summary, violationCount: 1, needsRecalculation: true },
     }
     serveDetail({ ...base, plan })
-    renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
 
     expect(await screen.findByText('Wymaga przeliczenia')).toBeInTheDocument()
     expect(screen.getByText('1 osoba bez stołu', { selector: 'li' })).toBeInTheDocument()
@@ -135,7 +141,7 @@ describe('PlanDetailPage: the hall (read)', () => {
       await hold.opened
       return HttpResponse.json({ data: [], meta: { requestId: 'x' }, page: { total: 0 } })
     })
-    const { user } = renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    const { user } = renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
 
     await user.click(await screen.findByRole('button', { name: 'Przelicz / Generuj' }))
 
@@ -203,10 +209,16 @@ describe('PlanDetailPage: the hall (read)', () => {
     expect(screen.getByTestId('search')).toHaveTextContent('?widok=stoly')
   })
 
-  it('switches between the 8 / 10 / 12 plans', async () => {
+  it('switches between the five plans, mixed last', async () => {
     await renderDetail()
 
     const nav = screen.getByRole('navigation', { name: 'Przełącz plan' })
+    expect(within(nav).getAllByRole('link')).toHaveLength(5)
+    expect(within(nav).getAllByRole('link').at(-1)).toHaveTextContent('Mieszany')
+    expect(within(nav).getByRole('link', { name: /Mieszany/ })).toHaveAttribute(
+      'href',
+      '/wesele/plany/mixed',
+    )
     expect(within(nav).getByRole('link', { name: /12 miejsc/ })).toHaveAttribute(
       'href',
       '/wesele/plany/12',
@@ -215,6 +227,108 @@ describe('PlanDetailPage: the hall (read)', () => {
       'aria-current',
       'page',
     )
+  })
+})
+
+// --- task 013: the mixed plan -------------------------------------------------------------------
+
+async function renderMixed() {
+  serveDetail()
+  const rendered = renderPage(<PlanDetailPage planKey="mixed" />, '/plany/mixed')
+  await screen.findByRole('region', { name: 'Stół 1' })
+  return rendered
+}
+
+describe('PlanDetailPage: the mixed plan', () => {
+  it('is titled "Plan mieszany", links to its print view and says which tables it needs', async () => {
+    await renderMixed()
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Plan mieszany' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Wersja do druku' })).toHaveAttribute(
+      'href',
+      '/wesele/druk/mixed',
+    )
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === 'Potrzebne stoły: 1 × 10, 1 × 9 (19 miejsc)',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('navigation', { name: 'Przełącz plan' })).getByRole('link', {
+        name: /Mieszany/,
+      }),
+    ).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('shows each table with the size it needs, "N os." instead of "N/capacity", and marks the empty one', async () => {
+    await renderMixed()
+
+    expect(within(table(1)).getByText('stół 10-os.')).toBeInTheDocument()
+    expect(within(table(1)).getByText('10 os.')).toBeInTheDocument()
+    expect(within(table(2)).getByText('stół 9-os.')).toBeInTheDocument()
+    expect(within(table(2)).getByText('2 os.')).toBeInTheDocument()
+    expect(within(table(3)).getByText('pusty — niepotrzebny')).toBeInTheDocument()
+    expect(within(table(3)).queryByText(/stół \d+-os\./)).toBeNull()
+    expect(within(table(1)).queryByText(/\/12/)).toBeNull()
+  })
+
+  it('keeps the uniform plan as it was: no size badge, "N/capacity" counter', async () => {
+    await renderDetail()
+
+    expect(screen.queryByText(/stół \d+-os\./)).toBeNull()
+    expect(within(table(1)).getByText('3/10')).toBeInTheDocument()
+  })
+
+  it('shows the size after a move in the menu, and changes the badge at once (optimistic)', async () => {
+    const { user } = await renderMixed()
+    const hold = gate()
+    const moved = makeScenario(
+      'mixed',
+      withoutViolations(
+        makePlan([
+          {
+            number: 1,
+            clusters: [
+              ...mixedDetailPlan().tables[0]!.clusters,
+              ...mixedDetailPlan().tables[1]!.clusters,
+            ],
+          },
+          { number: 2, clusters: [] },
+          { number: 3, clusters: [] },
+        ]),
+      ),
+      2,
+    )
+    const api = mockApi('put', '/scenarios/mixed/assignments/6', async () => {
+      await hold.opened
+      return HttpResponse.json(single(moved))
+    })
+
+    await user.click(menuOf('Michał, Ola'))
+    const item = await screen.findByRole('menuitem', { name: /Stół 1/ })
+    expect(within(item).getByText('12 os.')).toBeInTheDocument()
+    await user.click(item)
+
+    await waitFor(() => expect(within(table(1)).getByText('stół 12-os.')).toBeInTheDocument())
+    expect(within(table(1)).getByText('12 os.')).toBeInTheDocument()
+    expect(within(table(2)).getByText('pusty — niepotrzebny')).toBeInTheDocument()
+    expect(api.calls).toEqual([{ tableNumber: 1, pinned: false }])
+    hold.open()
+    await waitFor(() => expect(within(table(1)).queryByText('Zadowolenie …')).toBeNull())
+    expect(within(table(1)).getByText('stół 12-os.')).toBeInTheDocument()
+  })
+
+  it('deletes only the mixed plan from its own header button', async () => {
+    const { user } = await renderMixed()
+    const api = mockApi('delete', '/scenarios/mixed/tables', () =>
+      HttpResponse.json(single(makeScenario('mixed', makePlan([], []), 2))),
+    )
+
+    await user.click(screen.getByRole('button', { name: /Usuń plan/ }))
+    await user.click(await screen.findByRole('button', { name: 'Usuń plan mieszany' }))
+
+    expect(await screen.findByText('Usunięto plan mieszany.')).toBeInTheDocument()
+    expect(api.calls).toHaveLength(1)
   })
 })
 
@@ -462,7 +576,7 @@ describe('PlanDetailPage: delete the plan', () => {
 
   it('is disabled when the plan has no tables', async () => {
     serveDetail(makeScenario(10, makePlan([], [placement(4, [4, 5])]), 8))
-    renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
 
     const button = await screen.findByRole('button', { name: /^Usuń plan/ })
 
@@ -550,7 +664,7 @@ describe('PlanDetailPage: keyboard drag and drop', () => {
       ),
     }
     serveDetail(full)
-    const { user } = renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    const { user } = renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
     await screen.findByRole('region', { name: 'Stół 1' })
 
     act(() => handle('Michał, Ola').focus())
@@ -624,15 +738,11 @@ describe('PlanDetailPage: Generate stores at once, Cofnij', () => {
         [],
       ),
     )
-    return [9, 10, 11, 12].map((capacity) =>
-      makeScenario(capacity as Scenario['capacity'], capacity === 10 ? plan : base.plan, 9),
-    )
+    return PLAN_KEYS.map((key) => makeScenario(key, key === '10' ? plan : base.plan, 9))
   }
   const before = (): Scenario[] =>
-    [9, 10, 11, 12].map((capacity) =>
-      capacity === 10
-        ? brokenDetail()
-        : makeScenario(capacity as Scenario['capacity'], detailScenario().plan, 1),
+    PLAN_KEYS.map((key) =>
+      key === '10' ? brokenDetail() : makeScenario(key, detailScenario().plan, 1),
     )
 
   async function generateOnDetail(stored: Scenario[][] = []) {
@@ -640,14 +750,15 @@ describe('PlanDetailPage: Generate stores at once, Cofnij', () => {
     serveDetail(brokenDetail())
     const flow = serveGenerateFlow({
       before: initial,
-      proposals: [9, 10, 11, 12].map((capacity) => ({
-        capacity: capacity as Scenario['capacity'],
+      proposals: PLAN_KEYS.map((key) => ({
+        key,
+        capacity: makeScenario(key, detailScenario().plan).capacity,
         basedOnVersion: 0,
         plan: generatedHall()[1]!.plan,
       })),
       stored: [generatedHall(), ...stored],
     })
-    const rendered = renderPage(<PlanDetailPage capacity={10} />, '/plany/10')
+    const rendered = renderPage(<PlanDetailPage planKey="10" />, '/plany/10')
     await rendered.user.click(await screen.findByRole('button', { name: 'Przelicz / Generuj' }))
     await screen.findByText('Wygenerowano nowe plany. Poprzednie można przywrócić.')
     return { ...rendered, flow }
@@ -663,7 +774,7 @@ describe('PlanDetailPage: Generate stores at once, Cofnij', () => {
     expect(screen.getByTestId('search')).toHaveTextContent('')
     expect(flow.put.calls).toHaveLength(1)
     expect(
-      await screen.findByText('Zapisano nowe plany: 9, 10, 11, 12 miejsc.'),
+      await screen.findByText('Zapisano nowe plany: 9, 10, 11, 12 miejsc i mieszany.'),
     ).toBeInTheDocument()
   })
 

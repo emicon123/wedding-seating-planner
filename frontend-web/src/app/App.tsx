@@ -1,9 +1,9 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import { AccessGate } from '@/app/AccessGate'
-import { CapacityRoute } from '@/app/CapacityRoute'
 import { Layout } from '@/app/Layout'
 import { Loading } from '@/app/Loading'
+import { PlanRoute } from '@/app/PlanRoute'
 import { PlansPage } from '@/features/plans/PlansPage'
 
 // The landing screen is in the main bundle; the heavy screens (guest table, the drag & drop hall,
@@ -35,12 +35,12 @@ export function App() {
             }
           />
           <Route
-            path="plany/:capacity"
+            path="plany/:planKey"
             element={
-              <CapacityRoute
-                render={(capacity) => (
+              <PlanRoute
+                render={(planKey) => (
                   <Suspense fallback={<Loading />}>
-                    <PlanDetailPage capacity={capacity} />
+                    <PlanDetailPage planKey={planKey} />
                   </Suspense>
                 )}
               />
@@ -48,12 +48,12 @@ export function App() {
           />
         </Route>
         <Route
-          path="druk/:capacity"
+          path="druk/:planKey"
           element={
-            <CapacityRoute
-              render={(capacity) => (
+            <PlanRoute
+              render={(planKey) => (
                 <Suspense fallback={<Loading />}>
-                  <PrintView capacity={capacity} />
+                  <PrintView planKey={planKey} />
                 </Suspense>
               )}
             />

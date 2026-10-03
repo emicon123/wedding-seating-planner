@@ -8,6 +8,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { peopleCountLabel } from '@/domain/labels'
+import { isMixed } from '@/domain/plans'
 import type { ClusterPlacement } from '@/domain/types'
 import { usePlanView } from '@/features/plans/planViewContext'
 
@@ -26,7 +28,8 @@ type MoveMenuProps = {
  * table is visible before choosing it (choosing it is still allowed: a plan is a draft).
  */
 export function MoveMenu({ cluster, tableNumber, label, stopDrag }: MoveMenuProps) {
-  const { tables, capacity, onMove } = usePlanView()
+  const { tables, kind, onMove } = usePlanView()
+  const { capacity } = kind
   const size = cluster.guestIds.length
   return (
     <DropdownMenu>
@@ -70,7 +73,7 @@ export function MoveMenu({ cluster, tableNumber, label, stopDrag }: MoveMenuProp
                   }
                 >
                   {over && <TriangleAlertIcon aria-hidden="true" />}
-                  {after}/{capacity}
+                  {isMixed(kind) ? peopleCountLabel(after) : `${after}/${capacity}`}
                   {over && <span className="sr-only"> (za dużo osób)</span>}
                 </span>
               )}

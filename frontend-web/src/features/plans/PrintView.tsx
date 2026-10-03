@@ -5,11 +5,12 @@ import { errorMessage } from '@/api/errorMessage'
 import { useGuests } from '@/api/guests'
 import { useScenarios } from '@/api/scenarios'
 import { Button, buttonVariants } from '@/components/ui/button'
-import type { Capacity } from '@/domain/capacity'
 import { buildGuestIndex } from '@/domain/guestIndex'
-import { peopleLabel, tableCountLabel, violationLabel } from '@/domain/labels'
+import { peopleLabel, tableCountLabel, tablesNeededSummary, violationLabel } from '@/domain/labels'
+import { isMixed } from '@/domain/plans'
 import { buildNameIndex, buildPrintTables } from '@/domain/printPlan'
-import type { Guest, Scenario } from '@/domain/types'
+import { tablesNeeded } from '@/domain/tableSizes'
+import type { Guest, PlanKey, Scenario } from '@/domain/types'
 import { PrintCluster, PrintTableCard } from '@/features/plans/PrintTableCard'
 import { PrintNameIndex } from '@/features/plans/PrintNameIndex'
 import { cn } from '@/lib/utils'
@@ -26,11 +27,11 @@ function isEmptyPlan({ plan }: Scenario): boolean {
   return plan.tables.length === 0 && plan.summary.seatedCount === 0
 }
 
-function Toolbar({ capacity }: { capacity: Capacity }) {
+function Toolbar({ planKey }: { planKey: PlanKey }) {
   return (
     <div className="mx-auto flex max-w-[210mm] flex-wrap items-center justify-between gap-3 print:hidden">
       <Link
-        to={`/plany/${capacity}`}
+        to={`/plany/${planKey}`}
         className="inline-flex items-center gap-1 rounded text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         <ChevronLeftIcon className="size-4" aria-hidden="true" />
@@ -66,7 +67,7 @@ function ProblemsNotice({ scenario }: { scenario: Scenario }) {
         {more > 0 && <li>i jeszcze {more}</li>}
       </ul>
       <Link
-        to={`/plany/${scenario.capacity}`}
+        to={`/plany/${scenario.key}`}
         className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
       >
         Popraw plan
@@ -80,20 +81,20 @@ function Message({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The printout of one plan (route /druk/:capacity, outside the app shell): tables with their
+ * The printout of one plan (route /druk/:planKey, outside the app shell): tables with their
  * guests, then "kto przy którym stole" on a page of its own. The sheet is also the on-screen
  * preview; the toolbar and the problems notice are screen only. Reads the same cache as the
  * hall, so it never shows anything the hall does not.
  */
-export function PrintView({ capacity }: { capacity: Capacity }) {
+export function PrintView({ planKey }: { planKey: PlanKey }) {
   const scenarios = useScenarios()
   const guestsQuery = useGuests()
   const guests = guestsQuery.data ?? NO_GUESTS
-  const scenario = scenarios.data?.find((candidate) => candidate.capacity === capacity)
+  const scenario = scenarios.data?.find((candidate) => candidate.key === planKey)
   const index = useMemo(() => buildGuestIndex(guests), [guests])
   const printed = useMemo(
-    () => (scenario ? buildPrintTables(scenario.plan, capacity, index) : null),
-    [scenario, capacity, index],
+    () => (scenario ? buildPrintTables(scenario.plan, scenario, index) : null),
+    [scenario, index],
   )
   const nameIndex = useMemo(
     () => (scenario ? buildNameIndex(scenario.plan, index) : []),
@@ -125,9 +126,11 @@ export function PrintView({ capacity }: { capacity: Capacity }) {
   if (isEmptyPlan(scenario)) {
     return (
       <Message>
-        <Toolbar capacity={capacity} />
+        <Toolbar planKey={planKey} />
         <section className="space-y-2 rounded-xl border bg-card p-6">
-          <h1 className="text-2xl font-semibold">Nie ma jeszcze planu na {capacity} miejsc</h1>
+          <h1 className="text-2xl font-semibold">
+            Nie ma jeszcze {planKey === 'mixed' ? 'planu mieszanego' : `planu na ${planKey} miejsc`}
+          </h1>
           <p className="text-muted-foreground">
             Wygeneruj plany, a potem wydrukuj ten, który wybierzesz.
           </p>
@@ -140,6 +143,7 @@ export function PrintView({ capacity }: { capacity: Capacity }) {
   }
 
   const { plan } = scenario
+  const needed = tablesNeeded(scenario)
   const today = new Date().toLocaleDateString('pl-PL', {
     day: 'numeric',
     month: 'long',
@@ -148,19 +152,24 @@ export function PrintView({ capacity }: { capacity: Capacity }) {
 
   return (
     <div className="min-h-dvh space-y-4 px-3 py-4 [print-color-adjust:exact] sm:px-4 print:min-h-0 print:space-y-0 print:p-0">
-      <Toolbar capacity={capacity} />
+      <Toolbar planKey={planKey} />
       <ProblemsNotice scenario={scenario} />
 
       <main className="mx-auto max-w-[210mm] space-y-6 print:max-w-none print:space-y-0">
         <article className={SHEET} aria-labelledby="druk-tytul">
           <header className="mb-5 space-y-1 border-b-2 border-ink pb-3">
             <h1 id="druk-tytul" className="text-3xl font-semibold">
-              Plan stołów, {capacity} miejsc przy stole
+              {isMixed(scenario)
+                ? 'Plan stołów — mieszany (stoły 9–12-osobowe)'
+                : `Plan stołów, ${scenario.capacity} miejsc przy stole`}
             </h1>
             <p className="text-sm text-ink-soft print:text-black">
               {tableCountLabel(plan.tables.length)}, {peopleLabel(plan.summary.seatedCount)}{' '}
               posadzonych, stan na {today}
             </p>
+            {needed.length > 0 && (
+              <p className="text-sm font-medium">{tablesNeededSummary(needed)}</p>
+            )}
             <p className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-xs">
               <span>Ramka z napisem „Grupa 0”: te osoby siedzą razem.</span>
               <span>Dziecko ma ikonę i napis „dziecko”.</span>
@@ -169,7 +178,7 @@ export function PrintView({ capacity }: { capacity: Capacity }) {
 
           <div className="grid gap-4 sm:grid-cols-2">
             {printed.tables.map((table) => (
-              <PrintTableCard key={table.number} table={table} capacity={capacity} />
+              <PrintTableCard key={table.number} table={table} kind={scenario} />
             ))}
           </div>
 

@@ -1,7 +1,9 @@
 import { guestTableMap, sortPlacements } from '@/domain/planView'
 import type { GuestIndex } from '@/domain/guestIndex'
 import { fillStatus, type FillStatus } from '@/domain/tableStatus'
-import type { Capacity, ClusterPlacement, Guest, SeatingPlan } from '@/domain/types'
+import type { PlanKind } from '@/domain/plans'
+import { tableSize, type TableSize } from '@/domain/tableSizes'
+import type { ClusterPlacement, Guest, SeatingPlan } from '@/domain/types'
 
 // The printout's data: plain shapes the print components only have to draw. The plan lists
 // enabled members only, so a disabled guest never appears on paper.
@@ -11,6 +13,8 @@ export type PrintCluster = { key: number; guests: PrintGuest[] }
 export type PrintTable = {
   number: number
   fill: number
+  /** Seats the venue provides here; null for an empty table. */
+  size: TableSize | null
   status: FillStatus
   clusters: PrintCluster[]
 }
@@ -46,14 +50,15 @@ function printClusters(clusters: ClusterPlacement[], index: GuestIndex): PrintCl
 /** Every table with its paczki (biggest first) and guests (by name), plus the unseated paczki. */
 export function buildPrintTables(
   plan: SeatingPlan,
-  capacity: Capacity,
+  kind: PlanKind,
   index: GuestIndex,
 ): PrintTables {
   return {
     tables: plan.tables.map((table) => ({
       number: table.number,
       fill: table.fill,
-      status: fillStatus(table.fill, capacity, plan.tables.length),
+      size: tableSize(table.fill, kind),
+      status: fillStatus(table.fill, kind.capacity, plan.tables.length),
       clusters: printClusters(table.clusters, index),
     })),
     unseated: printClusters(plan.unseated, index),

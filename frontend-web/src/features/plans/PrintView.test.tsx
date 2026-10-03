@@ -14,7 +14,7 @@ import { PrintView } from '@/features/plans/PrintView'
 const table = (number: number) => screen.getByRole('region', { name: `Stół ${number}` })
 
 async function renderPrint(path = '/druk/10') {
-  const rendered = renderPage(<PrintView capacity={10} />, path)
+  const rendered = renderPage(<PrintView planKey="10" />, path)
   await screen.findByRole('heading', { name: /Plan stołów/ })
   return rendered
 }
@@ -127,9 +127,54 @@ describe('PrintView', () => {
   it('says so when no plan is accepted yet', async () => {
     serveScenarios([makeScenario(10, withoutViolations(makePlan([])))])
     server.use(http.get(apiUrl('/guests'), () => HttpResponse.json(list([]))))
-    renderPage(<PrintView capacity={10} />, '/druk/10')
+    renderPage(<PrintView planKey="10" />, '/druk/10')
 
     expect(await screen.findByText(/Nie ma jeszcze planu na 10 miejsc/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Przejdź do planów' })).toBeInTheDocument()
+  })
+})
+
+describe('PrintView: sizes and the summary (task 013)', () => {
+  const needed = (): string | undefined =>
+    screen
+      .queryAllByText((_, element) => /^Potrzebne stoły/.test(element?.textContent ?? ''), {
+        selector: 'p',
+      })
+      .map((element) => element.textContent)[0] ?? undefined
+
+  it('a uniform plan names what the venue needs and keeps the capacity heading and "N/capacity"', async () => {
+    serveDetail()
+    await renderPrint()
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Plan stołów, 10 miejsc przy stole' }),
+    ).toBeInTheDocument()
+    expect(needed()).toBe('Potrzebne stoły: 2 × 10 (20 miejsc)')
+    expect(within(table(1)).getByText('/10')).toBeInTheDocument()
+  })
+
+  it('the mixed plan prints its heading, the summary and "Stół N · S-osobowy" per table', async () => {
+    serveDetail()
+    renderPage(<PrintView planKey="mixed" />, '/druk/mixed')
+
+    expect(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Plan stołów — mieszany (stoły 9–12-osobowe)',
+      }),
+    ).toBeInTheDocument()
+    expect(needed()).toBe('Potrzebne stoły: 1 × 10, 1 × 9 (19 miejsc)')
+    expect(screen.getByRole('heading', { name: 'Stół 1 · 10-osobowy' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Stół 2 · 9-osobowy' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Stół 3' })).toBeInTheDocument()
+    expect(screen.queryByText('/12')).toBeNull()
+  })
+
+  it('says so when the mixed plan does not exist yet', async () => {
+    serveScenarios([makeScenario('mixed', withoutViolations(makePlan([])))])
+    server.use(http.get(apiUrl('/guests'), () => HttpResponse.json(list([]))))
+    renderPage(<PrintView planKey="mixed" />, '/druk/mixed')
+
+    expect(await screen.findByText(/Nie ma jeszcze planu mieszanego/)).toBeInTheDocument()
   })
 })

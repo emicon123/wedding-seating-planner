@@ -13,7 +13,8 @@ import {
   useSetAssignment,
   useUndoGenerate,
 } from '@/api/scenarios'
-import { CAPACITIES } from '@/domain/capacity'
+import { PLAN_KEYS } from '@/domain/plans'
+import { tableSize } from '@/domain/tableSizes'
 import type { GenerateUndo, Proposal, Scenario, ScenariosReplace } from '@/domain/types'
 import { makePlan, makeScenario, placement } from '@/test/builders'
 import { failure, gate, HttpResponse, list, mockApi, single } from '@/test/server'
@@ -38,7 +39,8 @@ function scenario10(version = 7) {
 const scenario9 = makeScenario(9, makePlan([{ number: 1, clusters: [] }]), 2)
 const scenario12 = makeScenario(12, makePlan([{ number: 1, clusters: [] }]), 3)
 const scenario11 = makeScenario(11, makePlan([{ number: 1, clusters: [] }]), 4)
-const initial = (): Scenario[] => [scenario9, scenario10(), scenario11, scenario12]
+const scenarioMixed = makeScenario('mixed', makePlan([{ number: 1, clusters: [] }]), 6)
+const initial = (): Scenario[] => [scenario9, scenario10(), scenario11, scenario12, scenarioMixed]
 
 /** What the server would answer after Maciek's cluster moved to table 2 (scores recomputed). */
 function serverCopyAfterMove(): Scenario {
@@ -66,25 +68,30 @@ function seedScenarios(queryClient: QueryClient) {
 }
 
 describe('useScenarios', () => {
-  it('returns the four scenarios', async () => {
+  it('returns the five scenarios, mixed last', async () => {
     mockApi('get', '/scenarios', () => HttpResponse.json(list(initial())))
 
     const { result } = renderHookWithClient(() => useScenarios())
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.map((s) => s.capacity)).toEqual([9, 10, 11, 12])
+    expect(result.current.data?.map((s) => s.key)).toEqual(['9', '10', '11', '12', 'mixed'])
   })
 })
 
 describe('Generate and Cofnij (task 007)', () => {
   const pinnedMaciek = placement(4, [4, 5], true)
-  /** The plan the server computes for every capacity: one table with a pinned and a free cluster. */
+  /** The plan the server computes for every plan: one table with a pinned and a free cluster. */
   const proposedPlan = () => makePlan([{ number: 1, clusters: [pinnedMaciek, michal] }])
   const proposals = (): Proposal[] =>
-    CAPACITIES.map((capacity) => ({ capacity, basedOnVersion: 0, plan: proposedPlan() }))
+    PLAN_KEYS.map((key) => ({
+      key,
+      capacity: makeScenario(key, proposedPlan()).capacity,
+      basedOnVersion: 0,
+      plan: proposedPlan(),
+    }))
   /** What the PUT answers: the proposals stored, every version + 1. */
   const stored = (before: Scenario[]): Scenario[] =>
-    before.map((s) => makeScenario(s.capacity, proposedPlan(), s.version + 1))
+    before.map((s) => makeScenario(s.key, proposedPlan(), s.version + 1))
 
   const putCall = (respond: (body: unknown) => Response) => mockApi('put', '/scenarios', respond)
 
@@ -110,11 +117,12 @@ describe('Generate and Cofnij (task 007)', () => {
       expect(order).toEqual(['get', 'calculate', 'put'])
       expect(get.calls).toHaveLength(1)
       const body = put.calls[0] as ScenariosReplace
-      expect(body.plans.map((p) => [p.capacity, p.basedOnVersion])).toEqual([
-        [9, 2],
-        [10, 7],
-        [11, 4],
-        [12, 3],
+      expect(body.plans.map((p) => [p.key, p.basedOnVersion])).toEqual([
+        ['9', 2],
+        ['10', 7],
+        ['11', 4],
+        ['12', 3],
+        ['mixed', 6],
       ])
       expect(body.plans[0]?.tables).toEqual([
         { number: 1, guestIds: [4, 5, 6, 7], pinnedGuestIds: [4, 5] },
@@ -146,7 +154,10 @@ describe('Generate and Cofnij (task 007)', () => {
       await act(() => result.current.generate.mutateAsync())
 
       expect(cached(queryClient)).toEqual(stored(initial()))
-      const expected = { previous: initial(), generatedVersions: { 9: 3, 10: 8, 11: 5, 12: 4 } }
+      const expected = {
+        previous: initial(),
+        generatedVersions: { 9: 3, 10: 8, 11: 5, 12: 4, mixed: 7 },
+      }
       expect(queryClient.getQueryData(keys.generateUndo)).toEqual(expected)
       await waitFor(() => expect(result.current.undo.data).toEqual(expected))
     })
@@ -205,7 +216,7 @@ describe('Generate and Cofnij (task 007)', () => {
   describe('useUndoGenerate', () => {
     const undoSnapshot = (): GenerateUndo => ({
       previous: initial(),
-      generatedVersions: { 9: 3, 10: 8, 11: 5, 12: 4 },
+      generatedVersions: { 9: 3, 10: 8, 11: 5, 12: 4, mixed: 7 },
     })
 
     function setup() {
@@ -225,11 +236,12 @@ describe('Generate and Cofnij (task 007)', () => {
       await act(() => result.current.restore.mutateAsync(undoSnapshot()))
 
       const body = put.calls[0] as ScenariosReplace
-      expect(body.plans.map((p) => [p.capacity, p.basedOnVersion])).toEqual([
-        [9, 3],
-        [10, 8],
-        [11, 5],
-        [12, 4],
+      expect(body.plans.map((p) => [p.key, p.basedOnVersion])).toEqual([
+        ['9', 3],
+        ['10', 8],
+        ['11', 5],
+        ['12', 4],
+        ['mixed', 7],
       ])
       expect(body.plans[1]?.tables).toEqual([
         { number: 1, guestIds: [4, 5], pinnedGuestIds: [] },
@@ -289,7 +301,7 @@ describe('useSetAssignment (optimistic)', () => {
     seedScenarios(queryClient)
     expect(tableOf(cached(queryClient)?.[1], 4)).toBe(1)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 4, tableNumber: 2, pinned: false }))
+    act(() => result.current.mutate({ key: '10', guestId: 4, tableNumber: 2, pinned: false }))
 
     // optimistic: visible before the server answered
     await waitFor(() => expect(tableOf(cached(queryClient)?.[1], 4)).toBe(2))
@@ -306,6 +318,39 @@ describe('useSetAssignment (optimistic)', () => {
     expect(cached(queryClient)?.[0]).toEqual(scenario9)
   })
 
+  it('moves a guest in the mixed plan: the derived table size follows the fill at once', async () => {
+    const hold = gate()
+    const api = mockApi('put', '/scenarios/mixed/assignments/100', async () => {
+      await hold.opened
+      return HttpResponse.json(single(scenarioMixed))
+    })
+    const singles = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => placement(from + i, [from + i]))
+    const mixed = makeScenario(
+      'mixed',
+      makePlan([
+        { number: 1, clusters: singles(1, 10) },
+        { number: 2, clusters: [...singles(11, 9), placement(100, [100])] },
+      ]),
+      6,
+    )
+    const { result, queryClient } = renderHookWithClient(() => useSetAssignment())
+    queryClient.setQueryData(keys.scenarios, [...initial().slice(0, 4), mixed])
+    const fillOf = (table: number) => {
+      const current = cached(queryClient)?.[4]
+      const fill = current?.plan.tables[table]?.fill ?? 0
+      return current ? tableSize(fill, current) : null
+    }
+    expect([fillOf(0), fillOf(1)]).toEqual([10, 10])
+
+    act(() => result.current.mutate({ key: 'mixed', guestId: 100, tableNumber: 1, pinned: false }))
+
+    await waitFor(() => expect([fillOf(0), fillOf(1)]).toEqual([11, 9]))
+    hold.open()
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(api.calls).toEqual([{ tableNumber: 1, pinned: false }])
+  })
+
   it('rolls back to the previous plan when the server refuses, and rejects with the ApiError', async () => {
     const hold = gate()
     mockApi('put', '/scenarios/10/assignments/4', async () => {
@@ -315,7 +360,7 @@ describe('useSetAssignment (optimistic)', () => {
     const { result, queryClient } = renderHookWithClient(() => useSetAssignment())
     seedScenarios(queryClient)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 4, tableNumber: 2, pinned: false }))
+    act(() => result.current.mutate({ key: '10', guestId: 4, tableNumber: 2, pinned: false }))
     await waitFor(() => expect(tableOf(cached(queryClient)?.[1], 4)).toBe(2))
 
     hold.open()
@@ -330,7 +375,7 @@ describe('useSetAssignment (optimistic)', () => {
     const { result, queryClient } = renderHookWithClient(() => useSetAssignment())
     seedScenarios(queryClient)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 4, tableNumber: 2, pinned: false }))
+    act(() => result.current.mutate({ key: '10', guestId: 4, tableNumber: 2, pinned: false }))
     await waitFor(() => expect(result.current.isError).toBe(true))
 
     expect(cached(queryClient)).toEqual(initial())
@@ -345,7 +390,7 @@ describe('useSetAssignment (optimistic)', () => {
     const { result, queryClient } = renderHookWithClient(() => useSetAssignment())
     seedScenarios(queryClient)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 4, tableNumber: 1, pinned: true }))
+    act(() => result.current.mutate({ key: '10', guestId: 4, tableNumber: 1, pinned: true }))
 
     await waitFor(() =>
       expect(
@@ -366,7 +411,7 @@ describe('useSetAssignment (optimistic)', () => {
     const { result, queryClient } = renderHookWithClient(() => useSetAssignment())
     seedScenarios(queryClient)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 5, tableNumber: 2, pinned: false }))
+    act(() => result.current.mutate({ key: '10', guestId: 5, tableNumber: 2, pinned: false }))
 
     await waitFor(() => expect(tableOf(cached(queryClient)?.[1], 4)).toBe(2))
     hold.open()
@@ -394,7 +439,7 @@ describe('useDeleteAssignment (optimistic)', () => {
     const { result, queryClient } = renderHookWithClient(() => useDeleteAssignment())
     seedScenarios(queryClient)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 4 }))
+    act(() => result.current.mutate({ key: '10', guestId: 4 }))
 
     await waitFor(() =>
       expect(cached(queryClient)?.[1]?.plan.unseated.map((c) => c.clusterKey)).toEqual([31, 4]),
@@ -412,7 +457,7 @@ describe('useDeleteAssignment (optimistic)', () => {
     const { result, queryClient } = renderHookWithClient(() => useDeleteAssignment())
     seedScenarios(queryClient)
 
-    act(() => result.current.mutate({ capacity: 10, guestId: 4 }))
+    act(() => result.current.mutate({ key: '10', guestId: 4 }))
     await waitFor(() => expect(result.current.isError).toBe(true))
 
     expect(cached(queryClient)).toEqual(initial())
@@ -436,7 +481,7 @@ describe('table commands replace the scenario with the server copy', () => {
     const { result, queryClient } = renderHookWithClient(() => useAddTable())
     seedScenarios(queryClient)
 
-    await act(() => result.current.mutateAsync({ capacity: 10 }))
+    await act(() => result.current.mutateAsync({ key: '10' }))
 
     expect(cached(queryClient)?.[1]).toEqual(withTable)
     expect(cached(queryClient)?.[0]).toEqual(scenario9)
@@ -450,7 +495,7 @@ describe('table commands replace the scenario with the server copy', () => {
     const { result, queryClient } = renderHookWithClient(() => useDeleteTable())
     seedScenarios(queryClient)
 
-    await act(() => result.current.mutateAsync({ capacity: 10, tableNumber: 2 }))
+    await act(() => result.current.mutateAsync({ key: '10', tableNumber: 2 }))
 
     expect(api.calls).toHaveLength(1)
     expect(cached(queryClient)?.[1]).toEqual(without)
@@ -468,13 +513,29 @@ describe('useResetPlan', () => {
     const { result, queryClient } = renderHookWithClient(() => useResetPlan())
     seedScenarios(queryClient)
 
-    await act(() => result.current.mutateAsync({ capacity: 10 }))
+    await act(() => result.current.mutateAsync({ key: '10' }))
 
     expect(api.calls).toEqual([null])
     expect(cached(queryClient)?.[1]).toEqual(emptied())
     expect(cached(queryClient)?.[0]).toEqual(scenario9)
     expect(cached(queryClient)?.[2]).toEqual(scenario11)
     expect(cached(queryClient)?.[3]).toEqual(scenario12)
+    expect(cached(queryClient)?.[4]).toEqual(scenarioMixed)
+  })
+
+  it('resets the mixed plan through DELETE /scenarios/mixed/tables and replaces only that scenario', async () => {
+    const emptiedMixed = makeScenario('mixed', makePlan([], [maciek]), 7)
+    const api = mockApi('delete', '/scenarios/mixed/tables', () =>
+      HttpResponse.json(single(emptiedMixed)),
+    )
+    const { result, queryClient } = renderHookWithClient(() => useResetPlan())
+    seedScenarios(queryClient)
+
+    await act(() => result.current.mutateAsync({ key: 'mixed' }))
+
+    expect(api.calls).toEqual([null])
+    expect(cached(queryClient)?.[4]).toEqual(emptiedMixed)
+    expect(cached(queryClient)?.[1]).toEqual(scenario10())
   })
 
   it('rejects with the ApiError on 404 and leaves the caches alone', async () => {
@@ -485,7 +546,7 @@ describe('useResetPlan', () => {
     seedScenarios(queryClient)
 
     const error = await act(() =>
-      result.current.mutateAsync({ capacity: 10 }).catch((caught: unknown) => caught),
+      result.current.mutateAsync({ key: '10' }).catch((caught: unknown) => caught),
     )
 
     expect(error).toBeInstanceOf(ApiError)
@@ -503,7 +564,7 @@ describe('useResetPlan', () => {
 
     let pending!: Promise<unknown>
     act(() => {
-      pending = result.current.mutateAsync({ capacity: 10 })
+      pending = result.current.mutateAsync({ key: '10' })
     })
     await waitFor(() => expect(result.current.isPending).toBe(true))
     expect(cached(queryClient)?.[1]).toEqual(scenario10())

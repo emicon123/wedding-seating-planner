@@ -6,19 +6,27 @@ import { tableDropId, tableElementId } from '@/domain/dropTargets'
 import type { DropPreview } from '@/domain/dropPreview'
 import {
   dropHintLabel,
+  EMPTY_TABLE_LABEL,
   fillStatusLabel,
+  peopleCountLabel,
   preferredHereLabel,
   scoreLabel,
   sourceUnderFloorLabel,
+  tableSizeBadgeLabel,
   violationLabel,
 } from '@/domain/labels'
+import { isMixed, type PlanKind } from '@/domain/plans'
 import { sortPlacements } from '@/domain/planView'
+import { sizeAfterDrop, tableSize } from '@/domain/tableSizes'
 import { fillStatus } from '@/domain/tableStatus'
 import type { PlanTable, Violation } from '@/domain/types'
 import { ClusterChip } from '@/features/plans/ClusterChip'
 import { usePlanView } from '@/features/plans/planViewContext'
 import { TableSeats } from '@/features/plans/TableSeats'
 import { cn } from '@/lib/utils'
+
+/** Seats drawn at an empty mixed-plan table (nobody sits there, so it needs no size). */
+const FALLBACK_SEATS = 9
 
 export type DropHint = {
   preview: DropPreview
@@ -42,7 +50,7 @@ type TableCardProps = {
   compact: boolean
 }
 
-function DropHintBanner({ hint, capacity }: { hint: DropHint; capacity: number }) {
+function DropHintBanner({ hint, kind }: { hint: DropHint; kind: PlanKind }) {
   const { preview } = hint
   return (
     <div
@@ -58,7 +66,7 @@ function DropHintBanner({ hint, capacity }: { hint: DropHint; capacity: number }
         <>
           <p className="flex items-center gap-1.5 font-semibold">
             {preview.overCapacity && <TriangleAlertIcon className="size-4" />}
-            {dropHintLabel(preview, capacity)}
+            {dropHintLabel(preview, kind.capacity, sizeAfterDrop(preview.fillAfter, kind))}
           </p>
           <p className="text-white/85">{preferredHereLabel(preview.preferredHere)}</p>
           {preview.underFloorSource && hint.sourceNumber !== null && (
@@ -89,7 +97,10 @@ export const TableCard = memo(function TableCard({
   compact,
 }: TableCardProps) {
   const view = usePlanView()
-  const { capacity } = view
+  const { kind } = view
+  const { capacity } = kind
+  const mixed = isMixed(kind)
+  const size = tableSize(table.fill, kind)
   const { setNodeRef, isOver } = useDroppable({ id: tableDropId(table.number) })
   const status = fillStatus(table.fill, capacity, tableCount)
   const statusText = fillStatusLabel(status, table.fill, capacity)
@@ -114,21 +125,28 @@ export const TableCard = memo(function TableCard({
         status !== 'ok' && !isOver && !highlighted && 'border-brick/60',
       )}
     >
-      {hint && <DropHintBanner hint={hint} capacity={capacity} />}
+      {hint && <DropHintBanner hint={hint} kind={kind} />}
 
       <header className="flex items-start gap-3">
         <TableSeats
           number={table.number}
-          capacity={capacity}
+          capacity={mixed ? (size ?? FALLBACK_SEATS) : capacity}
           clusterSizes={clusterSizes}
           status={status}
           className={compact ? 'size-20' : 'size-24'}
         />
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-start justify-between gap-1">
-            <h3 id={`${tableElementId(table.number)}-nazwa`} className="text-lg font-semibold">
-              Stół {table.number}
-            </h3>
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <h3 id={`${tableElementId(table.number)}-nazwa`} className="text-lg font-semibold">
+                Stół {table.number}
+              </h3>
+              {mixed && size !== null && (
+                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+                  {tableSizeBadgeLabel(size)}
+                </span>
+              )}
+            </div>
             <Button
               type="button"
               variant="ghost"
@@ -147,8 +165,11 @@ export const TableCard = memo(function TableCard({
             )}
           >
             <span className="sr-only">Zajęte miejsca: </span>
-            {`${table.fill}/${capacity}`}
+            {mixed ? peopleCountLabel(table.fill) : `${table.fill}/${capacity}`}
           </p>
+          {mixed && size === null && (
+            <p className="text-xs text-muted-foreground">{EMPTY_TABLE_LABEL}</p>
+          )}
           {statusText && (
             <p className="flex items-start gap-1 text-xs font-semibold text-brick">
               <TriangleAlertIcon aria-hidden="true" className="mt-px size-3.5 shrink-0" />

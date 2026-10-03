@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { planContentsLabel } from '@/domain/labels'
+import { planTitle } from '@/domain/plans'
 import type { Scenario } from '@/domain/types'
 
 type DeletePlanDialogProps = {
@@ -31,9 +32,9 @@ function Progress() {
 }
 
 function contentsLine(scenario: Scenario): string {
-  const { capacity, plan } = scenario
+  const { key, plan } = scenario
   const contents = plan.summary.tableCount === 0 ? 'bez stołów' : planContentsLabel(plan.summary)
-  return `Plan ${capacity}-osobowy: ${contents}`
+  return key === 'mixed' ? `Plan mieszany: ${contents}` : `Plan ${key}-osobowy: ${contents}`
 }
 
 /**
@@ -60,10 +61,10 @@ export function DeletePlanDialog({
       <AlertDialog open onOpenChange={(open) => !open && close()}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Usunąć wszystkie cztery plany?</AlertDialogTitle>
+            <AlertDialogTitle>Usunąć wszystkie pięć planów?</AlertDialogTitle>
             <AlertDialogDescription>
               {scenarios.map((scenario) => (
-                <span key={scenario.capacity} className="block">
+                <span key={scenario.key} className="block">
                   {contentsLine(scenario)}
                 </span>
               ))}
@@ -110,12 +111,12 @@ export function DeletePlanDialog({
 
   const [scenario] = scenarios
   if (!scenario) return null
-  const { capacity, plan } = scenario
+  const { key, plan } = scenario
   return (
     <AlertDialog open onOpenChange={(open) => !open && close()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Usunąć plan na {capacity} miejsc?</AlertDialogTitle>
+          <AlertDialogTitle>Usunąć {planTitle(key)}?</AlertDialogTitle>
           <AlertDialogDescription>
             Plan ma {planContentsLabel(plan.summary)}. Stoły znikną, wszyscy trafią do pola „Bez
             stołu”. Pinezki znikną. Tego nie da się cofnąć.
@@ -137,7 +138,11 @@ export function DeletePlanDialog({
             className={DESTRUCTIVE}
           >
             {pending && <Progress />}
-            {pending ? 'Usuwam…' : `Usuń plan ${capacity}-osobowy`}
+            {pending
+              ? 'Usuwam…'
+              : key === 'mixed'
+                ? 'Usuń plan mieszany'
+                : `Usuń plan ${key}-osobowy`}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

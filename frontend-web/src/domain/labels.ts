@@ -4,12 +4,16 @@ import { MIN_TABLE_FILL, type DropPreview } from '@/domain/dropPreview'
 import type { GuestCounts } from '@/domain/guestList'
 import type { ViaReason } from '@/domain/linkColumns'
 import type { LinkDiff } from '@/domain/linkSelection'
+import { MIXED_KEY } from '@/domain/plans'
+import type { TablesNeeded, TableSize } from '@/domain/tableSizes'
+import { seatsTotal, tablesNeededLabel } from '@/domain/tableSizes'
 import type { FillStatus } from '@/domain/tableStatus'
 import type {
   DataWarning,
   ErrorCode,
   ErrorItem,
   LinkLevel,
+  PlanKey,
   PlanSummary,
   Violation,
 } from '@/domain/types'
@@ -154,11 +158,44 @@ export function fillStatusLabel(status: FillStatus, fill: number, capacity: numb
   return null
 }
 
-/** The hint over a hovered table while dragging (counts only, scores come from the server). */
-export function dropHintLabel(preview: DropPreview, capacity: number): string {
-  const base = `Po przeniesieniu: ${preview.fillAfter}/${capacity}`
-  return preview.overCapacity ? `${base}, za dużo osób` : base
+/**
+ * The hint over a hovered table while dragging (counts only, scores come from the server).
+ * `size` is given only for a mixed-plan table: the size the table would have after the drop.
+ */
+export function dropHintLabel(
+  preview: DropPreview,
+  capacity: number,
+  size?: TableSize | null,
+): string {
+  if (size === undefined) {
+    const base = `Po przeniesieniu: ${preview.fillAfter}/${capacity}`
+    return preview.overCapacity ? `${base}, za dużo osób` : base
+  }
+  const base = `Po przeniesieniu: ${peopleCountLabel(preview.fillAfter)}`
+  if (preview.overCapacity) return `${base}, za dużo osób`
+  return size === null ? base : `${base} → ${tableSizeBadgeLabel(size)}`
 }
+
+/** The short counter of a mixed-plan table, whose size follows its fill: "11 os." */
+export const peopleCountLabel = (count: number) => `${count} os.`
+
+/** The size badge of a table: "stół 11-os." */
+export const tableSizeBadgeLabel = (size: TableSize) => `stół ${size}-os.`
+
+/** A table of a mixed plan in print: "11-osobowy". */
+export const tableSizePrintLabel = (size: TableSize) => `${size}-osobowy`
+
+export const EMPTY_TABLE_LABEL = 'pusty — niepotrzebny'
+
+/** "Potrzebne stoły: 5 × 12, 3 × 11, 1 × 9 (102 miejsca)": what the venue must provide. */
+export function tablesNeededSummary(needed: TablesNeeded): string {
+  const seats = pluralPl(seatsTotal(needed), 'miejsce', 'miejsca', 'miejsc')
+  return `Potrzebne stoły: ${tablesNeededLabel(needed)} (${seats})`
+}
+
+/** The calm note on the mixed card when it spends one more table to leave fewer guests alone. */
+export const EXTRA_TABLE_NOTE = (isolatedMixed: number, isolatedTwelve: number) =>
+  `1 stół więcej niż plan 12 — mniej osób bez znajomych (${isolatedMixed} zamiast ${isolatedTwelve})`
 
 export function preferredHereLabel(count: number): string {
   return count === 0 ? 'Nikogo z grupy 1' : `${pluralPl(count, 'osoba', 'osoby', 'osób')} z grupy 1`
@@ -177,8 +214,12 @@ export function placeLabel(place: number | 'unseated' | 'disabled'): string {
 /** Task 007: the plans changed between reading them and storing the Generate (409, nothing stored). */
 export const GENERATE_CONFLICT_MESSAGE =
   'Plany zmieniły się w międzyczasie — kliknij „Generuj plany” jeszcze raz.'
-export const GENERATE_SAVED_MESSAGE = (capacities: readonly number[]) =>
-  `Zapisano nowe plany: ${capacities.join(', ')} miejsc.`
+export const GENERATE_SAVED_MESSAGE = (keys: readonly PlanKey[]) => {
+  const sizes = keys.filter((key) => key !== MIXED_KEY).join(', ')
+  return keys.includes(MIXED_KEY)
+    ? `Zapisano nowe plany: ${sizes} miejsc i mieszany.`
+    : `Zapisano nowe plany: ${sizes} miejsc.`
+}
 export const UNDO_DONE_MESSAGE = 'Przywrócono poprzednie plany.'
 export const UNDO_REFUSED_MESSAGE = 'Nie można cofnąć — plany zmieniono po wygenerowaniu.'
 

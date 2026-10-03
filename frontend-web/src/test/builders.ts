@@ -7,6 +7,7 @@ import type {
   ClusterPlacement,
   Guest,
   GuestLinkRef,
+  PlanKey,
   Scenario,
   SeatingPlan,
 } from '@/domain/types'
@@ -84,8 +85,11 @@ export function makePlan(tables: TableInput[], unseated: ClusterPlacement[] = []
   }
 }
 
-export function makeScenario(capacity: Capacity, plan: SeatingPlan, version = 1): Scenario {
-  return { capacity, version, plan }
+/** A stored plan. A number is the uniform plan of that capacity; 'mixed' has capacity 12. */
+export function makeScenario(which: Capacity | PlanKey, plan: SeatingPlan, version = 1): Scenario {
+  const key = String(which) as PlanKey
+  const capacity: Capacity = key === 'mixed' ? 12 : (Number(key) as Capacity)
+  return { key, capacity, version, plan }
 }
 
 /** The Maciek / Michał / Ola fixture from the contract examples (003-sequences flow 4). */
@@ -113,4 +117,17 @@ export function withoutViolations(plan: SeatingPlan): SeatingPlan {
     violations: [],
     summary: { ...plan.summary, violationCount: 0, needsRecalculation: false },
   }
+}
+
+/** One table per entry of `fills`, each with that many single guests; ids are unique per plan. */
+export function fillsPlan(fills: number[]): SeatingPlan {
+  let id = 1
+  const tables = fills.map((fill, index) => ({
+    number: index + 1,
+    clusters: Array.from({ length: fill }, () => {
+      const guestId = id++
+      return placement(guestId, [guestId])
+    }),
+  }))
+  return withoutViolations(makePlan(tables))
 }

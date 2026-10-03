@@ -10,9 +10,9 @@ import { ApiError } from '@/api/errors'
 import { keys } from '@/api/keys'
 import { applyMove, findPlacement } from '@/domain/optimistic'
 import { toScenariosReplace, versionsOf } from '@/domain/planView'
-import type { Capacity, GenerateUndo, Proposal, Scenario, ScenariosReplace } from '@/domain/types'
+import type { GenerateUndo, PlanKey, Proposal, Scenario, ScenariosReplace } from '@/domain/types'
 
-type CapacityArg = { capacity: Capacity }
+type PlanArg = { key: PlanKey }
 
 export function useScenarios() {
   return useQuery({
@@ -23,7 +23,7 @@ export function useScenarios() {
 
 function replaceScenario(queryClient: QueryClient, scenario: Scenario): void {
   queryClient.setQueryData<Scenario[]>(keys.scenarios, (current) =>
-    current?.map((existing) => (existing.capacity === scenario.capacity ? scenario : existing)),
+    current?.map((existing) => (existing.key === scenario.key ? scenario : existing)),
   )
 }
 
@@ -43,7 +43,7 @@ async function putScenarios(body: ScenariosReplace): Promise<Scenario[]> {
 }
 
 /**
- * "Generuj plany": read the four plans fresh (= the undo snapshot), compute the four proposals, and
+ * "Generuj plany": read the five plans fresh (= the undo snapshot), compute the five proposals, and
  * store them in one atomic PUT that names the snapshot's versions, so what is overwritten is exactly
  * the snapshot. Nothing is stored on any error. Toasts are the caller's job.
  */
@@ -61,11 +61,7 @@ export function useGeneratePlans() {
       const proposals: Proposal[] = (await unwrap(client.POST('/scenarios/calculate'))).data
       const stored = await putScenarios(
         toScenariosReplace(
-          proposals.map(({ capacity, plan }) => ({
-            capacity,
-            basedOnVersion: versions[capacity],
-            plan,
-          })),
+          proposals.map(({ key, plan }) => ({ key, basedOnVersion: versions[key], plan })),
         ),
       )
       return { stored, undo: { previous: snapshot, generatedVersions: versionsOf(stored) } }
@@ -110,9 +106,9 @@ export function useUndoGenerate() {
     mutationFn: async (undo: GenerateUndo): Promise<Scenario[]> =>
       putScenarios(
         toScenariosReplace(
-          undo.previous.map(({ capacity, plan }) => ({
-            capacity,
-            basedOnVersion: undo.generatedVersions[capacity],
+          undo.previous.map(({ key, plan }) => ({
+            key,
+            basedOnVersion: undo.generatedVersions[key],
             plan,
           })),
         ),
@@ -131,7 +127,7 @@ export function useUndoGenerate() {
 
 // --- moves: optimistic, rolled back on error (state machine §3 Saving / RolledBack) ----------
 
-type MoveVars = CapacityArg & { guestId: number }
+type MoveVars = PlanArg & { guestId: number }
 type MoveContext = { previous: Scenario | undefined }
 
 /**
@@ -149,7 +145,7 @@ function useOptimisticMove<V extends MoveVars>(
       await queryClient.cancelQueries({ queryKey: keys.scenarios })
       const previous = queryClient
         .getQueryData<Scenario[]>(keys.scenarios)
-        ?.find((scenario) => scenario.capacity === vars.capacity)
+        ?.find((scenario) => scenario.key === vars.key)
       if (previous) {
         const placement = findPlacement(previous.plan, vars.guestId)
         const { tableNumber, pinned } = target(vars)
@@ -176,11 +172,11 @@ type SetAssignmentVars = MoveVars & { tableNumber: number; pinned: boolean }
 /** Moves the guest's whole cluster to a table and sets its pin (also used to toggle the pin). */
 export function useSetAssignment() {
   return useOptimisticMove<SetAssignmentVars>(
-    async ({ capacity, guestId, tableNumber, pinned }) =>
+    async ({ key, guestId, tableNumber, pinned }) =>
       (
         await unwrap(
-          client.PUT('/scenarios/{capacity}/assignments/{guestId}', {
-            params: { path: { capacity, guestId } },
+          client.PUT('/scenarios/{planKey}/assignments/{guestId}', {
+            params: { path: { planKey: key, guestId } },
             body: { tableNumber, pinned },
           }),
         )
@@ -192,11 +188,11 @@ export function useSetAssignment() {
 /** Moves the guest's whole cluster back to the unseated tray. */
 export function useDeleteAssignment() {
   return useOptimisticMove<MoveVars>(
-    async ({ capacity, guestId }) =>
+    async ({ key, guestId }) =>
       (
         await unwrap(
-          client.DELETE('/scenarios/{capacity}/assignments/{guestId}', {
-            params: { path: { capacity, guestId } },
+          client.DELETE('/scenarios/{planKey}/assignments/{guestId}', {
+            params: { path: { planKey: key, guestId } },
           }),
         )
       ).data,
@@ -209,10 +205,10 @@ export function useDeleteAssignment() {
 export function useAddTable() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ capacity }: CapacityArg): Promise<Scenario> =>
+    mutationFn: async ({ key }: PlanArg): Promise<Scenario> =>
       (
         await unwrap(
-          client.POST('/scenarios/{capacity}/tables', { params: { path: { capacity } } }),
+          client.POST('/scenarios/{planKey}/tables', { params: { path: { planKey: key } } }),
         )
       ).data,
     onSuccess: (scenario) => replaceScenario(queryClient, scenario),
@@ -223,13 +219,13 @@ export function useDeleteTable() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({
-      capacity,
+      key,
       tableNumber,
-    }: CapacityArg & { tableNumber: number }): Promise<Scenario> =>
+    }: PlanArg & { tableNumber: number }): Promise<Scenario> =>
       (
         await unwrap(
-          client.DELETE('/scenarios/{capacity}/tables/{tableNumber}', {
-            params: { path: { capacity, tableNumber } },
+          client.DELETE('/scenarios/{planKey}/tables/{tableNumber}', {
+            params: { path: { planKey: key, tableNumber } },
           }),
         )
       ).data,
@@ -245,10 +241,10 @@ export function useDeleteTable() {
 export function useResetPlan() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ capacity }: CapacityArg): Promise<Scenario> =>
+    mutationFn: async ({ key }: PlanArg): Promise<Scenario> =>
       (
         await unwrap(
-          client.DELETE('/scenarios/{capacity}/tables', { params: { path: { capacity } } }),
+          client.DELETE('/scenarios/{planKey}/tables', { params: { path: { planKey: key } } }),
         )
       ).data,
     onSuccess: (scenario) => replaceScenario(queryClient, scenario),

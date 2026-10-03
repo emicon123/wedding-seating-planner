@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react'
 import { App } from '@/app/App'
 import { serveGuests } from '@/features/guests/fixtures'
-import { serveScenarios, fourScenarios } from '@/features/plans/fixtures'
+import { serveScenarios, fiveScenarios } from '@/features/plans/fixtures'
 import type { Scenario } from '@/domain/types'
 import { renderPage } from '@/test/renderPage'
 import { serveOpenSession } from '@/test/session'
@@ -37,13 +37,34 @@ describe('App shell under /wesele', () => {
     expect(screen.getByRole('link', { name: 'Plany' })).toHaveAttribute('aria-current', 'page')
   })
 
-  it.each(['/nie-ma-takiej-strony', '/plany/7', '/plany/abc', '/druk/13'])(
-    'redirects unknown route %s to Plans',
-    async (path) => {
-      renderAt(path)
-      expect(await screen.findByRole('heading', { level: 1, name: 'Plany' })).toBeInTheDocument()
-    },
-  )
+  it.each([
+    '/nie-ma-takiej-strony',
+    '/plany/7',
+    '/plany/abc',
+    '/plany/13',
+    '/plany/Mixed',
+    '/druk/13',
+  ])('redirects unknown route %s to Plans', async (path) => {
+    renderAt(path)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Plany' })).toBeInTheDocument()
+  })
+
+  it('opens the mixed plan at /plany/mixed and its print view at /druk/mixed', async () => {
+    renderAt('/plany/mixed', fiveScenarios())
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Plan mieszany' }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the mixed print view', async () => {
+    renderAt('/druk/mixed', fiveScenarios())
+    expect(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Plan stołów — mieszany (stoły 9–12-osobowe)',
+      }),
+    ).toBeInTheDocument()
+  })
 
   it('sends the retired 8-seat plan to the 9-seat plan instead of failing', async () => {
     renderAt('/plany/8')
@@ -53,14 +74,14 @@ describe('App shell under /wesele', () => {
   })
 
   it('sends the retired 8-seat print link to the 9-seat print view', async () => {
-    renderAt('/druk/8', fourScenarios())
+    renderAt('/druk/8', fiveScenarios())
     expect(
       await screen.findByRole('heading', { level: 1, name: /Plan stołów, 9 miejsc/ }),
     ).toBeInTheDocument()
   })
 
   it('renders the print view without the app chrome', async () => {
-    renderAt('/druk/12', fourScenarios())
+    renderAt('/druk/12', fiveScenarios())
     expect(
       await screen.findByRole('heading', { level: 1, name: /Plan stołów, 12 miejsc/ }),
     ).toBeInTheDocument()
