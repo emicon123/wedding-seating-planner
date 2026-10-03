@@ -80,6 +80,7 @@ buildGuestIndex(guests: Guest[]): GuestIndex                    // byId, search(
 // domain/companions.ts
 effectiveCompanions(guestId, guests, overview): Companion[]     // {guestId, level, via?: guestId}: group 0 = the server's cluster
 clusterOf(guestId, overview): Cluster
+sortByCluster(guests, overview | undefined): Guest[]             // default guest-list order: group 0, then group 1 (§11)
 // domain/linkColumns.ts
 linkColumns(guestId, guests, overview): Record<LinkLevel, ColumnEntry[]>  // own links first, then derived ({via, reason: 'cluster'|'link'})
 warningsForGuest(guestId, overview): DataWarning[]
@@ -387,3 +388,66 @@ createQueryClient(): new QueryClient({
 **Tests (B2):** MSW: `useSession` maps 200/401; a page query answering 401 `unauthenticated` → PIN screen appears, other caches are emptied, URL unchanged; correct PIN (MSW returns 200) → the same route renders and refetches; wrong PIN → "Zły PIN", field cleared; 429 with `Retry-After: 30` → message + disabled button + countdown (fake timers); "Wyloguj" visible only when `pinRequired: true`, click → DELETE sent, PIN screen, cache cleared; `client` sends `X-Stoliki-Request: 1` (assert in an MSW handler); a 401 is never retried; `druk/10` is gated too.
 
 Pattern check: the global `QueryCache`/`MutationCache` `onError` is TanStack's built-in interception point, so no custom event bus, no auth context/reducer, no Zustand. `AccessGate` is a plain route element (no HOC per page).
+
+## 11. Guest list order: group 0, then group 1 (task 010)
+
+User requirement (2026-10-03): the plain guest list is grouped **first by group 0, second by group 1**. Pure display logic in `domain/companions.ts` (`sortByCluster`, same signature, still pure); no API, contract or DB change.
+
+**Scope.** `GuestsPage` applies the order only to the **default list**: empty search and no "Powiązani z" filter (unchanged call site). Search hits keep their ranking; "Powiązani z: X" keeps relation order. The other filters (Włączeni/Wyłączeni, Dzieci, group filter) are applied **first** by `filterGuests`; the order is then computed over the guests that remain **visible** (the function's `guests` argument). Nothing is ever computed from guests that are not in the argument.
+
+**Definitions** (all over the visible guests only)
+
+- *Unit* = a group-0 cluster from `GET /clusters` that has at least one visible member. A visible guest the overview does not know (stale overview right after an add) is a unit of one, with key = its guest id and no affinities. Unit key: `cluster.key` (= smallest member id, so it never collides with a lone guest's id).
+- *Unit name* = the Polish-collated (`Intl.Collator('pl')`) first `displayName` among the unit's **visible** members. Hidden members are ignored (see problem 1).
+- *Unit order* `≺`: by unit name (Polish collation), ties by unit key ascending. Total and deterministic.
+- *Partner graph* = undirected graph on units: `U — V` iff `U.affinities` contains `{clusterKey: V.key, level: 1}` **or** `V.affinities` contains `{clusterKey: U.key, level: 1}` (read both sides; the server lists it symmetrically, the client does not depend on that). **Level 2 is ignored.** Affinities whose `clusterKey` is not a unit (no visible member, or unknown key) are ignored, and the graph is **not** closed transitively through them: if A—X—C and X is hidden, A and C are unconnected.
+
+**Ordering rule**
+
+1. Split the partner graph into connected components. A unit with no level-1 partner is a component of one.
+2. Each component's *root* is its `≺`-smallest unit. Components are ordered by their root (`≺`). With no level-1 affinities this is exactly today's order.
+3. Inside a component, units follow a **depth-first preorder from the root, neighbours taken in `≺` order**: place the unit; then, for each of its neighbours in `≺` order that is not placed yet, recurse. In words: continue with the alphabetically first not-yet-placed partner of the unit just placed; when it has none left, go back to the most recent placed unit that still has one. (Depth-first, not breadth-first: a chain A–C–E reads A, C, E and partners stay adjacent as often as a linear list allows.) An iterative stack is fine; recursion depth is at most the number of units (≈ 100), also fine.
+4. Inside a unit, members are ordered by `displayName` (Polish collation), ties by guest id (unchanged).
+5. Output: a **new** array (input not mutated); `overview === undefined` → return the input array as is (unchanged).
+
+Guarantees: (a) every unit's visible members are contiguous (group 0, primary); (b) every level-1 component is contiguous (group 1, secondary); (c) the result depends only on the *sets* of visible guests, clusters and affinities, not on the order of any input array. Not guaranteed: that every pair of partners is adjacent — impossible in a list (a star's centre has only two neighbours in the list).
+
+```mermaid
+flowchart TD
+    A["visible guests + ClusterOverview"] --> B["units: clusters with ≥1 visible member;<br/>unknown guests = units of one"]
+    B --> C["unit name = first visible member (pl collation);<br/>≺ = (name, key)"]
+    C --> D["partner graph: level-1 affinities between units,<br/>both directions; level 2 and hidden units ignored"]
+    D --> E["components; root = ≺-smallest unit;<br/>components ordered by root"]
+    E --> F["per component: DFS preorder from root,<br/>neighbours in ≺ order"]
+    F --> G["emit each unit's visible members by (name, id)"]
+```
+
+Legend: no GoF pattern — a pure function with a small graph walk (KISS). Rejected: a Strategy for "sort modes" or a user-facing sort control (the task asks for one fixed order; YAGNI); using level 2 as a third key (not requested; it would merge most of the list into a few large blocks); weighting/optimising adjacency (e.g. a Hamiltonian-path search) — DFS is predictable and good enough.
+
+**Visual cue:** none in this task. Each row already shows its group-1 partners (`summariseRelations`), which explains why neighbours are together; a divider between components would need `GuestList` to know block boundaries (signature change) for little gain. Revisit only if the user asks.
+
+**Worked examples / test cases (`domain/companions.test.ts`, `describe('sortByCluster')`).** Fixture: clusters of one named Ala (key 1), Bartek (2), Celina (3), Darek (4), Ewa (5), Franek (6) unless stated; "A–C" = a level-1 affinity between those clusters (listed on both sides unless stated).
+
+| # | Case | Input | Expected |
+|---|---|---|---|
+| 1 | No affinities: unchanged | none | Ala, Bartek, Celina, Darek, Ewa, Franek; the four existing tests stay green as they are |
+| 2 | Chain | A–C, C–E | Ala, Celina, Ewa, Bartek, Darek, Franek |
+| 3 | Star | D–A, D–C, D–F | Ala, Darek, Celina, Franek, Bartek, Ewa |
+| 4 | Cycle | A–B, B–C, C–A | Ala, Bartek, Celina, Darek, Ewa, Franek (no repeats, no infinite loop) |
+| 5 | Depth-first, not breadth-first | A–B, A–C, B–D | Ala, Bartek, Darek, Celina, Ewa, Franek (BFS would give Ala, Bartek, Celina, Darek) |
+| 6 | Level 2 not used | A–E at level 2 only | same as #1 |
+| 7 | Hidden neighbour does not drag or bridge | A–X, X–C at level 1, X = cluster "Xawery" (key 7) whose only member is not in `guests` | same as #1 (Xawery absent) |
+| 8 | Group 0 still primary | cluster {Zosia 8, Adam 9} (key 8) plus E–Z (Ewa ↔ that cluster) | Adam, Zosia, Ewa, Ala, Bartek, Celina, Darek, Franek ("Adam" ≺ "Ala") — whole cluster contiguous, members by name, partner follows the cluster |
+| 9 | Hidden member does not name the unit (regression, problem 1) | cluster {Aaron 10 (filtered out), Wiktor 11} (key 10) | Wiktor sorts as "Wiktor" (after Franek), not first |
+| 10 | One-sided affinity | A–E listed only in Ala's `affinities` | Ala, Ewa, Bartek, … (graph is undirected) |
+| 11 | Unknown `clusterKey` | Ala has affinity `{clusterKey: 999, level: 1}` | same as #1 |
+| 12 | Guest unknown to the overview | an extra visible guest "Celina" (id 20) not in any cluster | a unit of one; tie with Celina (key 3) broken by key: 3 then 20 |
+| 13 | Determinism | case #3 with `guests`, `overview.clusters` and each `affinities` array shuffled / reversed | identical output |
+| 14 | Input not mutated, new array; `undefined` overview returns the input | — | as today |
+
+**Problems with the interpretation (flagged for the orchestrator/user):**
+
+1. **Latent bug today.** Current `sortByCluster` names a cluster from *all* its members, using `''` for members missing from `guests`. With any filter that hides a member (e.g. "Wyłączeni" off, "Dzieci"), that cluster gets the name `''` and jumps to the top of the list. The rule above (unit name from visible members only) fixes it; test #9 covers it.
+2. **One big block.** If group-1 links chain much of the guest list together (A wants B, B wants C, …), the whole chain is one component and reads in DFS order, not alphabetically. That is what "second by group 1" means; finding a person by name stays the job of the search box (which keeps its own ranking).
+3. **Hidden bridge splits a block.** Per the task, an affinity through a hidden cluster does not connect its partners (test #7), so changing a filter can reorder blocks. Accepted: the list shows what is visible.
+4. **Affinity is cluster-level** (03-seating-model § "Who counts"): a level-1 link of *any* member, disabled ones included, makes the whole clusters partners. So a family can be placed next to another family because of one disabled member's link. Consistent with the seating model; no change.
