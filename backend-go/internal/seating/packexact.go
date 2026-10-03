@@ -27,7 +27,7 @@ type exactSearch struct {
 // packExact is the fallback when the greedy packings miss a tight fit: a
 // bounded depth-first search over cluster *sizes* (not clusters) that finds an
 // assignment of the unpinned items to k tables with every fill in
-// [Floor, capacity] (floor waived when k = 1), honouring pins like pack.
+// [it.floor, capacity] (floor waived when k = 1), honouring pins like pack.
 // It ignores affinity (improve optimises afterwards). Returns nil when no
 // packing exists or the node budget is exhausted.
 func packExact(it items, k int, pins map[int]int) *layout {
@@ -57,7 +57,7 @@ func packExact(it items, k int, pins map[int]int) *layout {
 	s := &exactSearch{capacity: it.capacity, k: k, start: append([]int(nil), l.fill...), budget: exactBudget,
 		failed: map[exactKey]bool{}, picked: make([][]int, k)}
 	if k > 1 {
-		s.floor = Floor
+		s.floor = it.floor
 	}
 	if !s.table(0, counts) {
 		return nil

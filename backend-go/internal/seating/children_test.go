@@ -296,11 +296,11 @@ func TestChildrenDeltasHandBuilt(t *testing.T) {
 		// X = {1,2} children only; a = 3 -1- b = 4; table 0: X, 3; table 1: 4, 5.
 		g := BuildGraph(kids(enabledRange(1, 5), 1, 2), links(chain(1, 2), []Link{lk(3, 4, Preferred)}))
 		l := isoLayout(g, 12, 2, map[GuestID]int{1: 0, 3: 0, 4: 1, 5: 1})
-		x, a, b := l.it.idx[1], l.it.idx[3], l.it.idx[4]
+		x, b := l.it.idx[1], l.it.idx[4]
 		if d := checkSwapDelta(t, l, x, b); d.iso != -2 { // X <-> 4: 4 joins 3, both stop being isolated
 			t.Errorf("swap X<->b delta = %+v, want iso -2", d)
 		}
-		checkSwapDelta(t, l, x, a)
+		checkSwapDelta(t, l, x, l.it.idx[5]) // X <-> 5, the same shape without the acquaintance
 	})
 }
 
@@ -335,7 +335,7 @@ func TestObjectiveDeltasMatchRecomputeWithChildren(t *testing.T) {
 		guests, ls := childInstance(r)
 		g := BuildGraph(guests, ls)
 		capacity := []int{9, 10, 11, 12}[seed%4]
-		it := newItems(g, capacity)
+		it := newItems(g, capacity, false)
 		for a := range it.adults {
 			if it.adults[a] == 0 {
 				childOnly++
@@ -374,8 +374,8 @@ func TestObjectiveDeltasMatchRecomputeWithChildren(t *testing.T) {
 				o := l.objective()
 				isolatedSeen += o.iso
 				ev := Evaluate(g, l.toPlan())
-				if ev.Summary.Score != float64(o.score) || ev.Summary.Isolated != o.iso {
-					t.Fatalf("seed %d: Evaluate score/isolated %v/%d, objective %+v", seed, ev.Summary.Score, ev.Summary.Isolated, o)
+				if ev.Summary.Score != float64(o.score) || ev.Summary.Isolated != o.iso || ev.Summary.StrangerPairs != o.str {
+					t.Fatalf("seed %d: Evaluate score/isolated/strangers %v/%d/%d, objective %+v", seed, ev.Summary.Score, ev.Summary.Isolated, ev.Summary.StrangerPairs, o)
 				}
 			}
 		}
@@ -458,7 +458,7 @@ func exampleH(dropAdult bool) Graph {
 }
 
 func TestProposeChildrenExampleHMixed(t *testing.T) {
-	t.Run("one adult and two children: isolation counts adults, still three tables", func(t *testing.T) {
+	t.Run("one adult and two children: isolation counts adults (the old k0+1 rule is gone)", func(t *testing.T) {
 		g := exampleH(false)
 		uni := Propose(g, emptyPlan(12))
 		uev := assertHardRules(t, g, uni)
@@ -467,8 +467,10 @@ func TestProposeChildrenExampleHMixed(t *testing.T) {
 		}
 		p := Propose(g, mixedPlan())
 		ev := assertHardRules(t, g, p)
-		if len(p.Tables) != 3 || ev.Summary.Isolated != 0 || !seatedAtSameTable(p, 1, 4) {
-			t.Errorf("mixed: %d tables, %d isolated, want 3 and 0 with M next to P (fills %v)", len(p.Tables), ev.Summary.Isolated, fills(ev))
+		// task 015: the mixed plan has no isolation-only extra table; N = 24 allows k = 2 only
+		// (floor 9), and there the best bilans is the plan-12-like layout
+		if len(p.Tables) != 2 {
+			t.Errorf("mixed: %d tables, want 2 (k in [2, 2] at N = 24; fills %v)", len(p.Tables), fills(ev))
 		}
 	})
 	t.Run("M has no adult enabled: nobody is isolated, the mixed plan keeps two tables", func(t *testing.T) {

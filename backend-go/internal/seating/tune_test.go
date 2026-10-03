@@ -3,6 +3,7 @@ package seating
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ func TestTuneAnnealBudget(t *testing.T) {
 		var restarts, iters int
 		fmt.Sscanf(spec, "%d:%d", &restarts, &iters)
 		for _, capacity := range tuneCaps() {
-			it := newItems(g, capacity)
+			it := newItems(g, capacity, false)
 			var found []objective
 			var elapsed time.Duration
 			kk := 0
@@ -107,4 +108,68 @@ func loadIDsGraph(tb testing.TB, path string) Graph {
 		ls = append(ls, Link{A: x.A, B: x.B, Level: x.Level})
 	}
 	return BuildGraph(guests, ls)
+}
+
+// TestTuneStrangerWeight reports the objective Propose reaches on generated (instance, capacity)
+// cases, for the current annealStrangerWeight (change the constant and re-run; task 015).
+// Skipped unless STOLIKI_TUNE_STR is set. Totals: lower isolated, then lower stranger pairs, is
+// better; `partition` cases have a stranger-free optimum (S-P2).
+func TestTuneStrangerWeight(t *testing.T) {
+	if os.Getenv("STOLIKI_TUNE_STR") == "" {
+		t.Skip("set STOLIKI_TUNE_STR=1")
+	}
+	var tot objective
+	partitionMiss, partitionTotal := 0, 0
+	start := time.Now()
+	for seed := int64(1); seed <= 30; seed++ {
+		r := rand.New(rand.NewSource(seed))
+		guests, ls := partitionInstance(r, 2+r.Intn(3))
+		g := BuildGraph(guests, ls)
+		o := triple(Evaluate(g, Propose(g, emptyPlan(12))))
+		partitionTotal++
+		if o.str != 0 || o.iso != 0 {
+			partitionMiss++
+		}
+		tot.iso += o.iso
+		tot.str += o.str
+		tot.score += o.score
+	}
+	for seed := int64(1); seed <= 6; seed++ {
+		r := rand.New(rand.NewSource(100 + seed))
+		guests, ls := childInstance(r)
+		g := BuildGraph(guests, ls)
+		for _, capacity := range []int{10, 12} {
+			o := triple(Evaluate(g, Propose(g, emptyPlan(capacity))))
+			tot.iso += o.iso
+			tot.str += o.str
+			tot.score += o.score
+		}
+	}
+	for _, g := range []Graph{annealFixture(), tightFixture(4), tightFixture(5)} {
+		for _, capacity := range []int{9, 10, 11, 12} {
+			o := triple(Evaluate(g, Propose(g, emptyPlan(capacity))))
+			t.Logf("fixture cap %d: %+v", capacity, o)
+			tot.iso += o.iso
+			tot.str += o.str
+			tot.score += o.score
+		}
+	}
+	t.Logf("annealStrangerWeight=%v: isolated %d, stranger pairs %d, score %d; partition cases missing 0: %d/%d; %v",
+		annealStrangerWeight, tot.iso, tot.str, tot.score, partitionMiss, partitionTotal, time.Since(start).Round(time.Second))
+}
+
+// TestTuneLongRun prints the objective of a long search (restarts x steps from the packed start)
+// for the fixtures whose best known triple the tests pin. Skipped unless STOLIKI_TUNE_LONG is set.
+func TestTuneLongRun(t *testing.T) {
+	if os.Getenv("STOLIKI_TUNE_LONG") == "" {
+		t.Skip("set STOLIKI_TUNE_LONG=1")
+	}
+	for name, g := range map[string]Graph{"annealFixture": annealFixture(), "tight4": tightFixture(4)} {
+		it := newItems(g, 12, false)
+		for rep := 0; rep < 3; rep++ {
+			l := startLayout(it)
+			optimiseWith(l, 96, 3_000_000, 1000*rep)
+			t.Logf("%s cap 12 long run %d: %+v", name, rep, l.objective())
+		}
+	}
 }

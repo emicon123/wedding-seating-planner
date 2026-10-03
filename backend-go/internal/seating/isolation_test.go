@@ -9,7 +9,7 @@ import (
 // ---- deltas vs recomputed objective ---------------------------------------
 
 func objDiff(after, before objective) delta {
-	return delta{iso: after.iso - before.iso, score: after.score - before.score}
+	return delta{iso: after.iso - before.iso, str: after.str - before.str, score: after.score - before.score}
 }
 
 // checkMoveDelta asserts moveDelta(a, tb) == objective(after) - objective(before)
@@ -46,7 +46,7 @@ func checkSwapDelta(t *testing.T, l *layout, a, b int) delta {
 
 // isoLayout builds a layout from a graph and a table index per cluster key.
 func isoLayout(g Graph, capacity, k int, tableOfKey map[GuestID]int) *layout {
-	it := newItems(g, capacity)
+	it := newItems(g, capacity, false)
 	l := newLayout(it, k)
 	for key, tb := range tableOfKey {
 		l.place(it.idx[key], tb)
@@ -119,8 +119,10 @@ func TestIsolationDeltasHandBuilt(t *testing.T) {
 	t.Run("D8 item without partners and without neighbours", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 4), []Link{lk(1, 2, Preferred)})
 		l := isoLayout(g, 12, 2, map[GuestID]int{1: 0, 2: 0, 3: 0, 4: 1})
-		if d := checkMoveDelta(t, l, l.it.idx[3], 1); d != (delta{}) {
-			t.Errorf("delta = %+v, want zero", d)
+		// iso and score do not change; since task 015 the stranger pairs do (3 meets 1 and 2 at
+		// table 0, only 4 at table 1: 2 -> 1)
+		if d := checkMoveDelta(t, l, l.it.idx[3], 1); d != (delta{str: -1}) {
+			t.Errorf("delta = %+v, want only str -1", d)
 		}
 	})
 	t.Run("D9 item whose only partner is oversized is isolated everywhere", func(t *testing.T) {
@@ -149,7 +151,7 @@ func TestObjectiveDeltasMatchRecompute(t *testing.T) {
 		guests, ls := randomInstance(r)
 		g := BuildGraph(guests, ls)
 		capacity := []int{9, 10, 11, 12}[seed%4]
-		it := newItems(g, capacity)
+		it := newItems(g, capacity, false)
 		k := minTables(it.total, capacity)
 		if k < 2 {
 			k = 2
@@ -186,8 +188,8 @@ func TestObjectiveDeltasMatchRecompute(t *testing.T) {
 				o := l.objective()
 				isolatedSeen += o.iso
 				ev := Evaluate(g, l.toPlan())
-				if ev.Summary.Score != float64(o.score) || ev.Summary.Isolated != o.iso {
-					t.Fatalf("seed %d: Evaluate score/isolated %v/%d, objective %+v", seed, ev.Summary.Score, ev.Summary.Isolated, o)
+				if ev.Summary.Score != float64(o.score) || ev.Summary.Isolated != o.iso || ev.Summary.StrangerPairs != o.str {
+					t.Fatalf("seed %d: Evaluate score/isolated/strangers %v/%d/%d, objective %+v", seed, ev.Summary.Score, ev.Summary.Isolated, ev.Summary.StrangerPairs, o)
 				}
 			}
 		}
@@ -365,7 +367,7 @@ func TestProposeFewestTablesBeatsIsolation(t *testing.T) {
 		t.Errorf("%d tables, %d isolated; want 2 tables and 8 isolated (M and P cannot share 4 free seats)", len(p.Tables), ev.Summary.Isolated)
 	}
 	// the diagnostic primitive: three tables of exactly 8 remove the isolation
-	it := newItems(g, 12)
+	it := newItems(g, 12, false)
 	l, _ := feasibleAt(it, 3, nil)
 	if l == nil {
 		t.Fatal("k+1 = 3 must be feasible")
@@ -420,7 +422,7 @@ func TestProposeIsLocallyOptimalForIsolation(t *testing.T) {
 		guests, ls := randomInstance(rand.New(rand.NewSource(seed)))
 		g := BuildGraph(guests, ls)
 		for _, capacity := range []int{9, 10, 11, 12} {
-			it := newItems(g, capacity)
+			it := newItems(g, capacity, false)
 			var l *layout
 			for k := minTables(it.total, capacity); l == nil && k*Floor <= it.total; k++ {
 				l, _ = feasibleAt(it, k, nil)

@@ -130,7 +130,7 @@ func toScenario(ev scenarios.Evaluated) oapi.Scenario {
 		Key:      oapi.PlanKey(ev.State.Key().String()),
 		Capacity: oapi.Capacity(ev.State.Plan.Capacity),
 		Version:  &version,
-		Plan:     toSeatingPlan(ev.State.Plan.Capacity, ev.Eval),
+		Plan:     toSeatingPlan(ev.State.Plan, ev.Eval),
 	}
 }
 
@@ -140,13 +140,13 @@ func toProposal(p scenarios.Proposal) oapi.Proposal {
 		Key:            oapi.PlanKey(scenarios.Key{Capacity: p.Plan.Capacity, Mixed: p.Plan.Mixed}.String()),
 		Capacity:       oapi.Capacity(p.Plan.Capacity),
 		BasedOnVersion: int(p.BasedOnVersion),
-		Plan:           toSeatingPlan(p.Plan.Capacity, p.Eval),
+		Plan:           toSeatingPlan(p.Plan, p.Eval),
 	}
 }
 
 // toSeatingPlan maps an evaluation. Every list is [] and never null; every table number that
 // can be absent (unseated guest, violation not about one table) is an explicit JSON null.
-func toSeatingPlan(capacity int, ev seating.Evaluation) oapi.SeatingPlan {
+func toSeatingPlan(plan seating.Plan, ev seating.Evaluation) oapi.SeatingPlan {
 	out := oapi.SeatingPlan{
 		Summary: oapi.PlanSummary{
 			TableCount:         ev.Summary.TableCount,
@@ -180,7 +180,7 @@ func toSeatingPlan(capacity int, ev seating.Evaluation) oapi.SeatingPlan {
 	for i, v := range ev.Violations {
 		out.Violations[i] = oapi.Violation{
 			Code:        oapi.ViolationCode(v.Code),
-			Message:     violationMessage(v, capacity, fills),
+			Message:     violationMessage(v, plan.Capacity, seating.FloorOf(plan), fills),
 			TableNumber: nullableTable(v.Table),
 			GuestIds:    nonNil(v.Guests),
 		}
@@ -206,12 +206,12 @@ func nullableTable(n int) nullable.Nullable[int] {
 
 // violationMessage is an English summary built from counts only (never guest names); the UI
 // maps `code` to Polish text.
-func violationMessage(v seating.Violation, capacity int, fills map[int]int) string {
+func violationMessage(v seating.Violation, capacity, floor int, fills map[int]int) string {
 	switch v.Code {
 	case seating.ViolOverCapacity:
 		return fmt.Sprintf("Table %d has %d guests (capacity %d).", v.Table, fills[v.Table], capacity)
 	case seating.ViolUnderFloor:
-		return fmt.Sprintf("Table %d has %d guests (minimum %d).", v.Table, fills[v.Table], seating.Floor)
+		return fmt.Sprintf("Table %d has %d guests (minimum %d).", v.Table, fills[v.Table], floor)
 	case seating.ViolClusterSplit:
 		return "A group-0 cluster is split across several tables."
 	case seating.ViolUnseated:

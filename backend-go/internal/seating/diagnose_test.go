@@ -10,7 +10,7 @@ import (
 
 // diagnoseLines reports, per capacity 9..12 and without pins, the isolated guests
 // of the proposed plan (k tables) and the same for k + 1 tables when that is
-// feasible and (k+1)*Floor <= N. Ids and counts only, never names. Not a product
+// feasible and (k+1)*Floor <= N, then the mixed plan (task 015). Ids and counts only, never names. Not a product
 // feature: the user decides whether an extra table is worth it (task 011).
 func diagnoseLines(g Graph) []string {
 	var out []string
@@ -37,13 +37,13 @@ func diagnoseLines(g Graph) []string {
 		if len(parts) > 0 {
 			clusters = " (clusters: " + strings.Join(parts, "; ") + ")"
 		}
-		return fmt.Sprintf("cap=%d k=%d isolated=%d%s score=%v", capacity, k, ev.Summary.Isolated, clusters, ev.Summary.Score)
+		return fmt.Sprintf("cap=%d k=%d isolated=%d%s score=%v strangers=%d", capacity, k, ev.Summary.Isolated, clusters, ev.Summary.Score, ev.Summary.StrangerPairs)
 	}
 	for _, capacity := range []int{9, 10, 11, 12} {
 		p := Propose(g, Plan{Capacity: capacity})
 		k := len(p.Tables)
 		out = append(out, describe(capacity, k, p))
-		it := newItems(g, capacity)
+		it := newItems(g, capacity, false)
 		if k == 0 || (k+1)*Floor > it.total {
 			continue
 		}
@@ -53,6 +53,11 @@ func diagnoseLines(g Graph) []string {
 			out = append(out, fmt.Sprintf("cap=%d k=%d infeasible", capacity, k+1))
 		}
 	}
+	// task 015: the mixed plan's own table count, fills and bilans (counts only)
+	mp := Propose(g, Plan{Capacity: 12, Mixed: true})
+	mev := Evaluate(g, mp)
+	out = append(out, fmt.Sprintf("mixed k=%d fills=%v isolated=%d score=%v strangers=%d bilans=%d",
+		len(mp.Tables), fills(mev), mev.Summary.Isolated, mev.Summary.Score, mev.Summary.StrangerPairs, bilansOf(mev)))
 	return out
 }
 

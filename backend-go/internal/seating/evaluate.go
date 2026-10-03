@@ -38,6 +38,10 @@ type Summary struct {
 	// Isolated counts the seated enabled adults who are isolated (see
 	// GuestScore.Isolated). Go only: the API derives it from satisfaction < 0.
 	Isolated int
+	// StrangerPairs counts the pairs of seated enabled adults of different clusters at one
+	// table with no group-1/2 affinity between the clusters (task 015) = half the sum of
+	// the adults' StrangersAtTable. Go only: the client derives it.
+	StrangerPairs int
 }
 
 // TableEval is the evaluation of one table.
@@ -106,6 +110,7 @@ func Evaluate(g Graph, p Plan) Evaluation {
 	hasPartner := g.hasPartners()
 	ev := Evaluation{Tables: make([]TableEval, len(p.Tables))}
 	var scores []GuestScore
+	strangerTwice := 0 // every pair is seen from both ends
 
 	for ti, t := range p.Tables {
 		keys := sortedClusterKeys(atTable[ti])
@@ -150,6 +155,7 @@ func Evaluate(g Graph, p Plan) Evaluation {
 					Isolated: isolated,
 				})
 				te.Score += sat
+				strangerTwice += strangers
 				if isolated {
 					ev.Summary.Isolated++
 				}
@@ -159,6 +165,8 @@ func Evaluate(g Graph, p Plan) Evaluation {
 		ev.Summary.Score += te.Score
 		ev.Summary.Seated += te.Fill
 	}
+
+	ev.Summary.StrangerPairs = strangerTwice / 2
 
 	// Unseated enabled guests, per cluster in key order.
 	var unseatedAll []GuestID
@@ -204,7 +212,7 @@ func (g Graph) violations(p Plan, tables []TableEval, tableOf map[GuestID]int, u
 		switch {
 		case te.Fill > p.Capacity:
 			vs = append(vs, Violation{Code: ViolOverCapacity, Table: te.Number, Guests: sortedIDs(guests)})
-		case k > 1 && te.Fill < Floor:
+		case k > 1 && te.Fill < FloorOf(p):
 			vs = append(vs, Violation{Code: ViolUnderFloor, Table: p.Tables[ti].Number, Guests: sortedIDs(guests)})
 		}
 	}

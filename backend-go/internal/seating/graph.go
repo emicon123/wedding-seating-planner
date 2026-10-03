@@ -27,8 +27,24 @@ const (
 )
 
 // Floor is the minimum number of enabled guests at a table when the plan has
-// more than one table.
+// more than one table (the four uniform plans).
 const Floor = 8
+
+// MixedFloor is the same minimum in the mixed plan (task 015).
+const MixedFloor = 9
+
+// StrangerPenalty (lambda) is the satisfaction each adult of a stranger pair loses in the
+// mixed plan's bilans, bilans = score - 2*StrangerPenalty*stranger pairs (task 015). Integer.
+const StrangerPenalty = 1
+
+// FloorOf is the minimum fill per table of a plan with more than one table. One function,
+// used by Evaluate and by the optimiser (items.floor).
+func FloorOf(p Plan) int {
+	if p.Mixed {
+		return MixedFloor
+	}
+	return Floor
+}
 
 // IsolationPenalty is the satisfaction taken from each isolated guest: a seated
 // guest whose cluster has partners (group-1/2 affinity) but none at the table

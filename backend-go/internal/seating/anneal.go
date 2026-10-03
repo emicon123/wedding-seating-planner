@@ -26,7 +26,15 @@ const (
 	// freezes the walk inside isolation barriers. 1 keeps the knob alive and costs
 	// nothing against 0.
 	annealIsoWeight float64 = 1
-	splitmixStep    uint64  = 0x9E3779B97F4A7C15
+	// annealStrangerWeight: the same kind of walk-only knob for one added stranger pair
+	// (task 015), lexicographic order only; the mixed plan's walk uses the true bilans. Measured
+	// with TestTuneStrangerWeight on 30 stranger-free-partition instances, 12 random child
+	// instances and annealFixture / tightFixture(4) / tightFixture(5) at capacities 9-12 (total
+	// stranger pairs left, isolated adults equal throughout: 78): w=0: 2056, 1: 2023, 2: 2017,
+	// 4: 2017, 8: 2029 (every w finds the 0-stranger partitions). 2 is the lowest of the flat
+	// optimum (and the design's value: one stranger pair weighs like one group-1 pair of singles).
+	annealStrangerWeight float64 = 2
+	splitmixStep         uint64  = 0x9E3779B97F4A7C15
 )
 
 // prng is a self-contained splitmix64 generator.
@@ -57,15 +65,18 @@ func restartPRNG(i int) *prng {
 // clone is an independent copy of the layout (the items table is shared, it is read-only).
 func (l *layout) clone() *layout {
 	c := &layout{
-		it:     l.it,
-		k:      l.k,
-		assign: append([]int(nil), l.assign...),
-		fill:   append([]int(nil), l.fill...),
-		affTo:  make([][]int, len(l.affTo)),
-		pinned: append([]bool(nil), l.pinned...),
+		it:       l.it,
+		k:        l.k,
+		assign:   append([]int(nil), l.assign...),
+		fill:     append([]int(nil), l.fill...),
+		adultsAt: append([]int(nil), l.adultsAt...),
+		affTo:    make([][]int, len(l.affTo)),
+		knowTo:   make([][]int, len(l.knowTo)),
+		pinned:   append([]bool(nil), l.pinned...),
 	}
 	for a := range l.affTo {
 		c.affTo[a] = append([]int(nil), l.affTo[a]...)
+		c.knowTo[a] = append([]int(nil), l.knowTo[a]...)
 	}
 	return c
 }
@@ -75,7 +86,7 @@ func (l *layout) floor() int {
 	if l.k <= 1 {
 		return 0
 	}
-	return Floor
+	return l.it.floor
 }
 
 // movable lists the placed, unpinned items in index order.
@@ -103,7 +114,7 @@ func anneal(l *layout, iters int, r *prng) {
 		return
 	}
 	floor, capacity := l.floor(), l.it.capacity
-	cur := l.objective()
+	cur, ord := l.objective(), l.it.order
 	best, bestAssign := cur, append([]int(nil), l.assign...)
 	temp := annealTempHigh
 	cool := math.Pow(annealTempLow/annealTempHigh, 1/float64(iters))
@@ -136,7 +147,7 @@ func anneal(l *layout, iters int, r *prng) {
 			}
 			d = l.swapDelta(a, b)
 		}
-		if !d.notWorse() && r.float() >= math.Exp((float64(d.score)-annealIsoWeight*float64(d.iso))/temp) {
+		if !ord.notWorse(d) && r.float() >= math.Exp(ord.energy(d)/temp) {
 			continue
 		}
 		if b < 0 {
@@ -146,8 +157,9 @@ func anneal(l *layout, iters int, r *prng) {
 			l.move(b, ta)
 		}
 		cur.iso += d.iso
+		cur.str += d.str
 		cur.score += d.score
-		if cur.better(best) {
+		if ord.better(cur, best) {
 			best = cur
 			copy(bestAssign, l.assign)
 		}
@@ -179,11 +191,12 @@ func optimise(l *layout) {
 	optimiseWith(l, annealRestarts, annealSteps(len(l.movable())), 0)
 }
 
-// hasAffinity reports whether any of the items has a neighbour: without one the
-// objective is the constant (0, 0) at every arrangement and there is nothing to search.
-func (l *layout) hasAffinity(items []int) bool {
+// hasWeight reports whether any of the items has an adult: without one the objective is
+// constant at every arrangement and there is nothing to search. Affinity is not needed: with no
+// links at all the stranger term still varies with the table sizes (task 015, example J).
+func (l *layout) hasWeight(items []int) bool {
 	for _, a := range items {
-		if len(l.it.nbr[a]) > 0 {
+		if l.it.adults[a] > 0 {
 			return true
 		}
 	}
@@ -201,7 +214,7 @@ func annealSteps(m int) int { return min(annealIters, annealItersPerItemSq*m*m) 
 // (the items table is read-only), and the winner is picked afterwards in index
 // order, so the result does not depend on scheduling.
 func optimiseWith(l *layout, restarts, iters, seedBase int) {
-	if movable := l.movable(); l.k > 1 && len(movable) >= 2 && l.hasAffinity(movable) {
+	if movable := l.movable(); l.k > 1 && len(movable) >= 2 && l.hasWeight(movable) {
 		results := make([]*layout, restarts)
 		var wg sync.WaitGroup
 		for i := range results {
@@ -217,7 +230,7 @@ func optimiseWith(l *layout, restarts, iters, seedBase int) {
 		bestObj := l.objective()
 		var winner *layout
 		for _, c := range results {
-			if o := c.objective(); o.better(bestObj) {
+			if o := c.objective(); l.it.order.better(o, bestObj) {
 				bestObj, winner = o, c
 			}
 		}

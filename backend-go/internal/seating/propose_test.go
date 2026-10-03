@@ -96,7 +96,7 @@ func TestMinTables(t *testing.T) {
 }
 
 func TestPack(t *testing.T) {
-	singles := func(n GuestID) items { return newItems(BuildGraph(enabledRange(1, n), nil), 10) }
+	singles := func(n GuestID) items { return newItems(BuildGraph(enabledRange(1, n), nil), 10, false) }
 	tests := []struct {
 		name         string
 		it           items
@@ -132,7 +132,7 @@ func TestPack(t *testing.T) {
 
 func TestPackAffinityPullsPartnersTogether(t *testing.T) {
 	g := BuildGraph(enabledRange(1, 12), links(clique(Preferred, 1, 2, 3, 4, 5, 6), clique(Preferred, 7, 8, 9, 10, 11, 12)))
-	it := newItems(g, 10)
+	it := newItems(g, 10, false)
 	l := pack(it, 2, nil, true)
 	if !l.complete() {
 		t.Fatal("pack incomplete")
@@ -148,7 +148,7 @@ func TestPackAffinityPullsPartnersTogether(t *testing.T) {
 
 func TestPackHonoursFittingPinsAndReleasesOthers(t *testing.T) {
 	g := BuildGraph(enabledRange(1, 24), nil)
-	it := newItems(g, 10)
+	it := newItems(g, 10, false)
 	pins := map[int]int{it.idx[5]: 2, it.idx[6]: 7} // table index 2 exists (k=3); 7 does not
 	l := pack(it, 3, pins, true)
 	if l.assign[it.idx[5]] != 2 || !l.pinned[it.idx[5]] {
@@ -165,7 +165,7 @@ func TestPackHonoursFittingPinsAndReleasesOthers(t *testing.T) {
 func TestRepairFloor(t *testing.T) {
 	t.Run("moves clusters into an under-floor table (10+10+4 -> feasible)", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 24), nil)
-		it := newItems(g, 10)
+		it := newItems(g, 10, false)
 		l := newLayout(it, 3)
 		for id := GuestID(1); id <= 24; id++ {
 			switch {
@@ -192,7 +192,7 @@ func TestRepairFloor(t *testing.T) {
 	t.Run("needs a swap: donor 5+5, receiver 3+3", func(t *testing.T) {
 		// no single move helps (5 -> 11 > 10, 3 -> 13 > 10); swapping a 5 with a 3 gives 8 + 8
 		g := BuildGraph(enabledRange(1, 16), links(chain(1, 2, 3, 4, 5), chain(6, 7, 8, 9, 10), chain(11, 12, 13), chain(14, 15, 16)))
-		it := newItems(g, 10)
+		it := newItems(g, 10, false)
 		l := newLayout(it, 2)
 		l.place(it.idx[1], 0)
 		l.place(it.idx[6], 0)
@@ -207,7 +207,7 @@ func TestRepairFloor(t *testing.T) {
 	})
 	t.Run("unfixable: two tables of 5 (below the floor of 8)", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 10), links(chain(1, 2, 3, 4, 5), chain(6, 7, 8, 9, 10)))
-		it := newItems(g, 10)
+		it := newItems(g, 10, false)
 		l := newLayout(it, 2)
 		l.place(it.idx[1], 0)
 		l.place(it.idx[6], 1)
@@ -217,7 +217,7 @@ func TestRepairFloor(t *testing.T) {
 	})
 	t.Run("pinned clusters are never moved, so this layout stays unfixable", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 14), nil)
-		it := newItems(g, 10)
+		it := newItems(g, 10, false)
 		l := newLayout(it, 2)
 		for id := GuestID(1); id <= 10; id++ {
 			l.place(it.idx[id], 0)
@@ -242,9 +242,10 @@ func TestImprove(t *testing.T) {
 		// Since task 011 improve accepts a swap only if it strictly improves (isolated, score), and
 		// the path to the optimum 112 (two whole cliques) passes through tables with a lone member
 		// of the other clique (isolated), which improve will not enter: it stops at the local optimum
-		// 64 with nobody isolated. Reaching 112 is the anneal's job (TestAnnealFindsSwapOptimum).
+		// 64 with nobody isolated and 24 stranger pairs (6 + 2 members per table; task 015 also counts
+		// the strangers, 32 at the alternating start). Reaching 112 is the anneal's job (TestAnnealFindsSwapOptimum).
 		g := BuildGraph(enabledRange(1, 16), links(clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8), clique(Preferred, 9, 10, 11, 12, 13, 14, 15, 16)))
-		it := newItems(g, 8)
+		it := newItems(g, 8, false)
 		l := newLayout(it, 2)
 		for id := GuestID(1); id <= 16; id++ {
 			l.place(it.idx[id], int((id-1)%2)) // worst case: alternate
@@ -255,13 +256,13 @@ func TestImprove(t *testing.T) {
 		if before.better(after) {
 			t.Fatalf("objective got worse: %+v -> %+v", before, after)
 		}
-		if want := (objective{iso: 0, score: 64}); after != want {
+		if want := (objective{iso: 0, str: 24, score: 64}); after != want {
 			t.Errorf("objective = %+v, want the local optimum %+v (start %+v)", after, want, before)
 		}
 	})
 	t.Run("respects capacity, floor and pins", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 18), clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8))
-		it := newItems(g, 10)
+		it := newItems(g, 10, false)
 		l := newLayout(it, 2)
 		for id := GuestID(1); id <= 18; id++ {
 			l.place(it.idx[id], int(id%2)) // 9 + 9 split
@@ -279,7 +280,7 @@ func TestImprove(t *testing.T) {
 	})
 	t.Run("pass cap limits work", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 16), links(clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8), clique(Preferred, 9, 10, 11, 12, 13, 14, 15, 16)))
-		it := newItems(g, 8)
+		it := newItems(g, 8, false)
 		l := newLayout(it, 2)
 		for id := GuestID(1); id <= 16; id++ {
 			l.place(it.idx[id], int((id-1)%2))
@@ -839,7 +840,7 @@ func TestProposeScoreMatchesEvaluate(t *testing.T) {
 	for seed := int64(1); seed <= 40; seed++ {
 		guests, ls := randomInstance(rand.New(rand.NewSource(seed)))
 		g := BuildGraph(guests, ls)
-		it := newItems(g, 10)
+		it := newItems(g, 10, false)
 		k := minTables(it.total, 10)
 		l := pack(it, k, nil, true)
 		if !l.complete() || !repairFloor(l) {
@@ -906,7 +907,7 @@ func itemsOfSizes(sizes []int, capacity int) items {
 			next++
 		}
 	}
-	return newItems(BuildGraph(guests, ls), capacity)
+	return newItems(BuildGraph(guests, ls), capacity, false)
 }
 
 func TestPackExact(t *testing.T) {

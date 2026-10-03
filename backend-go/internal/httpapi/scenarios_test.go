@@ -236,9 +236,10 @@ func TestCalculateThenReplaceAllFive(t *testing.T) {
 	if props.Meta.RequestId == nil || props.Page.Total == nil || *props.Page.Total != 5 || len(props.Data) != 5 {
 		t.Fatalf("envelope = %+v", props)
 	}
-	// 36 guests, floor 8: four tables of 9 at capacities 9, 10 and 11; three of 12 at capacity 12
-	// and in the mixed plan (nobody is isolated at 3 tables, so it takes no extra one)
-	wantTables := map[oapi.PlanKey]int{oapi.Seats9: 4, oapi.Seats10: 4, oapi.Seats11: 4, oapi.Seats12: 3, oapi.Mixed: 3}
+	// 36 guests, floor 8: four tables of 9 at capacities 9, 10 and 11; three of 12 at capacity 12;
+	// the mixed plan (floor 9, any k in [3, 4], task 015) takes four tables of 9: fewer stranger
+	// pairs than three tables of 12 outweigh the few group-1/2 pairs they would keep together
+	wantTables := map[oapi.PlanKey]int{oapi.Seats9: 4, oapi.Seats10: 4, oapi.Seats11: 4, oapi.Seats12: 3, oapi.Mixed: 4}
 	for i, c := range allKeys {
 		p := props.Data[i]
 		if p.Key != c || (c == oapi.Mixed && p.Capacity != 12) || p.BasedOnVersion != startVer(c) {
@@ -785,6 +786,43 @@ func TestCalculateFloorCases(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Task 015: the mixed plan's floor is 9, so a stored mixed table of 8 shows under_floor with
+// "minimum 9", while the same fills in plan 12 (floor 8) are fine.
+func TestStoredMixedTableOfEightIsUnderFloor(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 20)
+	plans := storedLayouts(listScenarios(t, h))
+	for i := range plans {
+		plans[i].Tables = []oapi.TableLayout{
+			{Number: 1, GuestIds: rangeIDs(1, 8), PinnedGuestIds: []int64{}},
+			{Number: 2, GuestIds: rangeIDs(9, 20), PinnedGuestIds: []int64{}},
+		}
+	}
+	got := replaceOK(t, h, plans)
+	mixed, p12 := scenarioOf(t, got, oapi.Mixed), scenarioOf(t, got, oapi.Seats12)
+	if len(p12.Plan.Violations) != 0 || p12.Plan.Summary.NeedsRecalculation {
+		t.Errorf("plan 12: violations %v, want none", p12.Plan.Violations)
+	}
+	if len(mixed.Plan.Violations) != 1 || mixed.Plan.Violations[0].Code != oapi.UnderFloor || !mixed.Plan.Summary.NeedsRecalculation ||
+		!strings.Contains(mixed.Plan.Violations[0].Message, "minimum 9") {
+		t.Errorf("mixed: violations %+v, want one under_floor saying minimum 9", mixed.Plan.Violations)
+	}
+	// Generate: every table of the mixed proposal has 9-12 guests
+	for _, p := range calculate(t, h).Data {
+		if p.Key != oapi.Mixed {
+			continue
+		}
+		if p.Plan.Summary.NeedsRecalculation || len(p.Plan.Tables) != 2 {
+			t.Errorf("mixed proposal: %+v", p.Plan.Summary)
+		}
+		for _, tb := range p.Plan.Tables {
+			if tb.Fill < 9 || tb.Fill > 12 {
+				t.Errorf("mixed proposal table %d has %d guests", tb.Number, tb.Fill)
+			}
+		}
 	}
 }
 

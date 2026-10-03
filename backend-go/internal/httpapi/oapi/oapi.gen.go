@@ -280,9 +280,11 @@ type AssignmentSet struct {
 }
 
 // Capacity Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
-// exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
-// 9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
-// no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+// exactly this many seats; floor 8 guests per table. The mixed plan: always 12, floor **9** guests
+// per table (task 015), any number of tables; each of its tables has the smallest size of 9, 10,
+// 11, 12 that holds its fill (a valid table has 9–12 guests, so its size equals its fill; fill < 9
+// → 9 and the table is `under_floor`, > 12 → 12 and `over_capacity`; an empty table has no size and
+// is not needed). The client derives those sizes and the "potrzebne stoły" summary from
 // `PlanTable.fill`; no size is stored or sent.
 type Capacity int
 
@@ -474,7 +476,7 @@ type GuestScore struct {
 	// Satisfaction For an adult: Σ w(affinity) over enabled ADULT table-mates outside the guest's cluster (w1 = 1.0, w2 = 0.5; children at the table add nothing), minus 1 when the guest is isolated: seated, with at least one enabled adult group-1/2 partner in the guest list, and none of them at this table. Negative if and only if the guest is isolated ("bez znajomych przy stole"); 0 for unseated guests. Always 0 for a child (`Guest.isChild`, task 014): children are not scored and never isolated.
 	Satisfaction float32 `json:"satisfaction"`
 
-	// StrangersAtTable Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child.
+	// StrangersAtTable Enabled adults at the table outside the guest's cluster with no group-1/2 affinity to it (children are not counted). 0 for a child. Symmetric: the number of stranger pairs at a table (or in a plan) is exactly half the sum of `strangersAtTable` over its guests, which is how clients derive "Pary obcych" (task 015: the optimiser minimises stranger pairs right after isolated adults and before satisfaction).
 	StrangersAtTable int `json:"strangersAtTable"`
 
 	// TableNumber Null when unseated.
@@ -574,7 +576,7 @@ type Page struct {
 // seats). Used in URLs (`/scenarios/{planKey}/…`) and in `ScenarioLayout.key`.
 type PlanKey string
 
-// PlanSummary defines model for PlanSummary.
+// PlanSummary Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly from `SeatingPlan.guestScores`. The **bilans** (net satisfaction) = `score` − 2 · stranger pairs (each adult of a stranger pair loses 1; task 015) is also derived by the client; it is what the mixed plan maximises.
 type PlanSummary struct {
 	// NeedsRecalculation True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
 	// cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
@@ -610,9 +612,11 @@ type Proposal struct {
 	BasedOnVersion int `json:"basedOnVersion"`
 
 	// Capacity Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
-	// exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
-	// 9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
-	// no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+	// exactly this many seats; floor 8 guests per table. The mixed plan: always 12, floor **9** guests
+	// per table (task 015), any number of tables; each of its tables has the smallest size of 9, 10,
+	// 11, 12 that holds its fill (a valid table has 9–12 guests, so its size equals its fill; fill < 9
+	// → 9 and the table is `under_floor`, > 12 → 12 and `over_capacity`; an empty table has no size and
+	// is not needed). The client derives those sizes and the "potrzebne stoły" summary from
 	// `PlanTable.fill`; no size is stored or sent.
 	Capacity Capacity `json:"capacity"`
 
@@ -640,9 +644,11 @@ type ProposalListResponse struct {
 // Scenario defines model for Scenario.
 type Scenario struct {
 	// Capacity Maximum guests per table in a plan (`over_capacity` above it). Uniform plans: every table has
-	// exactly this many seats. The mixed plan: always 12; each of its tables has the smallest size of
-	// 9, 10, 11, 12 that holds its fill (fill ≤ 9 → 9, 10 → 10, 11 → 11, ≥ 12 → 12; an empty table has
-	// no size and is not needed). The client derives those sizes and the "potrzebne stoły" summary from
+	// exactly this many seats; floor 8 guests per table. The mixed plan: always 12, floor **9** guests
+	// per table (task 015), any number of tables; each of its tables has the smallest size of 9, 10,
+	// 11, 12 that holds its fill (a valid table has 9–12 guests, so its size equals its fill; fill < 9
+	// → 9 and the table is `under_floor`, > 12 → 12 and `over_capacity`; an empty table has no size and
+	// is not needed). The client derives those sizes and the "potrzebne stoły" summary from
 	// `PlanTable.fill`; no size is stored or sent.
 	Capacity Capacity `json:"capacity"`
 
@@ -699,8 +705,10 @@ type ScenariosReplace struct {
 type SeatingPlan struct {
 	// GuestScores One entry per enabled guest, children included (a child's entry has tableNumber as for anyone else and 0 in every number).
 	GuestScores []GuestScore `json:"guestScores"`
-	Summary     PlanSummary  `json:"summary"`
-	Tables      []PlanTable  `json:"tables"`
+
+	// Summary Plan-level figures. Isolated adults (count of negative `GuestScore.satisfaction`) and stranger pairs (½ · Σ `GuestScore.strangersAtTable`) are not fields here: clients derive them exactly from `SeatingPlan.guestScores`. The **bilans** (net satisfaction) = `score` − 2 · stranger pairs (each adult of a stranger pair loses 1; task 015) is also derived by the client; it is what the mixed plan maximises.
+	Summary PlanSummary `json:"summary"`
+	Tables  []PlanTable `json:"tables"`
 
 	// Unseated Clusters with at least one enabled member and no table.
 	Unseated   []ClusterPlacement `json:"unseated"`
@@ -743,8 +751,10 @@ type TableLayout struct {
 
 // Violation defines model for Violation.
 type Violation struct {
-	Code        ViolationCode          `json:"code"`
-	GuestIds    []int64                `json:"guestIds"`
+	Code     ViolationCode `json:"code"`
+	GuestIds []int64       `json:"guestIds"`
+
+	// Message Human-readable. `under_floor`: fewer than 8 guests at a table of a uniform plan, fewer than 9 in the mixed plan (task 015), only when the plan has more than one table.
 	Message     string                 `json:"message"`
 	TableNumber nullable.Nullable[int] `json:"tableNumber"`
 }

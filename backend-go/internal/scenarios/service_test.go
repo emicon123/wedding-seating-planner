@@ -178,7 +178,7 @@ func TestCalculate(t *testing.T) {
 		t.Fatalf("Calculate = %d proposals, want 5", len(props))
 	}
 	// 24 guests, floor 8: three tables of 8 at capacities 9, 10 and 11; two of 12 at capacity 12
-	// and in the mixed plan (no isolated guests, so no extra table)
+	// and in the mixed plan (floor 9: k in [2, 2] at 24 guests)
 	wantTables := map[scenarios.Key]int{uk(9): 3, uk(10): 3, uk(11): 3, uk(12): 2, mixedKey: 2}
 	for i, c := range scenarios.Keys {
 		p := props[i]
@@ -910,25 +910,29 @@ func TestResetMakesOlderProposalsStale(t *testing.T) {
 	}
 }
 
-// exampleC sets up docs/architecture/03-seating-model.md example C with 24 guests: clusters of
-// 3, 5, 6, 2, 5 and 3 (ids consecutive, group 0) and M[3] -1- P[5]. At capacity 12 the plan needs
-// two tables and leaves 8 guests isolated; the mixed plan takes a third table.
-func exampleC(t *testing.T) *env {
+// exampleL sets up docs/architecture/03-seating-model.md example L with 36 guests: two groups
+// of six clusters of 3 (ids consecutive, group 0), every pair of clusters inside a group linked
+// at level 1, no link between the groups. Plan 12 needs three tables (36 stranger pairs); the
+// mixed plan (floor 9, any k in [3, 4], bilans) takes four tables of 9 with none.
+func exampleL(t *testing.T) *env {
 	t.Helper()
-	e := newEnv(t, 24)
-	next := int64(1)
-	for _, size := range []int{3, 5, 6, 2, 5, 3} {
-		for m := next + 1; m < next+int64(size); m++ {
-			e.link(t, next, m, seating.Must)
-		}
-		next += int64(size)
+	e := newEnv(t, 36)
+	for first := int64(1); first < 36; first += 3 {
+		e.link(t, first, first+1, seating.Must)
+		e.link(t, first, first+2, seating.Must)
 	}
-	e.link(t, 1, 4, seating.Preferred)
+	for _, grp := range [][]int64{{1, 4, 7, 10, 13, 16}, {19, 22, 25, 28, 31, 34}} {
+		for i, a := range grp {
+			for _, b := range grp[i+1:] {
+				e.link(t, a, b, seating.Preferred)
+			}
+		}
+	}
 	return e
 }
 
-func TestCalculateMixedPlanMayTakeOneTableMore(t *testing.T) {
-	e := exampleC(t)
+func TestCalculateMixedPlanMayTakeMoreTables(t *testing.T) {
+	e := exampleL(t)
 	props, err := e.plans.Calculate(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -940,8 +944,16 @@ func TestCalculateMixedPlanMayTakeOneTableMore(t *testing.T) {
 	if p12.Plan.Mixed || !pm.Plan.Mixed || pm.Plan.Capacity != 12 {
 		t.Fatalf("plans 4 and 5 = (%d, %v) and (%d, %v)", p12.Plan.Capacity, p12.Plan.Mixed, pm.Plan.Capacity, pm.Plan.Mixed)
 	}
-	if len(p12.Plan.Tables) != 2 || len(pm.Plan.Tables) != 3 || pm.Eval.Summary.NeedsRecalculation || pm.Eval.Summary.Seated != 24 {
-		t.Errorf("plan 12: %d tables; mixed: %d tables, summary %+v", len(p12.Plan.Tables), len(pm.Plan.Tables), pm.Eval.Summary)
+	if len(p12.Plan.Tables) != 3 || p12.Eval.Summary.StrangerPairs != 36 {
+		t.Errorf("plan 12: %d tables, %d stranger pairs; want 3 and 36", len(p12.Plan.Tables), p12.Eval.Summary.StrangerPairs)
+	}
+	if len(pm.Plan.Tables) != 4 || pm.Eval.Summary.StrangerPairs != 0 || pm.Eval.Summary.NeedsRecalculation || pm.Eval.Summary.Seated != 36 {
+		t.Errorf("mixed: %d tables, summary %+v; want 4 tables, 0 stranger pairs", len(pm.Plan.Tables), pm.Eval.Summary)
+	}
+	for _, tb := range pm.Eval.Tables {
+		if tb.Fill < seating.MixedFloor || tb.Fill > 12 {
+			t.Errorf("mixed table %d has %d guests", tb.Number, tb.Fill)
+		}
 	}
 	if again, err := e.plans.Calculate(context.Background()); err != nil || !reflect.DeepEqual(again, props) {
 		t.Errorf("a second Calculate differs (parallel Generate must be deterministic and ordered): %v", err)

@@ -73,7 +73,9 @@ func tightFixture(seed int64) Graph {
 // tightBestObjective12 is the best objective on tightFixture(4) at capacity 12: three
 // independent runs of 128 restarts x 3M steps each reached it (so did Propose);
 // the former pipeline (4 restarts x <=400k steps, end temperature 0.8) returned 392.
-var tightBestObjective12 = objective{iso: 0, score: 408}
+// Task 015: stranger pairs rank above the score, so the best triple is (0, 245, 383); before
+// it was (0, 408) (with 252 stranger pairs when counted): 3 runs of 96 restarts x 3M steps agree.
+var tightBestObjective12 = objective{iso: 0, str: 245, score: 383}
 
 // The annealing budget (annealRestarts x annealSteps) must reach the long-run
 // objective on an instance shaped like a real list; a smaller budget does not (task 012).
@@ -99,15 +101,18 @@ func TestAnnealBudgetReachesLongRunObjective(t *testing.T) {
 // the same pipeline now optimises isolation first and the score shown includes -1
 // per isolated guest. 306 -> {12, 278}: the old best layout seated 23+ guests
 // without any acquaintance; the new one isolates 12 and scores 278 (displayed).
+// Task 015 (stranger pairs, rule 6): the triple is (isolated, stranger pairs, score);
+// 278 -> {12, 105, 272}: the same 12 isolated, 105 stranger pairs (the old layout had more),
+// 6 points of score given up (3 runs of 96 restarts x 3M steps agree).
 // Thresholds, not bit-for-bit plans: the accept rule uses math.Exp.
 var (
-	fixtureOldObjective12  = objective{iso: 23, score: 208}
-	fixtureBestObjective12 = objective{iso: 12, score: 278}
+	fixtureOldObjective12  = objective{iso: 23, str: 120, score: 208}
+	fixtureBestObjective12 = objective{iso: 12, str: 105, score: 272}
 )
 
 // oldLocalSearchObjective is the pre-task-008 pipeline: pack + repairFloor + improve.
 func oldLocalSearchObjective(g Graph, capacity int) (o objective, ok bool) {
-	it := newItems(g, capacity)
+	it := newItems(g, capacity, false)
 	l := pack(it, minTables(it.total, capacity), nil, true)
 	if !l.complete() || !repairFloor(l) {
 		return objective{}, false
@@ -117,7 +122,7 @@ func oldLocalSearchObjective(g Graph, capacity int) (o objective, ok bool) {
 }
 
 func evalObjective(ev Evaluation) objective {
-	return objective{iso: ev.Summary.Isolated, score: int(ev.Summary.Score)}
+	return triple(ev)
 }
 
 func TestPRNG(t *testing.T) {
@@ -188,7 +193,7 @@ func TestAnnealFixtureAllCapacities(t *testing.T) {
 
 // feasibleLayout packs and repairs; false when that greedy route fails.
 func feasibleLayout(g Graph, capacity int, pins map[int]int) (*layout, bool) {
-	it := newItems(g, capacity)
+	it := newItems(g, capacity, false)
 	l := pack(it, minTables(it.total, capacity), pins, true)
 	return l, l.complete() && repairFloor(l)
 }
@@ -300,7 +305,7 @@ func TestAnnealFindsSwapOptimum(t *testing.T) {
 	// ends at annealTempLow = 3 (task 012; it was 0.8 and 20k steps were enough), so a lone
 	// pass needs a longer walk to visit the optimum; in Propose improve() settles it.
 	g := BuildGraph(enabledRange(1, 16), links(clique(Preferred, 1, 2, 3, 4, 5, 6, 7, 8), clique(Preferred, 9, 10, 11, 12, 13, 14, 15, 16)))
-	it := newItems(g, 8)
+	it := newItems(g, 8, false)
 	for _, seed := range []uint64{7, 8, 9, 10} {
 		l := newLayout(it, 2)
 		for id := GuestID(1); id <= 16; id++ {
@@ -316,7 +321,7 @@ func TestAnnealFindsSwapOptimum(t *testing.T) {
 
 func TestOptimiseSkips(t *testing.T) {
 	g := BuildGraph(enabledRange(1, 20), clique(Preferred, 1, 2, 3, 4))
-	it := newItems(g, 20)
+	it := newItems(g, 20, false)
 	t.Run("single table", func(t *testing.T) {
 		l := newLayout(it, 1)
 		for a := range it.keys {
@@ -330,7 +335,7 @@ func TestOptimiseSkips(t *testing.T) {
 	})
 	t.Run("fewer than two movable items", func(t *testing.T) {
 		g := BuildGraph(enabledRange(1, 16), nil)
-		it := newItems(g, 8)
+		it := newItems(g, 8, false)
 		l := newLayout(it, 2)
 		for a := range it.keys {
 			l.place(a, a%2)

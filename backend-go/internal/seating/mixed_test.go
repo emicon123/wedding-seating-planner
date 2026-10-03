@@ -1,22 +1,18 @@
 package seating
 
 import (
+	"math/rand"
 	"reflect"
 	"testing"
 )
 
-// Tests of the mixed plan (task 013, design 003-backend-design §9.7: M1-M10).
+// Tests of the mixed plan (task 013, rewritten in task 015: floor 9, free table count, bilans;
+// design 003-backend-design §12.6, X1-X13; 03-seating-model examples L-O). The task-013 tests
+// M1-M8 (the k0 / k0+1 isolation-only rule) are replaced by X1-X9; M9/M10 live on as X7/X12.
 
 func mixedPlan() Plan { return Plan{Capacity: 12, Mixed: true} }
 
-// asUniform is a mixed plan with the flag cleared, to compare it with plan 12.
-func asUniform(p Plan) Plan {
-	p.Mixed = false
-	return p
-}
-
-// instance builds a graph from cluster sizes (consecutive ids) and "a-b:level" style links
-// between cluster indexes.
+// instance builds a graph from cluster sizes (consecutive ids) and links between cluster indexes.
 type clusterLink struct {
 	a, b  int
 	level LinkLevel
@@ -30,158 +26,170 @@ func instance(sizes []int, cl ...clusterLink) (Graph, []GuestID) {
 	return BuildGraph(guests, ls), f
 }
 
-// m5Graph: removing isolation needs a table more, at a slightly lower score
-// (k0 = 3: 12 isolated guests, score 24; k0 + 1 = 4: 7 isolated, score 23).
-func m5Graph() Graph {
-	g, _ := instance([]int{5, 7, 6, 1, 6, 6, 3, 2},
-		clusterLink{6, 2, Acceptable}, clusterLink{2, 4, Acceptable}, clusterLink{7, 4, Acceptable}, clusterLink{4, 1, Acceptable})
-	return g
-}
-
-// m6Graph: the isolation (X[10] -1- M[4] and two pairs that cannot all be satisfied) is the same at
-// k0 = 4 and k0 + 1 = 5, but the score at 5 tables is higher (iso 25 both; score 3 vs 35).
-func m6Graph() Graph {
-	g, _ := instance([]int{10, 4, 6, 3, 4, 5, 7, 1, 6},
-		clusterLink{0, 1, Preferred}, clusterLink{5, 8, Preferred}, clusterLink{4, 6, Acceptable})
-	return g
-}
-
-// structuralB36: X[10] -1- M[4] can never share a table (14 > 12); N = 36 so that k0 = 3 and 4
-// tables of 8+ are possible.
-func structuralB36() (Graph, []GuestID) {
-	return instance([]int{4, 10, 4, 4, 4, 4, 4, 2}, clusterLink{0, 1, Preferred})
-}
-
 func tableCounts(p Plan) int { return len(p.Tables) }
 
-func TestMixedM1ExampleCAddsATable(t *testing.T) {
-	g := exampleC()
-	p := Propose(g, mixedPlan())
-	ev := assertHardRules(t, g, p)
-	if tableCounts(p) != 3 || !reflect.DeepEqual(fills(ev), []int{8, 8, 8}) {
-		t.Fatalf("fills %v, want three tables of 8", fills(ev))
-	}
-	if ev.Summary.Isolated != 0 {
-		t.Errorf("isolated = %d, want 0", ev.Summary.Isolated)
-	}
-	p12 := Propose(g, emptyPlan(12))
-	if e12 := Evaluate(g, p12); tableCounts(p12) != 2 || e12.Summary.Isolated != 8 {
-		t.Errorf("plan 12: %d tables, %d isolated; want 2 and 8", tableCounts(p12), e12.Summary.Isolated)
-	}
+// bilansOf is the mixed plan's objective of an evaluation: score - 2*λ*stranger pairs.
+func bilansOf(ev Evaluation) int {
+	return int(ev.Summary.Score) - 2*StrangerPenalty*ev.Summary.StrangerPairs
 }
 
-func TestMixedM2ExampleAEqualsPlan12(t *testing.T) {
-	g, _ := exampleA()
-	pm := Propose(g, mixedPlan())
-	if !pm.Mixed || pm.Capacity != 12 {
-		t.Fatalf("result carries Capacity %d, Mixed %v", pm.Capacity, pm.Mixed)
-	}
-	if tableCounts(pm) != 2 {
-		t.Fatalf("%d tables, want 2", tableCounts(pm))
-	}
-	if p12 := Propose(g, emptyPlan(12)); !reflect.DeepEqual(asUniform(pm), p12) {
-		t.Errorf("mixed plan differs from plan 12 although k0 has no isolated guests:\nmixed %+v\n12    %+v", pm, p12)
-	}
-}
-
-func TestMixedM3ExtraTableDoesNotLowerIsolation(t *testing.T) {
-	g, _ := structuralB36()
-	p := Propose(g, mixedPlan())
-	ev := assertHardRules(t, g, p)
-	if tableCounts(p) != 3 {
-		t.Fatalf("%d tables (fills %v), want k0 = 3", tableCounts(p), fills(ev))
-	}
-	it := newItems(g, 12)
-	l1, _ := feasibleAt(it, 4, nil)
-	if l1 == nil {
-		t.Fatal("precondition: four tables must be feasible, so that the extra table was really weighed")
-	}
-	if iso1 := l1.objective().iso; iso1 < ev.Summary.Isolated {
-		t.Errorf("precondition: 4 tables isolate %d < %d, so the mixed plan should have taken them", iso1, ev.Summary.Isolated)
-	}
-}
-
-func TestMixedM4FloorForbidsTheExtraTable(t *testing.T) {
-	// X[10] -1- M[4], strangers [4], [4]: N = 22 < 24 = 3 * Floor, isolation is structural anyway.
-	g, _ := instance([]int{4, 10, 4, 4}, clusterLink{0, 1, Preferred})
-	p := Propose(g, mixedPlan())
-	ev := assertHardRules(t, g, p)
-	if tableCounts(p) != 2 || ev.Summary.Isolated != 14 {
-		t.Errorf("%d tables, %d isolated; want 2 and 14", tableCounts(p), ev.Summary.Isolated)
-	}
-	// example C with one stranger less (N = 23 < 24): fewer than 3 tables of 8 are possible
-	g2, _ := instance([]int{3, 5, 6, 2, 5, 2}, clusterLink{0, 1, Preferred})
-	if p2 := Propose(g2, mixedPlan()); tableCounts(p2) != 2 {
-		t.Errorf("N = 23: %d tables, want 2", tableCounts(p2))
-	}
-}
-
-func TestMixedM5IsolationBeatsScore(t *testing.T) {
-	g := m5Graph()
-	pm := Propose(g, mixedPlan())
-	p12 := Propose(g, emptyPlan(12))
-	em, e12 := Evaluate(g, pm), Evaluate(g, p12)
-	if tableCounts(pm) != tableCounts(p12)+1 {
-		t.Fatalf("mixed %d tables, plan 12 %d; want one more", tableCounts(pm), tableCounts(p12))
-	}
-	if em.Summary.Isolated >= e12.Summary.Isolated {
-		t.Errorf("isolated %d (mixed) vs %d (12): the extra table must lower it", em.Summary.Isolated, e12.Summary.Isolated)
-	}
-	if em.Summary.Score >= e12.Summary.Score {
-		t.Errorf("score %v (mixed) vs %v (12): this case is meant to have the LOWER score", em.Summary.Score, e12.Summary.Score)
-	}
-	assertHardRules(t, g, pm)
-}
-
-func TestMixedM6ScoreNeverBuysATable(t *testing.T) {
-	g := m6Graph()
-	pm := Propose(g, mixedPlan())
-	p12 := Propose(g, emptyPlan(12))
-	if !reflect.DeepEqual(asUniform(pm), p12) {
-		t.Fatalf("mixed plan must equal plan 12 (k0), got %d vs %d tables", tableCounts(pm), tableCounts(p12))
-	}
-	it := newItems(g, 12)
-	l0, _ := solve(g, it, nil)
-	l1, _ := feasibleAt(it, l0.k+1, nil)
-	if l1 == nil {
-		t.Fatal("precondition: k0 + 1 must be feasible")
-	}
-	o0, o1 := l0.objective(), l1.objective()
-	if o0.iso == 0 || o1.iso != o0.iso || o1.score <= o0.score {
-		t.Fatalf("precondition: want equal isolation > 0 and a higher score at k0+1, got %+v vs %+v", o0, o1)
-	}
-}
-
-func TestMixedM7Pins(t *testing.T) {
-	t.Run("a pin to table k0+1 is kept when the extra table helps", func(t *testing.T) {
-		g := exampleC() // clusters of 3,5,6,2,5,3; k0 = 2, k0 + 1 = 3 removes the isolation
-		six := rng(9, 14)
-		cur := Plan{Capacity: 12, Mixed: true, Tables: []Table{{Number: 1}, {Number: 2}, pinnedTbl(3, six, six...)}}
-		p := Propose(g, cur)
-		ev := assertHardRules(t, g, p)
-		if tableCounts(p) != 3 || ev.Summary.Isolated != 0 {
-			t.Fatalf("%d tables, %d isolated; want 3 and 0", tableCounts(p), ev.Summary.Isolated)
+// cliqueGroups: clusters of `size` seats, `groups[i]` of them in group i, all pairs inside a
+// group linked at level 1, no link between groups.
+func cliqueGroups(size int, groups ...int) Graph {
+	var sizes []int
+	var gi []int
+	for i, n := range groups {
+		for j := 0; j < n; j++ {
+			sizes = append(sizes, size)
+			gi = append(gi, i)
 		}
-		if tableOfGuest(p, 9) != 3 {
-			t.Errorf("the pinned cluster is at table %d, want 3", tableOfGuest(p, 9))
+	}
+	var cl []clusterLink
+	for a := range sizes {
+		for b := a + 1; b < len(sizes); b++ {
+			if gi[a] == gi[b] {
+				cl = append(cl, clusterLink{a, b, Preferred})
+			}
+		}
+	}
+	g, _ := instance(sizes, cl...)
+	return g
+}
+
+func TestMixedX1ExampleLExtraTableRemovesStrangers(t *testing.T) {
+	g := cliqueGroups(3, 6, 6) // two acquainted groups of 18, N = 36, k in [3, 4]
+	p := Propose(g, mixedPlan())
+	ev := assertHardRules(t, g, p)
+	if tableCounts(p) != 4 || !reflect.DeepEqual(fills(ev), []int{9, 9, 9, 9}) {
+		t.Fatalf("fills %v, want four tables of 9", fills(ev))
+	}
+	if got := triple(ev); got != (objective{iso: 0, str: 0, score: 216}) || bilansOf(ev) != 216 {
+		t.Errorf("(iso, strangers, score) = %+v, bilans %d; want (0, 0, 216) and 216", got, bilansOf(ev))
+	}
+	p12 := Propose(g, emptyPlan(12))
+	if e12 := Evaluate(g, p12); tableCounts(p12) != 3 || e12.Summary.StrangerPairs != 36 {
+		t.Errorf("plan 12: %d tables, %d stranger pairs; want 3 and 36", tableCounts(p12), e12.Summary.StrangerPairs)
+	}
+}
+
+func TestMixedX2PenaltyChoosesTheExtraTable(t *testing.T) {
+	g := cliqueGroups(3, 6, 6)
+	it := newItems(g, 12, true)
+	l3, _ := feasibleAt(it, 3, nil)
+	l4, _ := feasibleAt(it, 4, nil)
+	if l3 == nil || l4 == nil {
+		t.Fatal("both table counts must be feasible")
+	}
+	o3, o4 := l3.objective(), l4.objective()
+	if o3.score != 252 || o4.score != 216 {
+		t.Fatalf("scores %d (k=3) and %d (k=4), want 252 and 216 (example L)", o3.score, o4.score)
+	}
+	// at λ = 0 the higher score would win (k = 3); with λ = 1 the strangers it carries decide
+	if o3.net() != 252-2*36 || o4.net() != 216 || o3.net() >= o4.net() {
+		t.Errorf("bilans %d (k=3) vs %d (k=4), want 180 < 216", o3.net(), o4.net())
+	}
+}
+
+func TestMixedX3ExampleMUsersShape(t *testing.T) {
+	// groups of 9 (3 x 3), 12 (4 x 3) and 10 (2 x 5), no links between groups; N = 31, k = 3 only
+	sizes := []int{3, 3, 3, 3, 3, 3, 3, 5, 5}
+	var cl []clusterLink
+	for _, grp := range [][]int{{0, 1, 2}, {3, 4, 5, 6}, {7, 8}} {
+		for i, a := range grp {
+			for _, b := range grp[i+1:] {
+				cl = append(cl, clusterLink{a, b, Preferred})
+			}
+		}
+	}
+	g, _ := instance(sizes, cl...)
+	p := Propose(g, mixedPlan())
+	ev := assertHardRules(t, g, p)
+	if !reflect.DeepEqual(sortedDesc(fills(ev)), []int{12, 10, 9}) || ev.Summary.StrangerPairs != 0 || ev.Summary.Isolated != 0 {
+		t.Errorf("fills %v, %d stranger pairs, %d isolated; want 12 + 10 + 9, 0, 0", fills(ev), ev.Summary.StrangerPairs, ev.Summary.Isolated)
+	}
+}
+
+func TestMixedX4TieKeepsTheSmallerK(t *testing.T) {
+	// 36 children-only singletons: bilans 0 at k = 3 and k = 4
+	g := BuildGraph(kids(enabledRange(1, 36), rng(1, 36)...), nil)
+	p := Propose(g, mixedPlan())
+	assertHardRules(t, g, p)
+	if tableCounts(p) != 3 {
+		t.Errorf("%d tables, want the smaller k = 3", tableCounts(p))
+	}
+}
+
+func TestMixedX5SingleTable(t *testing.T) {
+	g := BuildGraph(enabledRange(1, 8), nil)
+	p := Propose(g, mixedPlan())
+	ev := assertHardRules(t, g, p)
+	if tableCounts(p) != 1 || fills(ev)[0] != 8 {
+		t.Errorf("fills %v, want one table of 8 (floor waived)", fills(ev))
+	}
+}
+
+func TestMixedX6NoFeasibleK(t *testing.T) {
+	for _, n := range []GuestID{13, 14, 17, 25, 26} {
+		g := BuildGraph(enabledRange(1, n), nil)
+		p := Propose(g, mixedPlan())
+		if !p.Mixed || p.Capacity != 12 {
+			t.Fatalf("N = %d: Capacity %d Mixed %v", n, p.Capacity, p.Mixed)
+		}
+		assertWellFormed(t, g, p)
+		if ev := Evaluate(g, p); !ev.Summary.NeedsRecalculation || !slicesContains(codes(ev.Violations), ViolUnderFloor) {
+			t.Errorf("N = %d: want an under_floor violation, got %v (fills %v)", n, codes(ev.Violations), fills(ev))
+		}
+	}
+	// N = 27 is the first feasible head count after the gap
+	g := BuildGraph(enabledRange(1, 27), nil)
+	assertHardRules(t, g, Propose(g, mixedPlan()))
+}
+
+func TestMixedX7EveryTableHasNineToTwelve(t *testing.T) {
+	gB, _ := instance([]int{4, 10, 4, 4, 4, 4, 4, 2}, clusterLink{0, 1, Preferred})
+	for name, g := range map[string]Graph{"L": cliqueGroups(3, 6, 6), "B36": gB, "C": exampleC(), "I": exampleI(), "fixture": annealFixture()} {
+		p := Propose(g, mixedPlan())
+		if !p.Mixed || p.Capacity != 12 {
+			t.Errorf("%s: Capacity %d Mixed %v", name, p.Capacity, p.Mixed)
+		}
+		ev := assertHardRules(t, g, p)
+		if tableCounts(p) > 1 {
+			for _, f := range fills(ev) {
+				if f < MixedFloor || f > 12 {
+					t.Errorf("%s: fills %v outside [%d, 12]", name, fills(ev), MixedFloor)
+				}
+			}
+		}
+	}
+}
+
+func TestMixedX8Pins(t *testing.T) {
+	g := cliqueGroups(3, 12) // one acquainted group of 36: three tables of 12 are best unpinned
+	if p := Propose(g, mixedPlan()); tableCounts(p) != 3 {
+		t.Fatalf("precondition: unpinned best is 3 tables, got %d", tableCounts(p))
+	}
+	pin := rng(1, 3)
+	t.Run("a pin to table 4 raises the lower bound of k", func(t *testing.T) {
+		cur := Plan{Capacity: 12, Mixed: true, Tables: []Table{{Number: 1}, {Number: 2}, {Number: 3}, pinnedTbl(4, pin, pin...)}}
+		p := Propose(g, cur)
+		assertHardRules(t, g, p)
+		if tableCounts(p) != 4 || tableOfGuest(p, 1) != 4 {
+			t.Errorf("%d tables, pinned cluster at table %d; want 4 and 4", tableCounts(p), tableOfGuest(p, 1))
 		}
 		for _, tb := range p.Tables {
 			for _, s := range tb.Seats {
-				if s.Pinned != (tb.Number == 3 && s.Guest >= 9 && s.Guest <= 14) {
+				if s.Pinned != (tb.Number == 4 && s.Guest <= 3) {
 					t.Errorf("guest %d at table %d: pinned = %v", s.Guest, tb.Number, s.Pinned)
 				}
 			}
 		}
 	})
-	t.Run("a pin to table k0+1 is released when the extra table does not help", func(t *testing.T) {
-		g, f := structuralB36()
-		last := f[len(f)-1] // the 2-guest cluster
-		ids := rng(last, last+1)
-		cur := Plan{Capacity: 12, Mixed: true, Tables: []Table{{Number: 1}, {Number: 2}, {Number: 3}, pinnedTbl(4, ids, ids...)}}
-		p := Propose(g, cur)
+	t.Run("a pin above floor(N/9) is released", func(t *testing.T) {
+		cur := Plan{Capacity: 12, Mixed: true, Tables: []Table{{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}, pinnedTbl(5, pin, pin...)}}
+		p := Propose(g, cur) // N = 36: k in [3, 4]; table 5 cannot exist
 		assertHardRules(t, g, p)
 		if tableCounts(p) != 3 {
-			t.Fatalf("%d tables, want k0 = 3 (the pin to table 4 is released)", tableCounts(p))
+			t.Errorf("%d tables, want 3 (the pin is released)", tableCounts(p))
 		}
 		for _, tb := range p.Tables {
 			for _, s := range tb.Seats {
@@ -191,39 +199,107 @@ func TestMixedM7Pins(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a pin within k0 is kept like in plan 12", func(t *testing.T) {
-		g, f := structuralB36()
-		ids := rng(f[2], f[2]+3)
-		cur := Plan{Capacity: 12, Mixed: true, Tables: []Table{{Number: 1}, pinnedTbl(2, ids, ids...), {Number: 3}}}
+	t.Run("a pin within the best k is kept", func(t *testing.T) {
+		cur := Plan{Capacity: 12, Mixed: true, Tables: []Table{{Number: 1}, pinnedTbl(2, pin, pin...), {Number: 3}}}
 		p := Propose(g, cur)
 		assertHardRules(t, g, p)
-		if tableOfGuest(p, f[2]) != 2 {
-			t.Errorf("pinned cluster at table %d, want 2", tableOfGuest(p, f[2]))
+		if tableCounts(p) != 3 || tableOfGuest(p, 1) != 2 {
+			t.Errorf("%d tables, pinned cluster at table %d; want 3 and 2", tableCounts(p), tableOfGuest(p, 1))
 		}
 	})
 }
 
-func TestMixedM8InfeasibleIsPlan12sBestEffort(t *testing.T) {
-	for _, n := range []GuestID{14, 15} { // 14 guests: k = 2 would need 16
-		g := BuildGraph(enabledRange(1, n), nil)
-		pm := Propose(g, mixedPlan())
-		if !pm.Mixed || pm.Capacity != 12 {
-			t.Fatalf("Capacity %d Mixed %v", pm.Capacity, pm.Mixed)
+// X9: Propose maximises the bilans over all k and layouts, ties to the smaller k, checked
+// against full enumeration on small random instances (with children).
+func TestMixedX9MatchesBruteForce(t *testing.T) {
+	checked, multiK := 0, 0
+	for seed := int64(1); seed <= 40; seed++ {
+		r := rand.New(rand.NewSource(seed))
+		guests, ls := bruteInstance(r, 36, 48, 3, 7)
+		g := BuildGraph(guests, ls)
+		it := newItems(g, 12, true)
+		lo, hi := minTables(it.total, 12), it.total/MixedFloor
+		bestK, bestNet, found := 0, 0, false
+		for k := lo; k <= hi; k++ {
+			if o, ok := bruteBest(it, k); ok && (!found || o.net() > bestNet) {
+				bestK, bestNet, found = k, o.net(), true
+			}
 		}
-		p12 := Propose(g, emptyPlan(12))
-		if !reflect.DeepEqual(asUniform(pm), p12) {
-			t.Errorf("N = %d: best-effort mixed plan differs from plan 12", n)
+		if !found {
+			continue
 		}
-		if ev := Evaluate(g, pm); !ev.Summary.NeedsRecalculation || !slicesContains(codes(ev.Violations), ViolUnderFloor) {
-			t.Errorf("N = %d: want an under_floor violation, got %v", n, codes(ev.Violations))
+		checked++
+		if hi > lo {
+			multiK++
+		}
+		p := Propose(g, mixedPlan())
+		ev := assertHardRules(t, g, p)
+		if got := bilansOf(ev); got != bestNet || tableCounts(p) != bestK {
+			t.Errorf("seed %d (N=%d, k in [%d, %d]): Propose bilans %d with %d tables, brute force %d with %d tables",
+				seed, it.total, lo, hi, got, tableCounts(p), bestNet, bestK)
+		}
+	}
+	if checked < 12 || multiK < 6 {
+		t.Errorf("%d instances checked, %d with more than one k", checked, multiK)
+	}
+}
+
+func TestMixedX10EvaluateFloorNine(t *testing.T) {
+	g := BuildGraph(enabledRange(1, 20), nil)
+	stored := Plan{Capacity: 12, Mixed: true, Tables: []Table{tbl(1, rng(1, 8)...), tbl(2, rng(9, 20)...)}}
+	ev := Evaluate(g, stored)
+	if !ev.Summary.NeedsRecalculation || !reflect.DeepEqual(codes(ev.Violations), []ViolationCode{ViolUnderFloor}) || ev.Violations[0].Table != 1 {
+		t.Errorf("mixed table of 8: violations %+v, want one under_floor at table 1", ev.Violations)
+	}
+	uniform := stored
+	uniform.Mixed = false
+	if ev := Evaluate(g, uniform); len(ev.Violations) != 0 {
+		t.Errorf("the same fills in plan 12 (floor 8): violations %+v, want none", ev.Violations)
+	}
+	nine := Plan{Capacity: 12, Mixed: true, Tables: []Table{tbl(1, rng(1, 9)...), tbl(2, rng(10, 20)...)}}
+	if ev := Evaluate(g, nine); len(ev.Violations) != 0 {
+		t.Errorf("a mixed table of 9: violations %+v, want none", ev.Violations)
+	}
+}
+
+// X11: the net objective of a mixed layout equals what Evaluate says, and its deltas add up.
+func TestMixedX11NetMatchesEvaluate(t *testing.T) {
+	for seed := int64(1); seed <= 20; seed++ {
+		r := rand.New(rand.NewSource(seed))
+		guests, ls := childInstance(r)
+		g := BuildGraph(guests, ls)
+		it := newItems(g, 12, true)
+		k := max(2, minTables(it.total, 12))
+		l := pack(it, k, nil, seed%2 == 0)
+		for a := range l.assign {
+			if l.assign[a] < 0 {
+				l.place(a, r.Intn(k))
+			}
+		}
+		for step := 0; step < 600; step++ {
+			a, b := r.Intn(len(l.assign)), r.Intn(len(l.assign))
+			if ta, tb := l.assign[a], l.assign[b]; ta != tb {
+				d := l.swapDelta(a, b)
+				before := l.objective().net()
+				l.move(a, tb)
+				l.move(b, ta)
+				if got := l.objective().net() - before; got != d.net() {
+					t.Fatalf("seed %d: swap net delta %d, recomputed %d", seed, d.net(), got)
+				}
+			}
+			if step%150 == 0 {
+				ev := Evaluate(g, l.toPlan())
+				if bilansOf(ev) != l.objective().net() {
+					t.Fatalf("seed %d: Evaluate bilans %d, objective net %d", seed, bilansOf(ev), l.objective().net())
+				}
+			}
 		}
 	}
 }
 
-func TestMixedM9Deterministic(t *testing.T) {
-	gA, _ := exampleA()
-	gB, _ := structuralB36()
-	for name, g := range map[string]Graph{"A": gA, "B36": gB, "C": exampleC(), "M5": m5Graph(), "M6": m6Graph()} {
+func TestMixedX12Deterministic(t *testing.T) {
+	gB, _ := instance([]int{4, 10, 4, 4, 4, 4, 4, 2}, clusterLink{0, 1, Preferred})
+	for name, g := range map[string]Graph{"L": cliqueGroups(3, 6, 6), "B36": gB, "C": exampleC(), "I": exampleI(), "13": BuildGraph(enabledRange(1, 13), nil)} {
 		first := Propose(g, mixedPlan())
 		if again := Propose(g, mixedPlan()); !reflect.DeepEqual(first, again) {
 			t.Errorf("%s: two calls differ", name)
@@ -231,28 +307,17 @@ func TestMixedM9Deterministic(t *testing.T) {
 	}
 }
 
-func TestMixedM10Invariants(t *testing.T) {
-	gA, _ := exampleA()
-	gB, _ := structuralB36()
-	for name, g := range map[string]Graph{"A": gA, "B36": gB, "C": exampleC(), "M5": m5Graph(), "M6": m6Graph(), "fixture": annealFixture()} {
-		p := Propose(g, mixedPlan())
-		if !p.Mixed || p.Capacity != 12 {
-			t.Errorf("%s: Capacity %d Mixed %v", name, p.Capacity, p.Mixed)
+func TestMixedX13UniformPlansKeepTheFloorOfEight(t *testing.T) {
+	if FloorOf(Plan{Capacity: 12}) != Floor || Floor != 8 || FloorOf(mixedPlan()) != MixedFloor || MixedFloor != 9 {
+		t.Errorf("FloorOf: uniform %d, mixed %d", FloorOf(Plan{Capacity: 12}), FloorOf(mixedPlan()))
+	}
+	for _, c := range []int{9, 10, 11, 12} {
+		if it := newItems(BuildGraph(enabledRange(1, 20), nil), c, false); it.floor != 8 || it.order != lexOrder {
+			t.Errorf("capacity %d: floor %d order %v", c, it.floor, it.order)
 		}
-		ev := assertHardRules(t, g, p)
-		for _, f := range fills(ev) {
-			if f < Floor || f > 12 {
-				t.Errorf("%s: fills %v outside [%d, 12]", name, fills(ev), Floor)
-			}
-		}
-		// never more than one table above the uniform plan, never fewer
-		d := tableCounts(p) - tableCounts(Propose(g, emptyPlan(12)))
-		if d != 0 && d != 1 {
-			t.Errorf("%s: %d tables more than plan 12", name, d)
-		}
-		if d == 1 && ev.Summary.Isolated >= Evaluate(g, Propose(g, emptyPlan(12))).Summary.Isolated {
-			t.Errorf("%s: an extra table without fewer isolated guests", name)
-		}
+	}
+	if it := newItems(BuildGraph(enabledRange(1, 20), nil), 12, true); it.floor != 9 || it.order != netOrder {
+		t.Errorf("mixed: floor %d order %v", it.floor, it.order)
 	}
 }
 
@@ -268,13 +333,13 @@ func TestMixedKeepsTheFlag(t *testing.T) {
 			t.Error("ExpandDisabled dropped Mixed")
 		}
 	})
-	t.Run("Evaluate ignores it", func(t *testing.T) {
+	t.Run("Evaluate scores the mixed plan like plan 12", func(t *testing.T) {
 		g, _ := exampleA()
 		p := Propose(g, emptyPlan(12))
 		pm := p
 		pm.Mixed = true
 		if !reflect.DeepEqual(Evaluate(g, p), Evaluate(g, pm)) {
-			t.Error("Evaluate depends on Mixed")
+			t.Error("Evaluate depends on Mixed beyond the floor")
 		}
 	})
 }
