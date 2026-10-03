@@ -6,8 +6,11 @@ How Stoliki is built and deployed **today**. Diagrams: [C4](diagrams/001-c4-cont
 
 - **One container** (`stoliki`) on the Raspberry Pi (ARM64). A static Go binary serves both the REST API and the built React SPA. There is no Nginx container and no database container.
 - **SQLite** database file on a named Docker volume `stoliki-data` (mounted at `/data`; file `/data/stoliki.db`).
-- Reachable **only from the tailnet** (a dedicated `tailscale serve` mapping on a **non-funnelled HTTPS port** of `<pi-host>.<tailnet>.ts.net`, under `/wesele/`) **and the home LAN** (`http://<pi-lan-ip>:8094/wesele/`, user decision 2026-10-02).
-- **No application login.** Tailnet membership or being on the home LAN is the access control, and everyone who reaches the app can edit everything.
+- Reachable from three places, all under `/wesele/` (user decision 2026-10-03, task 009):
+  - **public internet** via Tailscale Funnel on `:443`: `https://<pi-host>.<tailnet>.ts.net/wesele/`;
+  - **tailnet** via the non-funnelled serve mapping on `:8444`: `https://<pi-host>.<tailnet>.ts.net:8444/wesele/`;
+  - **home LAN**: `http://<pi-lan-ip>:8094/wesele/`.
+- **Shared-PIN access gate on every one of them** (no trusted-network exception): the SPA opens with a PIN screen; a correct PIN gives a signed session cookie valid 30 days (sliding); "Wyloguj" logs out. Everyone with the PIN can edit everything. Design: [05-access-gate.md](05-access-gate.md).
 
 ## Repository layout
 
@@ -36,7 +39,8 @@ The prefix is **kept on every request inside Stoliki**. Whatever routes traffic 
 
 | Layer | Setting |
 |---|---|
-| Tailscale mapping | **Wired and verified (2026-10-02):** `sudo tailscale serve --bg --https=8444 --set-path /wesele http://127.0.0.1:8094/wesele` — tailnet-only (`tailscale serve status` shows "tailnet only"; the port is absent from `tailscale funnel status`). Final URL: `https://<pi-host>.<tailnet>.ts.net:8444/wesele/`. Verified through the real hostname: `/wesele/api/health` 200, `/wesele` 301 → `/wesele/`, `/wesele/`, `/wesele/goscie`, `/wesele/druk/10` all 200. Because the Go server only serves full `/wesele/...` paths and answers 200 through the mapping, the prefix reaches the container intact: the target's `/wesele` suffix is required (the mount path is consumed and the target path re-added). The pre-existing mappings (`/`, `/sibling-a/`, `/sibling-b/`, `:8443`) were diffed against a snapshot taken before the change and still answer 200. The `sudo` is needed once because the user is not a Tailscale operator; do not run `serve reset` / `funnel`. |
+| Tailscale mapping (public) | **Wired 2026-10-03 (task 009):** `sudo tailscale funnel --bg --https=443 --set-path /wesele http://127.0.0.1:8094/wesele` — an extra handler on the already-funnelled `:443` listener next to investing-app's `/` → `localhost:80`. URL: `https://<pi-host>.<tailnet>.ts.net/wesele/`. Same target (with the `/wesele` suffix) as the tailnet mapping. Rollback: `sudo tailscale funnel --https=443 --set-path /wesele off` (never `reset`). |
+| Tailscale mapping (tailnet) | **Wired and verified (2026-10-02):** `sudo tailscale serve --bg --https=8444 --set-path /wesele http://127.0.0.1:8094/wesele` — tailnet-only (`tailscale serve status` shows "tailnet only"; the port is absent from `tailscale funnel status`). Final URL: `https://<pi-host>.<tailnet>.ts.net:8444/wesele/`. Verified through the real hostname: `/wesele/api/health` 200, `/wesele` 301 → `/wesele/`, `/wesele/`, `/wesele/goscie`, `/wesele/druk/10` all 200. Because the Go server only serves full `/wesele/...` paths and answers 200 through the mapping, the prefix reaches the container intact: the target's `/wesele` suffix is required (the mount path is consumed and the target path re-added). The pre-existing mappings (`/`, `/sibling-a/`, `/sibling-b/`, `:8443`) were diffed against a snapshot taken before the change and still answer 200. The `sudo` is needed once because the user is not a Tailscale operator; never run `serve reset` / `funnel reset`. This mapping stays tailnet-only (`:8444` cannot be funnelled). |
 | Go server | `BASE_PATH=/wesele`. Routes: `/wesele/api/*` (API); `/wesele/*` (static SPA from `WEB_ROOT`, falling back to `index.html` for unknown non-API paths); `/wesele` → 301 `/wesele/` |
 | Vite | `base: '/wesele/'` (dev: proxy `/wesele/api` → `http://localhost:8080`) |
 | React Router | `basename: '/wesele'` |
@@ -45,29 +49,32 @@ The prefix is **kept on every request inside Stoliki**. Whatever routes traffic 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as Browser on a tailnet device
-    participant TS as tailscale serve (HTTPS, non-funnelled port)
+    actor U as Browser (internet, tailnet or LAN)
+    participant TS as tailscale funnel :443 / serve :8444 (HTTPS)
     participant S as stoliki Go binary (BASE_PATH=/wesele)
     participant DB as SQLite /data/stoliki.db
-    U->>TS: GET https://host:port/wesele/plans/10
+    U->>TS: GET https://host[:8444]/wesele/plans/10
     TS->>S: GET /wesele/plans/10 (full prefix delivered)
-    S-->>U: index.html (SPA fallback) + /wesele/assets/*
-    U->>TS: GET /wesele/api/scenarios
-    TS->>S: GET /wesele/api/scenarios
+    S-->>U: index.html (SPA fallback) + /wesele/assets/* (open, no data)
+    U->>TS: GET /wesele/api/scenarios + Cookie stoliki_session
+    TS->>S: GET /wesele/api/scenarios (X-Forwarded-Proto: https)
+    S->>S: access gate: valid signed cookie? (else 401 → PIN screen)
     S->>DB: read guests, links, tables, assignments
     S->>S: seating.Evaluate per scenario (clusters, satisfaction, violations)
     S-->>U: 200 {data: [4 scenarios with evaluation], meta, page}
 ```
 
-*Legend:* shows the two invariants of this doc. The prefix is preserved end-to-end, and every read returns a freshly derived evaluation (nothing derived is stored). Requests from outside the tailnet and the home LAN never reach the Pi.
+*Legend:* shows the three invariants of this doc. The prefix is preserved end-to-end, every API call except health/login/logout passes the PIN gate, and every read returns a freshly derived evaluation (nothing derived is stored). The home-LAN path (`http://<pi-lan-ip>:8094`) skips Tailscale but hits the same gate.
 
 ## Access control
 
-- **Tailnet + home LAN only** (user decision 2026-10-02). Besides the tailnet mapping, the app is reachable on the home LAN at `http://<pi-lan-ip>:8094/wesele/` (plain HTTP, no login). Never forward that port on the router. The Stoliki mapping must never be funnelled. `:443` on this Pi is funnelled for other apps, and Funnel is per listener port, so Stoliki uses its own HTTPS port. `tailscale funnel status` must not list it.
-- **No app auth**, no roles, no secrets. This is a deliberate simplification (user decision, 2026-10-02).
-- **Public exposure is being added with auth first (task 009, user decision 2026-10-03):** a shared-PIN gate (Go middleware on the API, signed `HttpOnly` session cookie, login throttling) on **every** network, LAN included, then Tailscale Funnel after the user's confirmation. Fully designed in [05-access-gate.md](05-access-gate.md); this section describes the running system and switches over when phase C1 (gate) / C2 (Funnel) are deployed.
+- **Public, behind a shared PIN** (task 009, user decision 2026-10-03, live the same day). One Go middleware on the API sub-router requires a signed `HttpOnly` `stoliki_session` cookie (30 days, sliding) on every API operation except `GET /health`, `POST /session` (login) and `DELETE /session` (logout); missing/invalid → 401. State-changing requests also need `X-Stoliki-Request: 1` (CSRF; 403). Failed logins are throttled in memory. The static SPA shell (with the PIN screen) is open; it holds no personal data. Full design and threat model: [05-access-gate.md](05-access-gate.md).
+- **The same gate on every network**: public Funnel URL, tailnet `:8444` URL and home-LAN URL (plain HTTP, so PIN and cookie cross the home Wi-Fi unencrypted — accepted). No roles: everyone with the PIN can edit everything.
+- **The one secret** is `STOLIKI_PIN`, only in the gitignored `infra/.env` (mode 600). Compose refuses to run without it (`${STOLIKI_PIN:?…}`), so the deployment can never start open. Changing it + restart logs every device out. A short PIN is weak against a targeted guesser; a longer one is recommended.
+- **Known gap:** it is not verified that `tailscale serve`/`funnel` sends `X-Forwarded-For`. If it does not, all proxied clients share one throttle key, so one attacker's failed guesses also block other people's *new* logins for a while (existing sessions keep working).
+- Exposure rules: only the `/wesele` handler on `:443` is funnelled (plus the tailnet-only `:8444` mapping); never `tailscale serve reset` / `funnel reset`; never touch other apps' handlers; never forward port 8094 on the router. Rollback of public access: `sudo tailscale funnel --https=443 --set-path /wesele off`.
 - Personal-data hygiene still applies: **never log guest names, notes, CSV content or request bodies**; logs carry ids and counts only. Response header `X-Robots-Tag: noindex`. Request body limit 1 MB (CSV import 2 MB).
-- The host port is published on `${STOLIKI_BIND:-0.0.0.0}:8094` (compose), so the local Tailscale daemon and the home LAN reach it; `STOLIKI_BIND=127.0.0.1` restricts it back to loopback (tailnet-only).
+- The host port is published on `${STOLIKI_BIND:-0.0.0.0}:8094` (compose), so the local Tailscale daemon and the home LAN reach it; `STOLIKI_BIND=127.0.0.1` restricts it to loopback (Tailscale only, no LAN).
 
 ## Persistence
 
@@ -106,7 +113,7 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Frontend | React 19, TypeScript strict, Vite, React Router v7 (basename `/wesele`), TanStack Query v5, Tailwind v4, shadcn/ui, `@dnd-kit/core`, `openapi-typescript` + `openapi-fetch`; Zod for forms only |
 | Contract | OpenAPI 3.1. Source in `docs/openapi/`, bundled to `docs/openapi.yaml` and linted with `@redocly/cli@2.57.0` (`make openapi-bundle`, `make openapi-lint`, `make openapi`) |
 | Packaging | One multi-stage image → `gcr.io/distroless/static-debian12:nonroot`, `linux/arm64`; compose v2; named volume `stoliki-data` |
-| Config (env) | `BASE_PATH=/wesele`, `PORT=8080`, `DB_PATH=/data/stoliki.db`, `WEB_ROOT=/app/web`; task 009 adds the one secret `STOLIKI_PIN` (from gitignored `infra/.env`; unset = gate off) and the generated `/data/session.key` |
+| Config (env) | `BASE_PATH=/wesele`, `PORT=8080`, `DB_PATH=/data/stoliki.db`, `WEB_ROOT=/app/web`; the one secret `STOLIKI_PIN` (from gitignored `infra/.env`, required by compose; unset = gate off, dev/tests only) and the generated `/data/session.key` |
 
 ## Pattern evaluation (system level)
 
@@ -122,5 +129,5 @@ Class-level design: [diagrams/003-backend-design.md](diagrams/003-backend-design
 | Adapter | **adopted** (import edge) | CSV now; a Sheets API source could replace it |
 | Optimistic Offline Lock | **adopted** | `version` on Guest and Scenario |
 | DTO + Mapper | **adopted** | Boundary between sqlc rows, domain types and OpenAPI DTOs |
-| Authentication middleware | **adopted (task 009, being implemented)** | Shared-PIN gate as one chi middleware on the API sub-router; see [05-access-gate.md](05-access-gate.md) |
+| Authentication middleware | **adopted (task 009, live)** | Shared-PIN gate as one chi middleware on the API sub-router; see [05-access-gate.md](05-access-gate.md) |
 | Separate Nginx container | rejected | Go serves SPA + API |

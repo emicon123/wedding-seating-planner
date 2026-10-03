@@ -1,6 +1,6 @@
 # 05 — Access gate (shared PIN) and public exposure
 
-**Status (2026-10-03):** designed in task 009 phase A; implemented in phases B1 (Go) and B2 (SPA); deployed with a PIN in C1; publicly exposed only in C2, after the user confirms. Until C1 is live, [02-system-context.md](02-system-context.md) § Access control describes the running system (no login, tailnet + home LAN). Decision record: ADR-001 § "Amendment (2026-10-03, task 009)".
+**Status (2026-10-03): live.** The gate is deployed with `STOLIKI_PIN` set in `infra/.env`, and the app is **publicly reachable through Tailscale Funnel** (option A of § 7) at `https://<pi-host>.<tailnet>.ts.net/wesele/`; the tailnet URL (`:8444`) and the home-LAN URL stay and go through the same gate. Verified after the change: unauthenticated `GET /wesele/api/guests` → 401, `GET /wesele/api/health` → 200, SPA shell open, and the login `Set-Cookie` carries `Secure` behind serve/funnel (so `X-Forwarded-Proto` arrives). **Not verified:** whether `X-Forwarded-For` reaches the server through serve/funnel. If it does not, every proxied client has the same throttle key (the loopback peer), so the per-client limit of § 4 acts as a second global limit: one attacker's failures also lock out the other users' new logins (existing sessions are unaffected). A short PIN is weak (§ 5); a longer one is a one-line change in `infra/.env` + restart, which logs everyone out. Decision record: ADR-001 § "Amendment (2026-10-03, task 009)".
 
 Contract: [`docs/openapi.yaml`](../openapi.yaml) (`/session`, `securitySchemes.sessionCookie`, 401 on every protected operation, 403 on every state-changing one, 429 on login). Class level: [diagrams/003-backend-design.md](diagrams/003-backend-design.md) §7, [diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §10. Flows: [diagrams/003-sequences.md](diagrams/003-sequences.md) §6. States: [diagrams/001-state-machine.md](diagrams/001-state-machine.md) §5.
 
@@ -8,7 +8,7 @@ Contract: [`docs/openapi.yaml`](../openapi.yaml) (`/session`, `securitySchemes.s
 
 ## 1. What is protected, what is open
 
-One gate, **the same everywhere**: tailnet, home LAN and (after C2) the public internet all go through the same Go middleware. There is no "trusted network" exception (user decision 2026-10-03: one code path).
+One gate, **the same everywhere**: tailnet, home LAN and the public internet (Funnel) all go through the same Go middleware. There is no "trusted network" exception (user decision 2026-10-03: one code path).
 
 | Route (all under `BASE_PATH=/wesele`) | Gate on | Why |
 |---|---|---|
@@ -62,7 +62,7 @@ flowchart TD
 | `Path` | `BASE_PATH` (`/wesele`) — not sent to other apps on the same host (`/sibling-a`, `/sibling-b`, `/`) |
 | `HttpOnly` | always |
 | `SameSite` | `Lax` |
-| `Secure` | **only when the request came over HTTPS**: `r.TLS != nil` or `X-Forwarded-Proto: https` (set by `tailscale serve`/`funnel` — DevOps verifies in C1). Plain-HTTP LAN requests (`http://<pi-lan-ip>:8094`) get no `Secure`, otherwise browsers would drop the cookie and the LAN could never log in. Spoofing the header only adds `Secure` to the spoofer's own cookie, so trusting it is harmless. |
+| `Secure` | **only when the request came over HTTPS**: `r.TLS != nil` or `X-Forwarded-Proto: https` (set by `tailscale serve`/`funnel` — verified 2026-10-03: logins over the HTTPS URLs get `Secure`). Plain-HTTP LAN requests (`http://<pi-lan-ip>:8094`) get no `Secure`, otherwise browsers would drop the cookie and the LAN could never log in. Spoofing the header only adds `Secure` to the spoofer's own cookie, so trusting it is harmless. |
 | `Max-Age` | 30 days (2 592 000 s) |
 | Sliding | on any authenticated API request whose token was issued more than 24 h ago, the gate re-issues the cookie with a fresh 30-day expiry (at most one `Set-Cookie` per device per day) |
 | Verification | `hmac.Equal` on the MAC, then `expiresAt > now`. Bad format, bad MAC, expired → treated as "no cookie" (401). No server-side session store. |
@@ -80,7 +80,7 @@ The PIN space may be tiny, so the real protection is the attempt budget, not the
 
 | Limit | Parameter | Value |
 |---|---|---|
-| **Per client** (key: rightmost `X-Forwarded-For` entry if present, else the TCP peer IP) | free failures | 3 |
+| **Per client** (key: rightmost `X-Forwarded-For` entry if present, else the TCP peer IP — not yet verified that serve/funnel sends the header; see Status) | free failures | 3 |
 | | lock after failure *n* ≥ 4 | 30 s × 2^(n−4), capped at **1 h** (30 s, 1 min, 2 min, 4 min, … 1 h) |
 | | forget the client | 24 h after its last failure, or on its successful login |
 | | table size | at most 4096 clients; when full, expired entries are pruned; if still full, unknown clients are refused (429, fail closed) |
@@ -124,7 +124,21 @@ Details: [diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §10
 - "Wyloguj" → `DELETE /session` → clear the whole query cache → PIN screen.
 - The API client sends `X-Stoliki-Request: 1` on **every** request (harmless when the gate is off).
 
-## 7. Public exposure via Tailscale Funnel (phase C2 — needs the user's yes)
+## 7. Public exposure via Tailscale Funnel
+
+**Live (2026-10-03): option A.** The user ran `sudo tailscale funnel --bg --https=443 --set-path /wesele http://127.0.0.1:8094/wesele`. Resulting Tailscale config:
+
+| Listener | Funnel | Handlers |
+|---|---|---|
+| `:443` | **on** (public) | `/` → `localhost:80` (investing-app, unchanged); **`/wesele` → `http://127.0.0.1:8094/wesele`** (Stoliki, new) |
+| `:8443` | on | → `localhost:8123` (another app, untouched) |
+| `:8444` | off (tailnet only) | `/wesele` → `http://127.0.0.1:8094/wesele` (Stoliki, kept) |
+
+Public URL: `https://<pi-host>.<tailnet>.ts.net/wesele/`. Tailnet URL: `https://<pi-host>.<tailnet>.ts.net:8444/wesele/`. LAN URL: `http://<pi-lan-ip>:8094/wesele/`.
+
+**Rollback (removes only the public handler; the tailnet and LAN URLs keep working):** `sudo tailscale funnel --https=443 --set-path /wesele off`. Never `tailscale serve reset` / `funnel reset`, never `--https=443` without `--set-path` (that would replace investing-app's `/` handler); check `tailscale serve status` and `tailscale funnel status` before and after.
+
+The rest of this section is the option analysis made before the change.
 
 **Facts (from the docs, not re-checked with any `tailscale` command in phase A):**
 - Funnel can only listen on **443, 8443 and 10000**, and is switched on **per listener port**.
@@ -146,11 +160,7 @@ In all options the **`:8444` tailnet mapping stays** (same app, same gate; remov
 
 **C2 procedure (DevOps, after the user's explicit yes):** confirm the CLI syntax with `tailscale funnel --help` (read-only); save `tailscale serve status --json` and `tailscale funnel status` to a file; run the one chosen command (never `reset`, never `--https=443` without `--set-path`); diff status before/after — exactly one new handler (`/wesele` on the chosen port) and nothing else changed; `/`, `/sibling-a/`, `/sibling-b/`, `:8443` still answer as before; from outside the tailnet (phone on mobile data): `/wesele/` shows the PIN screen, `GET /wesele/api/guests` → 401, `GET /wesele/api/health` → 200. **Undo:** `sudo tailscale funnel --https=<port> --set-path /wesele off` (removes only that handler — verify the exact syntax in `--help` first).
 
-**Needs user confirmation before C2:**
-1. Option **A** (path on the existing public `:443`, URL without a port) vs **B** (`:10000`).
-2. Keep the tailnet `:8444` mapping (recommended: yes).
-3. The weak-PIN caveat (§ 5): keep the 4-digit PIN, or switch to a longer one before going public (recommended).
-4. The final "go" itself — publishing is outward-facing and hard to undo (the hostname is already in CT logs; once public, the PIN screen is reachable by anyone).
+**User decisions (2026-10-03):** option **A**; keep the `:8444` tailnet mapping; keep the 4-character PIN for now (the weak-PIN caveat of § 5 stands; a longer PIN remains recommended); go public.
 
 ## 8. Pattern evaluation
 
