@@ -27,42 +27,64 @@ func (s *Scenarios) List(ctx context.Context) ([]scenarios.PlanState, error) {
 	return out, err
 }
 
-// Get returns one plan, or apperr.ErrNotFound for a capacity that is not 8, 10 or 12.
+// Get returns one plan, or apperr.ErrNotFound for a capacity that is not 9, 10, 11 or 12.
 func (s *Scenarios) Get(ctx context.Context, capacity int) (scenarios.PlanState, error) {
 	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error { return nil })
 }
 
-// ReplacePlan swaps the whole plan (tables, seats, pins) for p when the stored version equals
-// expectedVersion (else apperr.ErrVersionConflict) and bumps the version. A guest unknown to the
-// guest table gives apperr.ErrNotFound and nothing is changed. p's tables are stored under
-// their own numbers; the caller guarantees 1..k and no guest twice.
-func (s *Scenarios) ReplacePlan(ctx context.Context, capacity int, expectedVersion int64, p seating.Plan) (scenarios.PlanState, error) {
-	return s.tx(ctx, capacity, func(q *sqlcgen.Queries, sc sqlcgen.Scenario) error {
-		n, err := q.BumpScenarioVersionIf(ctx, sqlcgen.BumpScenarioVersionIfParams{ID: sc.ID, Version: expectedVersion})
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return apperr.ErrVersionConflict
-		}
-		if err := q.DeleteScenarioTables(ctx, sc.ID); err != nil {
-			return err
-		}
-		for _, t := range p.Tables {
-			tableID, err := q.InsertDiningTable(ctx, sqlcgen.InsertDiningTableParams{ScenarioID: sc.ID, Number: int64(t.Number)})
+// ReplacePlans swaps the whole content (tables, seats, pins) of every given plan in ONE
+// transaction. Per plan it is a compare-and-set on the scenario version: when the stored
+// version is not ExpectedVersion the transaction is rolled back (nothing of any plan is
+// written) and the error is apperr.StaleVersion (matches apperr.ErrVersionConflict). A
+// capacity that does not exist gives apperr.ErrNotFound. Each replaced plan's version is bumped
+// by 1. Plan tables are stored under their own numbers; the caller guarantees 1..k and no guest
+// twice. Returns the stored states of the given capacities, ordered by capacity.
+func (s *Scenarios) ReplacePlans(ctx context.Context, ps []scenarios.PlanReplace) ([]scenarios.PlanState, error) {
+	var out []scenarios.PlanState
+	err := withTx(ctx, s.db, func(q *sqlcgen.Queries) error {
+		replaced := make(map[int]bool, len(ps))
+		for _, p := range ps {
+			sc, err := q.GetScenario(ctx, int64(p.Capacity))
+			if err != nil {
+				return err // sql.ErrNoRows -> ErrNotFound
+			}
+			n, err := q.BumpScenarioVersionIf(ctx, sqlcgen.BumpScenarioVersionIfParams{ID: sc.ID, Version: p.ExpectedVersion})
 			if err != nil {
 				return err
 			}
-			for _, seat := range t.Seats {
-				if err := q.UpsertAssignment(ctx, sqlcgen.UpsertAssignmentParams{
-					ScenarioID: sc.ID, GuestID: seat.Guest, TableID: tableID, Pinned: boolInt(seat.Pinned),
-				}); err != nil {
+			if n == 0 {
+				return apperr.StaleVersion{Capacity: p.Capacity, Current: sc.Version}
+			}
+			if err := q.DeleteScenarioTables(ctx, sc.ID); err != nil {
+				return err
+			}
+			for _, t := range p.Plan.Tables {
+				tableID, err := q.InsertDiningTable(ctx, sqlcgen.InsertDiningTableParams{ScenarioID: sc.ID, Number: int64(t.Number)})
+				if err != nil {
 					return err
 				}
+				for _, seat := range t.Seats {
+					if err := q.UpsertAssignment(ctx, sqlcgen.UpsertAssignmentParams{
+						ScenarioID: sc.ID, GuestID: seat.Guest, TableID: tableID, Pinned: boolInt(seat.Pinned),
+					}); err != nil {
+						return err
+					}
+				}
+			}
+			replaced[p.Capacity] = true
+		}
+		states, err := loadStates(ctx, q)
+		if err != nil {
+			return err
+		}
+		for _, st := range states {
+			if replaced[st.Plan.Capacity] {
+				out = append(out, st)
 			}
 		}
 		return nil
 	})
+	return out, err
 }
 
 // SeatCluster puts every listed guest at the table (moving the seated, seating the unseated)

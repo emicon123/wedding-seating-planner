@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/oapi-codegen/nullable"
 
+	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/guests"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/httpapi/oapi"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/scenarios"
@@ -220,15 +221,29 @@ func violationMessage(v seating.Violation, capacity int, fills map[int]int) stri
 	}
 }
 
-// fromAcceptPlan maps the accepted layout to core tables (seats unpinned: the service keeps the
-// pins of previously pinned clusters).
-func fromAcceptPlan(body oapi.AcceptPlan) []seating.Table {
-	tables := make([]seating.Table, len(body.Tables))
-	for i, t := range body.Tables {
-		tables[i] = seating.Table{Number: t.Number, Seats: make([]seating.Seat, len(t.GuestIds))}
-		for j, id := range t.GuestIds {
-			tables[i].Seats[j] = seating.Seat{Guest: id}
+// fromScenariosReplace maps the four ScenarioLayouts to service inputs: one Seat per listed
+// guest, Pinned when the guest is in the table's pinnedGuestIds. A pinned id that is not one of
+// the table's guests cannot be expressed as a seat and is rejected here (422, field plans).
+func fromScenariosReplace(body oapi.ScenariosReplace) ([]scenarios.PlanInput, error) {
+	out := make([]scenarios.PlanInput, len(body.Plans))
+	for i, p := range body.Plans {
+		in := scenarios.PlanInput{Capacity: int(p.Capacity), BasedOn: int64(p.BasedOnVersion), Tables: make([]seating.Table, len(p.Tables))}
+		for j, t := range p.Tables {
+			pinned := make(map[int64]bool, len(t.PinnedGuestIds))
+			for _, id := range t.PinnedGuestIds {
+				pinned[id] = true
+			}
+			seats := make([]seating.Seat, len(t.GuestIds))
+			for k, id := range t.GuestIds {
+				seats[k] = seating.Seat{Guest: id, Pinned: pinned[id]}
+				delete(pinned, id)
+			}
+			if len(pinned) > 0 {
+				return nil, apperr.Validation{Field: "plans", Message: fmt.Sprintf("Plan %d: table %d pins a guest who is not at that table.", p.Capacity, t.Number)}
+			}
+			in.Tables[j] = seating.Table{Number: t.Number, Seats: seats}
 		}
+		out[i] = in
 	}
-	return tables
+	return out, nil
 }

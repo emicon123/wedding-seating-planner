@@ -1,5 +1,5 @@
 // Package scenarios holds the plan domain: the four seating scenarios (9, 10, 11, 12 seats per
-// table), the Service that evaluates, proposes, accepts and edits them, and the Store and
+// table), the Service that evaluates, proposes, replaces and edits them, and the Store and
 // GuestSource interfaces the Service needs (declared here, implemented by package store).
 package scenarios
 

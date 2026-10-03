@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
@@ -197,7 +199,7 @@ func TestCalculate(t *testing.T) {
 
 	t.Run("pinned clusters stay put and are flagged in the proposal", func(t *testing.T) {
 		e := newEnv(t, 24)
-		if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, rng(1, 8)...), table(2, rng(9, 16)...), table(3, rng(17, 24)...)}); err != nil {
+		if _, err := e.accept(ctx, 10, 1, []seating.Table{table(1, rng(1, 8)...), table(2, rng(9, 16)...), table(3, rng(17, 24)...)}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.plans.Seat(ctx, 10, 5, 3, true); err != nil { // pin 5 at table 3
@@ -226,34 +228,118 @@ func mustList(t *testing.T, e *env) []scenarios.Evaluated {
 	return got
 }
 
-func TestAcceptValidation(t *testing.T) {
+// inputs returns the four stored plans as the PlanInputs a client would send back unchanged
+// (current versions, current tables, pins as seat flags).
+func (e *env) inputs(t *testing.T) []scenarios.PlanInput {
+	t.Helper()
+	out, err := e.currentInputs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func (e *env) currentInputs(ctx context.Context) ([]scenarios.PlanInput, error) {
+	states, err := e.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]scenarios.PlanInput, len(states))
+	for i, st := range states {
+		out[i] = scenarios.PlanInput{Capacity: st.Plan.Capacity, BasedOn: st.Version, Tables: st.Plan.Tables}
+	}
+	return out, nil
+}
+
+// accept stores `tables` as plan `capacity` (under basedOn) through the only write path there
+// is, Replace, re-sending the other three plans unchanged, and returns the evaluated plan.
+func (e *env) accept(ctx context.Context, capacity int, basedOn int64, tables []seating.Table) (scenarios.Evaluated, error) {
+	in, err := e.currentInputs(ctx)
+	if err != nil {
+		return scenarios.Evaluated{}, err
+	}
+	for i := range in {
+		if in[i].Capacity == capacity {
+			in[i].BasedOn, in[i].Tables = basedOn, tables
+		}
+	}
+	all, err := e.plans.Replace(ctx, in)
+	if err != nil {
+		return scenarios.Evaluated{}, err
+	}
+	for _, ev := range all {
+		if ev.State.Plan.Capacity == capacity {
+			return ev, nil
+		}
+	}
+	return scenarios.Evaluated{}, errors.New("capacity missing from the result")
+}
+
+// snapshot is every plan's version and plan, for "nothing was written" assertions.
+func snapshot(t *testing.T, e *env) []scenarios.PlanState {
+	t.Helper()
+	states, err := e.store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return states
+}
+
+func unchanged(t *testing.T, e *env, before []scenarios.PlanState) {
+	t.Helper()
+	if after := snapshot(t, e); !reflect.DeepEqual(before, after) {
+		t.Errorf("a rejected Replace changed the plans:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+func TestReplaceValidation(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 12)
-	tests := []struct {
-		name      string
-		tables    []seating.Table
-		wantField string
-	}{
-		{"gap in numbering", []seating.Table{table(1, 1), table(3, 2)}, "tables"},
-		{"does not start at 1", []seating.Table{table(2, 1)}, "tables"},
-		{"duplicate table number", []seating.Table{table(1, 1), table(1, 2)}, "tables"},
-		{"table number zero", []seating.Table{table(0, 1)}, "tables"},
-		{"guest at two tables", []seating.Table{table(1, 1, 2), table(2, 2, 3)}, "tables"},
-		{"guest twice at one table", []seating.Table{table(1, 1, 1)}, "tables"},
-		{"unknown guest", []seating.Table{table(1, 1, 999)}, "tables"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := e.plans.Accept(ctx, 10, 1, tc.tables)
-			wantValidation(t, err, tc.wantField)
-			if ev := plan(t, e, 10); ev.State.Version != 1 || len(ev.State.Plan.Tables) != 0 {
-				t.Errorf("a rejected accept changed the plan: %+v", ev.State)
+	before := snapshot(t, e)
+
+	t.Run("capacities must be 9, 10, 11 and 12, each once", func(t *testing.T) {
+		in := e.inputs(t)
+		dup := slices.Clone(in)
+		dup[3].Capacity = 11
+		bad8 := slices.Clone(in)
+		bad8[0].Capacity = 8
+		for name, bad := range map[string][]scenarios.PlanInput{"three plans": in[:3], "five plans": append(slices.Clone(in), in[0]), "no plans": nil, "repeated capacity": dup, "capacity 8": bad8} {
+			_, err := e.plans.Replace(ctx, bad)
+			if v := (apperr.Validation{}); !errors.As(err, &v) || v.Field != "plans" {
+				t.Errorf("%s: err = %v, want Validation on plans", name, err)
 			}
+		}
+		unchanged(t, e, before)
+	})
+
+	layouts := []struct {
+		name   string
+		tables []seating.Table
+	}{
+		{"gap in numbering", []seating.Table{table(1, 1), table(3, 2)}},
+		{"does not start at 1", []seating.Table{table(2, 1)}},
+		{"duplicate table number", []seating.Table{table(1, 1), table(1, 2)}},
+		{"table number zero", []seating.Table{table(0, 1)}},
+		{"guest at two tables", []seating.Table{table(1, 1, 2), table(2, 2, 3)}},
+		{"guest twice at one table", []seating.Table{table(1, 1, 1)}},
+		{"unknown guest", []seating.Table{table(1, 1, 999)}},
+	}
+	for _, tc := range layouts {
+		t.Run(tc.name+" in the last plan rejects all four", func(t *testing.T) {
+			in := e.inputs(t)
+			in[0].Tables = []seating.Table{table(1, 1, 2)} // a valid plan before the bad one
+			in[3].Tables = tc.tables
+			_, err := e.plans.Replace(ctx, in)
+			var v apperr.Validation
+			if !errors.As(err, &v) || v.Field != "plans" || !strings.Contains(v.Message, "Plan 12") {
+				t.Fatalf("err = %v, want Validation on plans naming plan 12", err)
+			}
+			unchanged(t, e, before)
 		})
 	}
 
 	t.Run("unsorted but complete numbering is accepted and stored 1..k", func(t *testing.T) {
-		got, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(2, 3, 4), table(1, 1, 2)})
+		got, err := e.accept(ctx, 10, 1, []seating.Table{table(2, 3, 4), table(1, 1, 2)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,47 +351,75 @@ func TestAcceptValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty layout is valid (clears the plan)", func(t *testing.T) {
-		got, err := e.plans.Accept(ctx, 12, 1, nil)
-		if err != nil || len(got.State.Plan.Tables) != 0 || got.State.Version != 2 {
+	t.Run("an empty layout is valid (clears the plan) and an empty table is kept", func(t *testing.T) {
+		v := plan(t, e, 12).State.Version
+		got, err := e.accept(ctx, 12, v, nil)
+		if err != nil || len(got.State.Plan.Tables) != 0 || got.State.Version != v+1 {
+			t.Errorf("got %+v, %v", got.State, err)
+		}
+		got, err = e.accept(ctx, 12, v+1, []seating.Table{table(1, 1), table(2)})
+		if err != nil || len(got.State.Plan.Tables) != 2 || got.State.Version != v+2 {
 			t.Errorf("got %+v, %v", got.State, err)
 		}
 	})
-
-	t.Run("unknown capacity is not found", func(t *testing.T) {
-		if _, err := e.plans.Accept(ctx, 8, 1, nil); !errors.Is(err, apperr.ErrNotFound) {
-			t.Errorf("err = %v, want ErrNotFound", err)
-		}
-	})
 }
 
-func TestAcceptVersionConflict(t *testing.T) {
+func TestReplaceStoresAllFourAndBumpsVersions(t *testing.T) {
 	ctx := context.Background()
-	e := newEnv(t, 6)
-	if _, err := e.plans.Accept(ctx, 11, 1, []seating.Table{table(1, 1, 2)}); err != nil { // -> version 2
+	e := newEnv(t, 12)
+	in := e.inputs(t)
+	for i := range in { // sent in a scrambled order: the result is ordered 9..12 anyway
+		in[i].Tables = []seating.Table{table(1, rng(1, 8)...), table(2, rng(9, 12)...)}
+	}
+	in[0], in[3] = in[3], in[0]
+	got, err := e.plans.Replace(ctx, in)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.plans.Accept(ctx, 11, 1, []seating.Table{table(1, 3)}) // stale
-	if !errors.Is(err, apperr.ErrVersionConflict) {
-		t.Fatalf("err = %v, want ErrVersionConflict", err)
-	}
-	if ev := plan(t, e, 11); ev.State.Version != 2 {
-		t.Errorf("version = %d, want 2", ev.State.Version)
-	}
-	// the other plans are independent
-	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 3)}); err != nil {
-		t.Errorf("accept on plan 10: %v", err)
+	for i, c := range []int{9, 10, 11, 12} {
+		ev := got[i]
+		if ev.State.Plan.Capacity != c || ev.State.Version != startVersion(c)+1 || len(ev.State.Plan.Tables) != 2 || ev.Eval.Summary.Seated != 12 {
+			t.Errorf("plan %d = %+v summary %+v", c, ev.State, ev.Eval.Summary)
+		}
+		if stored := plan(t, e, c); !reflect.DeepEqual(stored.State, ev.State) {
+			t.Errorf("plan %d: returned %+v, stored %+v", c, ev.State, stored.State)
+		}
 	}
 }
 
-func TestAcceptExpandsDisabledMembersAndKeepsPins(t *testing.T) {
+func TestReplaceVersionConflictChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, 6)
+	if _, err := e.accept(ctx, 11, 1, []seating.Table{table(1, 1, 2)}); err != nil { // plan 11 -> version 2
+		t.Fatal(err)
+	}
+	before := snapshot(t, e)
+
+	for _, stale := range []int{9, 10, 11, 12} { // whichever single plan is stale, none of the four changes
+		in := e.inputs(t)
+		for i := range in {
+			in[i].Tables = []seating.Table{table(1, 3, 4)}
+			if in[i].Capacity == stale {
+				in[i].BasedOn--
+			}
+		}
+		_, err := e.plans.Replace(ctx, in)
+		var sv apperr.StaleVersion
+		if !errors.Is(err, apperr.ErrVersionConflict) || !errors.As(err, &sv) || sv.Capacity != stale {
+			t.Fatalf("stale plan %d: err = %v, want StaleVersion for that plan", stale, err)
+		}
+		unchanged(t, e, before)
+	}
+}
+
+func TestReplaceDisabledMembersRideAlongAndPinsAreExplicit(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 10)
 	e.link(t, 1, 2, seating.Must)
 	e.link(t, 1, 3, seating.Must) // cluster {1,2,3}; 3 is a disabled child
 	e.toggle(t, false, 3)
 
-	got, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5), table(2, 6, 7, 8, 9, 10)})
+	got, err := e.accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5), table(2, 6, 7, 8, 9, 10)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,12 +430,10 @@ func TestAcceptExpandsDisabledMembersAndKeepsPins(t *testing.T) {
 		t.Errorf("fill = %d, want 4", got.Eval.Tables[0].Fill)
 	}
 
-	t.Run("pins of previously pinned clusters survive a later accept, whichever table they land on", func(t *testing.T) {
-		if _, err := e.plans.Seat(ctx, 10, 2, 2, true); err != nil { // pin cluster {1,2,3} at table 2
-			t.Fatal(err)
-		}
-		cur := plan(t, e, 10).State
-		got, err := e.plans.Accept(ctx, 10, cur.Version, []seating.Table{table(1, 4, 5, 6, 7, 8), table(2, 1, 2, 9, 10)})
+	t.Run("a pin on one member pins the whole cluster, disabled members included", func(t *testing.T) {
+		tables := []seating.Table{table(1, 4, 5, 6, 7, 8), table(2, 1, 2, 9, 10)}
+		tables[1].Seats[1].Pinned = true // only guest 2 carries the flag
+		got, err := e.accept(ctx, 10, got.State.Version, tables)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -336,6 +448,114 @@ func TestAcceptExpandsDisabledMembersAndKeepsPins(t *testing.T) {
 		if !got.Eval.Tables[1].Clusters[0].Pinned {
 			t.Errorf("evaluation does not show the pin: %+v", got.Eval.Tables[1])
 		}
+
+		// pins are explicit: the stored pin is NOT carried over when the next layout has none
+		next, err := e.accept(ctx, 10, got.State.Version, []seating.Table{table(1, 4, 5, 6, 7, 8), table(2, 1, 2, 9, 10)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range []int64{1, 2, 3} {
+			if _, pinned, _ := tableOf(next.State.Plan, id); pinned {
+				t.Errorf("guest %d is still pinned after a layout without pins", id)
+			}
+		}
+	})
+
+	t.Run("a cluster with no listed enabled member gets no assignment", func(t *testing.T) {
+		got, err := e.accept(ctx, 10, plan(t, e, 10).State.Version, []seating.Table{table(1, 4, 5)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range []int64{1, 2, 3} {
+			if _, _, ok := tableOf(got.State.Plan, id); ok {
+				t.Errorf("guest %d is seated", id)
+			}
+		}
+	})
+
+	t.Run("a cluster split across tables rides along with its lowest listed enabled member", func(t *testing.T) {
+		got, err := e.accept(ctx, 10, plan(t, e, 10).State.Version, []seating.Table{table(1, 2, 4), table(2, 1, 5)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tb, _, _ := tableOf(got.State.Plan, 3); tb != 2 { // lowest listed enabled member is 1, at table 2
+			t.Errorf("disabled guest 3 at table %d, want 2", tb)
+		}
+	})
+}
+
+// The round trip behind "Generuj plany" + "Cofnij": GET (snapshot) -> calculate -> replace with
+// the snapshot's versions -> replace with the snapshot using the returned versions restores the
+// exact tables, assignments and pins.
+func TestReplaceUndoRestoresTheSnapshotExactly(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, 24)
+	e.link(t, 1, 2, seating.Must)
+	e.link(t, 1, 3, seating.Must)
+	e.toggle(t, false, 3)
+	// hand-made plans with a pin and a disabled member riding along, in two of the four plans
+	start := e.inputs(t)
+	for i := range start {
+		switch start[i].Capacity {
+		case 10:
+			tables := []seating.Table{table(1, 1, 2, 4, 5, 6, 7, 8, 9), table(2, rng(10, 24)...)}
+			tables[0].Seats[0].Pinned = true
+			start[i].Tables = tables
+		case 12:
+			start[i].Tables = []seating.Table{table(1, rng(4, 15)...), table(2), table(3, 1, 2)}
+		}
+	}
+	if _, err := e.plans.Replace(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	snap := snapshot(t, e)
+
+	props, err := e.plans.Calculate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generate := make([]scenarios.PlanInput, len(props))
+	for i, p := range props {
+		generate[i] = scenarios.PlanInput{Capacity: p.Plan.Capacity, BasedOn: snap[i].Version, Tables: p.Plan.Tables}
+	}
+	generated, err := e.plans.Replace(ctx, generate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tb, pinned, _ := tableOf(generated[1].State.Plan, 1); !pinned || tb == 0 {
+		t.Errorf("Generate lost the pin on guest 1: table %d pinned %v", tb, pinned)
+	}
+
+	undo := make([]scenarios.PlanInput, len(snap))
+	for i, st := range snap {
+		undo[i] = scenarios.PlanInput{Capacity: st.Plan.Capacity, BasedOn: generated[i].State.Version, Tables: st.Plan.Tables}
+	}
+	restored, err := e.plans.Replace(ctx, undo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, st := range snap {
+		if !reflect.DeepEqual(restored[i].State.Plan, st.Plan) {
+			t.Errorf("plan %d not restored:\nwant %+v\ngot  %+v", st.Plan.Capacity, st.Plan, restored[i].State.Plan)
+		}
+		if want := st.Version + 2; restored[i].State.Version != want {
+			t.Errorf("plan %d version = %d, want %d", st.Plan.Capacity, restored[i].State.Version, want)
+		}
+	}
+
+	t.Run("an edit after the Generate makes the undo a conflict that changes nothing", func(t *testing.T) {
+		if _, err := e.plans.Seat(ctx, 10, 6, 2, false); err != nil { // an edit bumps plan 10
+			t.Fatal(err)
+		}
+		before := snapshot(t, e)
+		stale := make([]scenarios.PlanInput, len(snap))
+		for i, st := range snap {
+			stale[i] = scenarios.PlanInput{Capacity: st.Plan.Capacity, BasedOn: restored[i].State.Version, Tables: st.Plan.Tables}
+		}
+		if _, err := e.plans.Replace(ctx, stale); !errors.Is(err, apperr.ErrVersionConflict) {
+			t.Fatalf("err = %v, want ErrVersionConflict", err)
+		}
+		unchanged(t, e, before)
 	})
 }
 
@@ -345,9 +565,11 @@ func TestSeatMovesWholeClusterIncludingDisabled(t *testing.T) {
 	e.link(t, 1, 2, seating.Must)
 	e.link(t, 2, 3, seating.Must) // cluster {1,2,3}, key 1
 	e.toggle(t, false, 3)
-	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5, 6), table(2, 7, 8, 9, 10)}); err != nil {
+	if _, err := e.accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5, 6), table(2, 7, 8, 9, 10)}); err != nil {
 		t.Fatal(err)
 	}
+
+	v11 := plan(t, e, 11).State.Version
 
 	// addressed through ANY member, even a disabled one
 	for _, via := range []int64{2, 3} {
@@ -399,7 +621,7 @@ func TestSeatMovesWholeClusterIncludingDisabled(t *testing.T) {
 	})
 
 	t.Run("other plans are untouched", func(t *testing.T) {
-		if ev := plan(t, e, 11); ev.State.Version != startVersion(11) {
+		if ev := plan(t, e, 11); ev.State.Version != v11 {
 			t.Errorf("plan 11 version = %d", ev.State.Version)
 		}
 	})
@@ -408,7 +630,7 @@ func TestSeatMovesWholeClusterIncludingDisabled(t *testing.T) {
 func TestSeatErrors(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 8)
-	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, rng(1, 8)...)}); err != nil {
+	if _, err := e.accept(ctx, 10, 1, []seating.Table{table(1, rng(1, 8)...)}); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("unknown table is a validation error on tableNumber", func(t *testing.T) {
@@ -433,7 +655,7 @@ func TestSeatErrors(t *testing.T) {
 func TestSeatOverfillIsAllowedAndReported(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 10)
-	if _, err := e.plans.Accept(ctx, 9, startVersion(9), []seating.Table{table(1, rng(1, 9)...), table(2, 10)}); err != nil {
+	if _, err := e.accept(ctx, 9, startVersion(9), []seating.Table{table(1, rng(1, 9)...), table(2, 10)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := e.plans.Seat(ctx, 9, 10, 1, false) // table 1 is full (9/9)
@@ -450,7 +672,7 @@ func TestUnseatMovesWholeClusterToTheTray(t *testing.T) {
 	e := newEnv(t, 8)
 	e.link(t, 1, 2, seating.Must)
 	e.toggle(t, false, 2)
-	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 1, 3, 4, 5, 6, 7, 8)}); err != nil {
+	if _, err := e.accept(ctx, 10, 1, []seating.Table{table(1, 1, 3, 4, 5, 6, 7, 8)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.plans.Seat(ctx, 10, 1, 1, true); err != nil {
@@ -480,7 +702,7 @@ func TestUnseatMovesWholeClusterToTheTray(t *testing.T) {
 func TestAddAndRemoveTable(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 12)
-	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, rng(1, 4)...), table(2, rng(5, 8)...), table(3, 9, 10), table(4, 11, 12)}); err != nil {
+	if _, err := e.accept(ctx, 10, 1, []seating.Table{table(1, rng(1, 4)...), table(2, rng(5, 8)...), table(3, 9, 10), table(4, 11, 12)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := e.plans.AddTable(ctx, 10)
@@ -529,7 +751,7 @@ func TestReEnabledGuestOverfillsTableAndNeedsRecalculation(t *testing.T) {
 
 	// 9 enabled guests at table 1 of the 9-seat plan: the plan is complete (no violations)
 	// and the disabled child 3 rides along via ExpandDisabled.
-	got, err := e.plans.Accept(ctx, 9, startVersion(9), []seating.Table{table(1, 1, 2, 4, 5, 6, 7, 8, 9, 10)})
+	got, err := e.accept(ctx, 9, startVersion(9), []seating.Table{table(1, 1, 2, 4, 5, 6, 7, 8, 9, 10)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +774,7 @@ func TestReEnabledGuestOverfillsTableAndNeedsRecalculation(t *testing.T) {
 	// a never-seated guest re-enabled shows up in the tray
 	e2 := newEnv(t, 2)
 	e2.toggle(t, false, 2)
-	if _, err := e2.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 1)}); err != nil {
+	if _, err := e2.accept(ctx, 10, 1, []seating.Table{table(1, 1)}); err != nil {
 		t.Fatal(err)
 	}
 	e2.toggle(t, true, 2)
@@ -568,7 +790,7 @@ func TestResetEmptiesThePlanAndNeedsRecalculation(t *testing.T) {
 	e.link(t, 1, 3, seating.Must) // cluster {1,2,3}; 3 is a disabled child seated with it
 	e.toggle(t, false, 3)
 
-	if _, err := e.plans.Accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5), table(2, 6, 7, 8)}); err != nil {
+	if _, err := e.accept(ctx, 10, 1, []seating.Table{table(1, 1, 2, 4, 5), table(2, 6, 7, 8)}); err != nil {
 		t.Fatal(err)
 	}
 	seated, err := e.plans.Seat(ctx, 10, 1, 1, true) // pin the cluster {1,2,3}
@@ -626,7 +848,7 @@ func TestResetEmptiesThePlanAndNeedsRecalculation(t *testing.T) {
 func TestResetWithNoEnabledGuestsHasNoViolation(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, 3)
-	if _, err := e.plans.Accept(ctx, 12, 1, []seating.Table{table(1, 1, 2, 3)}); err != nil {
+	if _, err := e.accept(ctx, 12, 1, []seating.Table{table(1, 1, 2, 3)}); err != nil {
 		t.Fatal(err)
 	}
 	e.toggle(t, false, 1, 2, 3)
@@ -659,7 +881,7 @@ func TestResetMakesOlderProposalsStale(t *testing.T) {
 	if _, err := e.plans.Reset(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.plans.Accept(ctx, 10, p.BasedOnVersion, p.Plan.Tables); !errors.Is(err, apperr.ErrVersionConflict) {
+	if _, err := e.accept(ctx, 10, p.BasedOnVersion, p.Plan.Tables); !errors.Is(err, apperr.ErrVersionConflict) {
 		t.Fatalf("Accept after Reset err = %v, want ErrVersionConflict", err)
 	}
 }

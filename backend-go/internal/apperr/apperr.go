@@ -25,3 +25,17 @@ type Validation struct {
 func (v Validation) Error() string {
 	return fmt.Sprintf("validation failed: %s: %s", v.Field, v.Message)
 }
+
+// StaleVersion is a version conflict on one plan of a bulk replace: the client's basedOnVersion
+// no longer matches the stored one. It matches ErrVersionConflict under errors.Is and carries
+// what the error envelope needs to name the plan.
+type StaleVersion struct {
+	Capacity int
+	Current  int64
+}
+
+func (e StaleVersion) Error() string {
+	return fmt.Sprintf("version conflict: plan %d is at version %d", e.Capacity, e.Current)
+}
+
+func (e StaleVersion) Is(target error) bool { return target == ErrVersionConflict }

@@ -56,27 +56,65 @@ func calculate(t *testing.T, h http.Handler) oapi.ProposalListResponse {
 	return decode[oapi.ProposalListResponse](t, rec)
 }
 
-// acceptBody turns a proposal's tables into the AcceptPlan request body.
-func acceptBody(t *testing.T, p oapi.Proposal) string {
-	t.Helper()
-	tables := make([]oapi.TableLayout, 0, len(p.Plan.Tables))
-	for _, tb := range p.Plan.Tables {
-		ids := []int64{}
+// layoutOf maps a plan as the SPA does: its clusters' guest ids per table, and the guests of
+// its pinned clusters as pinnedGuestIds.
+func layoutOf(capacity oapi.Capacity, basedOn int, plan oapi.SeatingPlan) oapi.ScenarioLayout {
+	tables := make([]oapi.TableLayout, 0, len(plan.Tables))
+	for _, tb := range plan.Tables {
+		ids, pinned := []int64{}, []int64{}
 		for _, c := range tb.Clusters {
 			ids = append(ids, c.GuestIds...)
+			if c.Pinned {
+				pinned = append(pinned, c.GuestIds...)
+			}
 		}
-		tables = append(tables, oapi.TableLayout{Number: tb.Number, GuestIds: ids})
+		tables = append(tables, oapi.TableLayout{Number: tb.Number, GuestIds: ids, PinnedGuestIds: pinned})
 	}
-	b, err := json.Marshal(oapi.AcceptPlan{BasedOnVersion: p.BasedOnVersion, Tables: tables})
+	return oapi.ScenarioLayout{Capacity: capacity, BasedOnVersion: basedOn, Tables: tables}
+}
+
+// proposalLayouts is "Generuj plany" as the SPA sends it: the four proposals' tables, basedOn
+// = the version of each proposal (the plan the client had on screen).
+func proposalLayouts(props oapi.ProposalListResponse) []oapi.ScenarioLayout {
+	out := make([]oapi.ScenarioLayout, len(props.Data))
+	for i, p := range props.Data {
+		out[i] = layoutOf(p.Capacity, p.BasedOnVersion, p.Plan)
+	}
+	return out
+}
+
+// storedLayouts re-sends the stored plans unchanged (basedOn = their current versions).
+func storedLayouts(list oapi.ScenarioListResponse) []oapi.ScenarioLayout {
+	out := make([]oapi.ScenarioLayout, len(list.Data))
+	for i, s := range list.Data {
+		out[i] = layoutOf(s.Capacity, *s.Version, s.Plan)
+	}
+	return out
+}
+
+func replaceBody(t *testing.T, plans []oapi.ScenarioLayout) string {
+	t.Helper()
+	b, err := json.Marshal(oapi.ScenariosReplace{Plans: plans})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(b)
 }
 
-func accept(t *testing.T, h http.Handler, capacity int, body string) *httptest.ResponseRecorder {
+func replace(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	return do(h, http.MethodPut, fmt.Sprintf("%s/scenarios/%d/assignments", api, capacity), body)
+	return do(h, http.MethodPut, api+"/scenarios", body)
+}
+
+func replaceOK(t *testing.T, h http.Handler, plans []oapi.ScenarioLayout) oapi.ScenarioListResponse {
+	t.Helper()
+	rec := replace(t, h, replaceBody(t, plans))
+	expect(t, rec, http.StatusOK, "")
+	got := decode[oapi.ScenarioListResponse](t, rec)
+	if got.Meta.RequestId == nil || got.Page.Total == nil || *got.Page.Total != 4 || len(got.Data) != 4 {
+		t.Fatalf("envelope = %+v", got)
+	}
+	return got
 }
 
 func scenarioResponse(t *testing.T, rec *httptest.ResponseRecorder, status int) oapi.Scenario {
@@ -170,8 +208,8 @@ func TestListScenarios(t *testing.T) {
 	})
 }
 
-// Flow 1: calculate stores nothing; accepting all four fills the plans; a stale accept is 409.
-func TestCalculateThenAcceptAllFour(t *testing.T) {
+// Flow 1: calculate stores nothing; PUT /scenarios stores all four proposals; a stale PUT is 409.
+func TestCalculateThenReplaceAllFour(t *testing.T) {
 	h := newAPI(t)
 	seedGuests(t, h, 36)
 	putLink(t, h, "1-2", 0) // cluster {1,2,3}
@@ -210,20 +248,21 @@ func TestCalculateThenAcceptAllFour(t *testing.T) {
 		}
 	})
 
-	for _, p := range props.Data {
-		t.Run(fmt.Sprintf("accept %d", p.Capacity), func(t *testing.T) {
-			got := scenarioResponse(t, accept(t, h, int(p.Capacity), acceptBody(t, p)), http.StatusOK)
-			if *got.Version != startVer(p.Capacity)+1 || got.Plan.Summary.TableCount != p.Plan.Summary.TableCount ||
-				got.Plan.Summary.NeedsRecalculation || got.Plan.Summary.SeatedCount != 36 {
-				t.Errorf("accepted = v%d %+v", *got.Version, got.Plan.Summary)
+	t.Run("PUT /scenarios stores all four proposals at once", func(t *testing.T) {
+		got := replaceOK(t, h, proposalLayouts(props))
+		for i, p := range props.Data {
+			s := got.Data[i]
+			if s.Capacity != p.Capacity || *s.Version != startVer(p.Capacity)+1 || s.Plan.Summary.TableCount != p.Plan.Summary.TableCount ||
+				s.Plan.Summary.NeedsRecalculation || s.Plan.Summary.SeatedCount != 36 {
+				t.Errorf("stored %d = v%d %+v", s.Capacity, *s.Version, s.Plan.Summary)
 			}
-			if got.Plan.Summary.Score != p.Plan.Summary.Score {
-				t.Errorf("score %v != proposed %v", got.Plan.Summary.Score, p.Plan.Summary.Score)
+			if s.Plan.Summary.Score != p.Plan.Summary.Score {
+				t.Errorf("score %v != proposed %v", s.Plan.Summary.Score, p.Plan.Summary.Score)
 			}
-		})
-	}
+		}
+	})
 
-	t.Run("GET /scenarios now returns the accepted plans", func(t *testing.T) {
+	t.Run("GET /scenarios now returns the stored plans", func(t *testing.T) {
 		for _, s := range listScenarios(t, h).Data {
 			if *s.Version != startVer(s.Capacity)+1 || s.Plan.Summary.TableCount != wantTables[s.Capacity] {
 				t.Errorf("scenario %d = v%d, %d tables", s.Capacity, *s.Version, s.Plan.Summary.TableCount)
@@ -231,58 +270,208 @@ func TestCalculateThenAcceptAllFour(t *testing.T) {
 		}
 	})
 
-	t.Run("a stale accept is 409 version_conflict", func(t *testing.T) {
-		expect(t, accept(t, h, 10, acceptBody(t, props.Data[1])), http.StatusConflict, oapi.ErrorCodeVersionConflict)
+	t.Run("a stale PUT (the proposals again) is 409 version_conflict", func(t *testing.T) {
+		expect(t, replace(t, h, replaceBody(t, proposalLayouts(props))), http.StatusConflict, oapi.ErrorCodeVersionConflict)
 	})
 }
 
-func TestAcceptErrors(t *testing.T) {
+// plansJSON builds a PUT /scenarios body: plan 10 as given, the other three empty with their
+// current (fresh database) versions.
+func plansJSON(plan10 string) string {
+	return fmt.Sprintf(`{"plans":[{"capacity":9,"basedOnVersion":2,"tables":[]},%s,{"capacity":11,"basedOnVersion":1,"tables":[]},{"capacity":12,"basedOnVersion":1,"tables":[]}]}`, plan10)
+}
+
+func TestReplaceScenariosErrors(t *testing.T) {
 	h := newAPI(t)
 	seedGuests(t, h, 6)
+	p10 := func(tables string) string { return `{"capacity":10,"basedOnVersion":1,"tables":` + tables + `}` }
 	cases := []struct {
 		name       string
-		capacity   int
 		body       string
 		wantStatus int
 		wantCode   oapi.ErrorCode
 		wantField  string
 	}{
-		{"gap in table numbers", 10, `{"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1]},{"number":3,"guestIds":[2]}]}`, 422, oapi.ErrorCodeValidationFailed, "tables"},
-		{"guest at two tables", 10, `{"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,2]},{"number":2,"guestIds":[2]}]}`, 422, oapi.ErrorCodeValidationFailed, "tables"},
-		{"unknown guest", 10, `{"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,99]}]}`, 422, oapi.ErrorCodeValidationFailed, "tables"},
-		{"stale version", 10, `{"basedOnVersion":5,"tables":[]}`, 409, oapi.ErrorCodeVersionConflict, "version"},
-		{"basedOnVersion below 1", 10, `{"basedOnVersion":0,"tables":[]}`, 400, oapi.ErrorCodeBadRequest, "basedOnVersion"},
-		{"unknown capacity (8 was removed)", 8, `{"basedOnVersion":1,"tables":[]}`, 404, oapi.ErrorCodeNotFound, ""},
-		{"malformed body", 10, `{"basedOnVersion":`, 400, oapi.ErrorCodeBadRequest, ""},
+		{"gap in table numbers", plansJSON(p10(`[{"number":1,"guestIds":[1],"pinnedGuestIds":[]},{"number":3,"guestIds":[2],"pinnedGuestIds":[]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"guest at two tables", plansJSON(p10(`[{"number":1,"guestIds":[1,2],"pinnedGuestIds":[]},{"number":2,"guestIds":[2],"pinnedGuestIds":[]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"unknown guest", plansJSON(p10(`[{"number":1,"guestIds":[1,99],"pinnedGuestIds":[]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"pinned guest not at that table", plansJSON(p10(`[{"number":1,"guestIds":[1],"pinnedGuestIds":[2]}]`)), 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"only three plans", `{"plans":[{"capacity":9,"basedOnVersion":2,"tables":[]},{"capacity":10,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]}]}`, 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"capacity repeated", `{"plans":[{"capacity":9,"basedOnVersion":2,"tables":[]},{"capacity":10,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]}]}`, 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"capacity 8 (removed)", `{"plans":[{"capacity":8,"basedOnVersion":1,"tables":[]},{"capacity":10,"basedOnVersion":1,"tables":[]},{"capacity":11,"basedOnVersion":1,"tables":[]},{"capacity":12,"basedOnVersion":1,"tables":[]}]}`, 422, oapi.ErrorCodeValidationFailed, "plans"},
+		{"stale version", plansJSON(`{"capacity":10,"basedOnVersion":5,"tables":[]}`), 409, oapi.ErrorCodeVersionConflict, "plans"},
+		{"basedOnVersion below 1", plansJSON(`{"capacity":10,"basedOnVersion":0,"tables":[]}`), 400, oapi.ErrorCodeBadRequest, "basedOnVersion"},
+		{"missing plans", `{}`, 400, oapi.ErrorCodeBadRequest, "plans"},
+		{"unknown top-level field", `{"plans":[],"extra":1}`, 400, oapi.ErrorCodeBadRequest, "extra"},
+		{"malformed body", `{"plans":`, 400, oapi.ErrorCodeBadRequest, ""},
+		{"no body", ``, 400, oapi.ErrorCodeBadRequest, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := accept(t, h, tc.capacity, tc.body)
+			rec := replace(t, h, tc.body)
 			expect(t, rec, tc.wantStatus, tc.wantCode)
 			if tc.wantField != "" {
 				if f := fieldOf(decodeError(t, rec).Errors[0]); f == nil || *f != tc.wantField {
 					t.Errorf("field = %v, want %q", f, tc.wantField)
 				}
 			}
+			for _, s := range listScenarios(t, h).Data {
+				if *s.Version != startVer(s.Capacity) || len(s.Plan.Tables) != 0 {
+					t.Fatalf("a rejected PUT changed scenario %d (v%d, %d tables)", s.Capacity, *s.Version, len(s.Plan.Tables))
+				}
+			}
 		})
 	}
-	for _, s := range listScenarios(t, h).Data {
-		if *s.Version != startVer(s.Capacity) {
-			t.Errorf("a rejected accept bumped scenario %d to v%d", s.Capacity, *s.Version)
+
+	t.Run("the 409 names the stale plan", func(t *testing.T) {
+		rec := replace(t, h, plansJSON(`{"capacity":10,"basedOnVersion":5,"tables":[]}`))
+		if msg := decodeError(t, rec).Errors[0].Message; !strings.Contains(msg, "Plan 10") || !strings.Contains(msg, "version 1") {
+			t.Errorf("message = %q", msg)
 		}
-	}
+	})
+
+	t.Run("the old per-plan accept route is gone", func(t *testing.T) {
+		rec := do(h, http.MethodPut, api+"/scenarios/10/assignments", `{"basedOnVersion":1,"tables":[]}`)
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want 404 or 405", rec.Code)
+		}
+	})
 }
 
-// acceptLayout stores `tables` (lists of guest ids) in plan `capacity` and returns the scenario.
+// Pins are explicit in the body and cover the whole cluster; disabled members ride along.
+func TestReplaceScenariosPinsAndDisabledMembers(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 10)
+	putLink(t, h, "1-2", 0)
+	putLink(t, h, "1-3", 0) // cluster {1,2,3}
+	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":false}`), http.StatusOK, "")
+
+	plans := storedLayouts(listScenarios(t, h))
+	for i := range plans {
+		plans[i].Tables = []oapi.TableLayout{
+			{Number: 1, GuestIds: []int64{4, 5, 6, 7, 8}, PinnedGuestIds: []int64{}},
+			{Number: 2, GuestIds: []int64{1, 2, 9, 10}, PinnedGuestIds: []int64{2}}, // pin via ONE member
+		}
+	}
+	got := replaceOK(t, h, plans)
+	for _, s := range got.Data {
+		for _, id := range []int64{1, 2} {
+			if tb, pinned, ok := tableOfGuest(s, id); !ok || tb != 2 || !pinned {
+				t.Errorf("plan %d guest %d: table %d pinned %v seated %v", s.Capacity, id, tb, pinned, ok)
+			}
+		}
+		if _, pinned, _ := tableOfGuest(s, 4); pinned {
+			t.Errorf("plan %d: guest 4 must not be pinned", s.Capacity)
+		}
+		if s.Plan.Tables[1].Fill != 4 { // 1,2,9,10; the disabled child 3 rides along but does not count
+			t.Errorf("plan %d table 2 fill = %d, want 4", s.Capacity, s.Plan.Tables[1].Fill)
+		}
+		if *s.Version != startVer(s.Capacity)+1 {
+			t.Errorf("plan %d version = %d", s.Capacity, *s.Version)
+		}
+	}
+
+	// the disabled child sits at its cluster's table, pinned: re-enabling it shows it there
+	expect(t, do(h, http.MethodPatch, api+"/guests", `{"guestIds":[3],"enabled":true}`), http.StatusOK, "")
+	if tb, pinned, ok := tableOfGuest(scenarioOf(t, listScenarios(t, h), 10), 3); !ok || tb != 2 || !pinned {
+		t.Errorf("re-enabled guest 3: table %d pinned %v seated %v, want table 2 pinned", tb, pinned, ok)
+	}
+
+	t.Run("pins are not carried over from the stored plan", func(t *testing.T) {
+		plans := storedLayouts(listScenarios(t, h))
+		for i := range plans {
+			for j := range plans[i].Tables {
+				plans[i].Tables[j].PinnedGuestIds = []int64{}
+			}
+		}
+		for _, s := range replaceOK(t, h, plans).Data {
+			if _, pinned, _ := tableOfGuest(s, 1); pinned {
+				t.Errorf("plan %d: guest 1 still pinned", s.Capacity)
+			}
+		}
+	})
+}
+
+// "Generuj plany" then "Cofnij", end to end over HTTP.
+func TestReplaceScenariosGenerateThenUndo(t *testing.T) {
+	h := newAPI(t)
+	seedGuests(t, h, 24)
+	putLink(t, h, "1-2", 0)
+	before := replaceOK(t, h, func() []oapi.ScenarioLayout { // hand-made plans, plan 10 with a pin
+		plans := storedLayouts(listScenarios(t, h))
+		for i := range plans {
+			plans[i].Tables = []oapi.TableLayout{
+				{Number: 1, GuestIds: rangeIDs(1, 12), PinnedGuestIds: []int64{}},
+				{Number: 2, GuestIds: rangeIDs(13, 24), PinnedGuestIds: []int64{}},
+			}
+		}
+		plans[1].Tables[0].PinnedGuestIds = []int64{1, 2}
+		return plans
+	}())
+
+	// Generate: snapshot (GET) -> calculate -> PUT with the snapshot's versions
+	snapshot := storedLayouts(listScenarios(t, h))
+	generated := replaceOK(t, h, func() []oapi.ScenarioLayout {
+		plans := proposalLayouts(calculate(t, h))
+		for i := range plans {
+			plans[i].BasedOnVersion = snapshot[i].BasedOnVersion
+		}
+		return plans
+	}())
+	if _, pinned, ok := tableOfGuest(scenarioOf(t, generated, 10), 1); !ok || !pinned {
+		t.Errorf("Generate lost the pin (pinned %v seated %v)", pinned, ok)
+	}
+
+	// Cofnij: the snapshot with the versions Generate returned
+	for i := range snapshot {
+		snapshot[i].BasedOnVersion = *generated.Data[i].Version
+	}
+	restored := replaceOK(t, h, snapshot)
+	for i, s := range restored.Data {
+		b := before.Data[i]
+		if len(s.Plan.Tables) != len(b.Plan.Tables) || s.Plan.Summary != b.Plan.Summary || *s.Version != *b.Version+2 {
+			t.Errorf("plan %d not restored: v%d %+v, want %+v", s.Capacity, *s.Version, s.Plan.Summary, b.Plan.Summary)
+		}
+		for _, id := range []int64{1, 2, 13} {
+			tb1, p1, _ := tableOfGuest(s, id)
+			tb2, p2, _ := tableOfGuest(b, id)
+			if tb1 != tb2 || p1 != p2 {
+				t.Errorf("plan %d guest %d: table %d pinned %v, want table %d pinned %v", s.Capacity, id, tb1, p1, tb2, p2)
+			}
+		}
+	}
+
+	t.Run("after an edit the undo is 409 and changes nothing", func(t *testing.T) {
+		scenarioResponse(t, do(h, http.MethodPut, seatPath(11, 20), `{"tableNumber":1,"pinned":false}`), http.StatusOK)
+		now := listScenarios(t, h)
+		for i := range snapshot {
+			snapshot[i].BasedOnVersion = *restored.Data[i].Version
+		}
+		expect(t, replace(t, h, replaceBody(t, snapshot)), http.StatusConflict, oapi.ErrorCodeVersionConflict)
+		after := listScenarios(t, h)
+		for i := range after.Data {
+			if *after.Data[i].Version != *now.Data[i].Version || after.Data[i].Plan.Summary != now.Data[i].Plan.Summary {
+				t.Errorf("plan %d changed by a rejected undo", after.Data[i].Capacity)
+			}
+		}
+	})
+}
+
+// acceptLayout stores `tables` (lists of guest ids) in plan `capacity` through PUT /scenarios
+// (re-sending the other three plans unchanged) and returns that scenario.
 func acceptLayout(t *testing.T, h http.Handler, capacity int, tables ...[]int64) oapi.Scenario {
 	t.Helper()
-	cur := scenarioOf(t, listScenarios(t, h), capacity)
-	layout := make([]oapi.TableLayout, len(tables))
-	for i, ids := range tables {
-		layout[i] = oapi.TableLayout{Number: i + 1, GuestIds: ids}
+	plans := storedLayouts(listScenarios(t, h))
+	for i := range plans {
+		if int(plans[i].Capacity) != capacity {
+			continue
+		}
+		plans[i].Tables = make([]oapi.TableLayout, len(tables))
+		for j, ids := range tables {
+			plans[i].Tables[j] = oapi.TableLayout{Number: j + 1, GuestIds: ids, PinnedGuestIds: []int64{}}
+		}
 	}
-	b, _ := json.Marshal(oapi.AcceptPlan{BasedOnVersion: *cur.Version, Tables: layout})
-	return scenarioResponse(t, accept(t, h, capacity, string(b)), http.StatusOK)
+	return scenarioOf(t, replaceOK(t, h, plans), capacity)
 }
 
 func rangeIDs(from, to int64) []int64 {
@@ -420,9 +609,7 @@ func TestResetPlan(t *testing.T) {
 	seedGuests(t, h, 36)
 	putLink(t, h, "1-2", 0)
 	props := calculate(t, h)
-	for _, p := range props.Data {
-		scenarioResponse(t, accept(t, h, int(p.Capacity), acceptBody(t, p)), http.StatusOK)
-	}
+	replaceOK(t, h, proposalLayouts(props))
 	pin := scenarioResponse(t, do(h, http.MethodPut, seatPath(10, 1), `{"tableNumber":1,"pinned":true}`), http.StatusOK)
 	if _, pinned, ok := tableOfGuest(pin, 1); !ok || !pinned {
 		t.Fatalf("precondition: guest 1 pinned %v seated %v", pinned, ok)
@@ -470,7 +657,7 @@ func TestResetPlan(t *testing.T) {
 	})
 
 	t.Run("a proposal generated before the reset is stale", func(t *testing.T) {
-		expect(t, accept(t, h, 10, acceptBody(t, props.Data[1])), http.StatusConflict, oapi.ErrorCodeVersionConflict)
+		expect(t, replace(t, h, replaceBody(t, proposalLayouts(props))), http.StatusConflict, oapi.ErrorCodeVersionConflict)
 	})
 
 	t.Run("errors", func(t *testing.T) {
@@ -579,13 +766,12 @@ func TestCalculateFloorCases(t *testing.T) {
 	}
 }
 
-// GET/PUT/DELETE on capacity 8 (removed by task 006) is 404, not a validation error.
+// GET/POST/DELETE on capacity 8 (removed by task 006) is 404, not a validation error.
 func TestRemovedCapacity8IsNotFound(t *testing.T) {
 	h := newAPI(t)
 	seedGuests(t, h, 3)
 	expect(t, do(h, http.MethodDelete, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
 	expect(t, do(h, http.MethodPost, api+"/scenarios/8/tables", ""), http.StatusNotFound, oapi.ErrorCodeNotFound)
-	expect(t, accept(t, h, 8, `{"basedOnVersion":1,"tables":[]}`), http.StatusNotFound, oapi.ErrorCodeNotFound)
 	for _, s := range listScenarios(t, h).Data {
 		if s.Capacity == 8 {
 			t.Error("capacity 8 listed")

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -30,6 +31,7 @@ func badRequest(field, message string) error { return badRequestError{field: fie
 func errorResponse(err error) (status int, body oapi.ErrorResponse) {
 	var (
 		validation apperr.Validation
+		stale      apperr.StaleVersion
 		badReq     badRequestError
 		tooLarge   *http.MaxBytesError
 	)
@@ -37,6 +39,9 @@ func errorResponse(err error) (status int, body oapi.ErrorResponse) {
 	switch {
 	case errors.Is(err, apperr.ErrNotFound):
 		status, code, message = http.StatusNotFound, oapi.ErrorCodeNotFound, "The requested resource does not exist."
+	case errors.As(err, &stale): // before the generic conflict: it names the plan
+		status, code, field, message = http.StatusConflict, oapi.ErrorCodeVersionConflict, "plans",
+			fmt.Sprintf("Plan %d was changed by someone else (current version %d).", stale.Capacity, stale.Current)
 	case errors.Is(err, apperr.ErrVersionConflict):
 		status, code, field, message = http.StatusConflict, oapi.ErrorCodeVersionConflict, "version",
 			"The resource was changed meanwhile; refetch and retry."

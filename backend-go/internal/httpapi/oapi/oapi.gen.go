@@ -234,14 +234,6 @@ func (e ViolationCode) Valid() bool {
 	}
 }
 
-// AcceptPlan Replaces the plan's tables and assignments with the given layout (normally a proposal's tables).
-// Table numbers must be 1..k without gaps; a guest may appear at most once.
-// Clusters that were pinned stay pinned.
-type AcceptPlan struct {
-	BasedOnVersion int           `json:"basedOnVersion"`
-	Tables         []TableLayout `json:"tables"`
-}
-
 // AssignmentSet Seat the guest's WHOLE cluster at a table, and set its pin.
 type AssignmentSet struct {
 	Pinned      bool `json:"pinned"`
@@ -532,7 +524,7 @@ type PlanSummary struct {
 	// NeedsRecalculation True when the stored plan breaks a hard rule (any violation: over_capacity, under_floor,
 	// cluster_split, unseated_guests, oversized_cluster) — e.g. a re-enabled guest joined their
 	// cluster's full table. The UI shows a "Przelicz / Generuj" call to action; the server never
-	// regenerates on its own. Always false for a proposal without violations.
+	// regenerates on its own. False for a freshly generated plan without violations.
 	NeedsRecalculation bool    `json:"needsRecalculation"`
 	Score              float32 `json:"score"`
 	SeatedCount        int     `json:"seatedCount"`
@@ -553,9 +545,10 @@ type PlanTable struct {
 	Score float32 `json:"score"`
 }
 
-// Proposal Transient auto-seating result for one plan (never stored).
+// Proposal Auto-seating result for one plan, computed by `POST /scenarios/calculate` (never stored by that
+// call). "Generuj plany" stores it at once through `PUT /scenarios`; there is no preview.
 type Proposal struct {
-	// BasedOnVersion Scenario version the proposal was computed from; send it back when accepting.
+	// BasedOnVersion Scenario version the proposal was computed from.
 	BasedOnVersion int `json:"basedOnVersion"`
 
 	// Capacity Seats per table; identifies one of the four plans.
@@ -587,6 +580,18 @@ type Scenario struct {
 	Version *int        `json:"version,omitempty"`
 }
 
+// ScenarioLayout The full content of one plan to store (tables, assignments, pins).
+type ScenarioLayout struct {
+	// BasedOnVersion The stored version this layout replaces (optimistic lock).
+	BasedOnVersion int `json:"basedOnVersion"`
+
+	// Capacity Seats per table; identifies one of the four plans.
+	Capacity Capacity `json:"capacity"`
+
+	// Tables Tables 1..k without gaps; `[]` = empty plan.
+	Tables []TableLayout `json:"tables"`
+}
+
 // ScenarioListResponse defines model for ScenarioListResponse.
 type ScenarioListResponse struct {
 	Data []Scenario `json:"data"`
@@ -606,6 +611,12 @@ type ScenarioResponse struct {
 	Meta Meta `json:"meta"`
 }
 
+// ScenariosReplace All four plans, each capacity (9, 10, 11, 12) exactly once, in any order. Stored atomically
+// by `PUT /scenarios` ("Generuj plany" and its "Cofnij").
+type ScenariosReplace struct {
+	Plans []ScenarioLayout `json:"plans"`
+}
+
 // SeatingPlan Tables + placements + derived evaluation. Shared by stored scenarios and proposals.
 type SeatingPlan struct {
 	// GuestScores One entry per enabled guest.
@@ -618,11 +629,14 @@ type SeatingPlan struct {
 	Violations []Violation        `json:"violations"`
 }
 
-// TableLayout defines model for TableLayout.
+// TableLayout One table of a plan to store. Mapped 1:1 from a `PlanTable` (its clusters' `guestIds`, and those of its `pinned` clusters).
 type TableLayout struct {
-	// GuestIds Enabled guests at this table (disabled cluster members are added by the server).
+	// GuestIds Guests at this table (enabled ones; disabled cluster members are added by the server). May be empty.
 	GuestIds []int64 `json:"guestIds"`
 	Number   int     `json:"number"`
+
+	// PinnedGuestIds Subset of `guestIds` whose clusters are pinned to this table (pin = whole cluster).
+	PinnedGuestIds []int64 `json:"pinnedGuestIds"`
 }
 
 // Violation defines model for Violation.
@@ -685,8 +699,8 @@ type CreateGuestJSONRequestBody = GuestCreate
 // UpdateGuestJSONRequestBody defines body for UpdateGuest for application/json ContentType.
 type UpdateGuestJSONRequestBody = GuestUpdate
 
-// AcceptProposalJSONRequestBody defines body for AcceptProposal for application/json ContentType.
-type AcceptProposalJSONRequestBody = AcceptPlan
+// ReplaceScenariosJSONRequestBody defines body for ReplaceScenarios for application/json ContentType.
+type ReplaceScenariosJSONRequestBody = ScenariosReplace
 
 // SetAssignmentJSONRequestBody defines body for SetAssignment for application/json ContentType.
 type SetAssignmentJSONRequestBody = AssignmentSet
@@ -726,12 +740,12 @@ type ServerInterface interface {
 	// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
 	// (GET /scenarios)
 	ListScenarios(w http.ResponseWriter, r *http.Request)
-	// CalculateProposals Generate proposals for all four plans (UC-10)
+	// ReplaceScenarios Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+	// (PUT /scenarios)
+	ReplaceScenarios(w http.ResponseWriter, r *http.Request)
+	// CalculateProposals Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
 	// (POST /scenarios/calculate)
 	CalculateProposals(w http.ResponseWriter, r *http.Request)
-	// AcceptProposal Accept a proposal — replace the plan's tables and assignments (UC-10)
-	// (PUT /scenarios/{capacity}/assignments)
-	AcceptProposal(w http.ResponseWriter, r *http.Request, capacity Capacity)
 	// DeleteAssignment Move the guest's whole cluster back to the unseated tray (UC-11)
 	// (DELETE /scenarios/{capacity}/assignments/{guestId})
 	DeleteAssignment(w http.ResponseWriter, r *http.Request, capacity Capacity, guestId GuestId)
@@ -819,15 +833,15 @@ func (_ Unimplemented) ListScenarios(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// CalculateProposals Generate proposals for all four plans (UC-10)
-// (POST /scenarios/calculate)
-func (_ Unimplemented) CalculateProposals(w http.ResponseWriter, r *http.Request) {
+// ReplaceScenarios Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+// (PUT /scenarios)
+func (_ Unimplemented) ReplaceScenarios(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// AcceptProposal Accept a proposal — replace the plan's tables and assignments (UC-10)
-// (PUT /scenarios/{capacity}/assignments)
-func (_ Unimplemented) AcceptProposal(w http.ResponseWriter, r *http.Request, capacity Capacity) {
+// CalculateProposals Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
+// (POST /scenarios/calculate)
+func (_ Unimplemented) CalculateProposals(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1091,11 +1105,11 @@ func (siw *ServerInterfaceWrapper) ListScenarios(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
-// CalculateProposals operation middleware
-func (siw *ServerInterfaceWrapper) CalculateProposals(w http.ResponseWriter, r *http.Request) {
+// ReplaceScenarios operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceScenarios(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CalculateProposals(w, r)
+		siw.Handler.ReplaceScenarios(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1105,23 +1119,11 @@ func (siw *ServerInterfaceWrapper) CalculateProposals(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
-// AcceptProposal operation middleware
-func (siw *ServerInterfaceWrapper) AcceptProposal(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "capacity" -------------
-	var capacity Capacity
-
-	err = runtime.BindStyledParameterWithOptions("simple", "capacity", chi.URLParam(r, "capacity"), &capacity, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capacity", Err: err})
-		return
-	}
+// CalculateProposals operation middleware
+func (siw *ServerInterfaceWrapper) CalculateProposals(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.AcceptProposal(w, r, capacity)
+		siw.Handler.CalculateProposals(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1432,10 +1434,10 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/scenarios", wrapper.ListScenarios)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/scenarios/calculate", wrapper.CalculateProposals)
+		r.Put(options.BaseURL+"/scenarios", wrapper.ReplaceScenarios)
 	})
 	r.Group(func(r chi.Router) {
-		r.Put(options.BaseURL+"/scenarios/{capacity}/assignments", wrapper.AcceptProposal)
+		r.Post(options.BaseURL+"/scenarios/calculate", wrapper.CalculateProposals)
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/scenarios/{capacity}/assignments/{guestId}", wrapper.DeleteAssignment)
@@ -2156,6 +2158,98 @@ func (response ListScenarios500JSONResponse) VisitListScenariosResponse(w http.R
 	return err
 }
 
+type ReplaceScenariosRequestObject struct {
+	Body *ReplaceScenariosJSONRequestBody
+}
+
+type ReplaceScenariosResponseObject interface {
+	VisitReplaceScenariosResponse(w http.ResponseWriter) error
+}
+
+type ReplaceScenarios200JSONResponse ScenarioListResponse
+
+func (response ReplaceScenarios200JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ReplaceScenarios400JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios409JSONResponse ErrorResponse
+
+func (response ReplaceScenarios409JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios413JSONResponse struct{ PayloadTooLargeJSONResponse }
+
+func (response ReplaceScenarios413JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios422JSONResponse ErrorResponse
+
+func (response ReplaceScenarios422JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceScenarios500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ReplaceScenarios500JSONResponse) VisitReplaceScenariosResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CalculateProposalsRequestObject struct {
 }
 
@@ -2194,101 +2288,6 @@ func (response CalculateProposals400JSONResponse) VisitCalculateProposalsRespons
 type CalculateProposals500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response CalculateProposals500JSONResponse) VisitCalculateProposalsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AcceptProposalRequestObject struct {
-	Capacity Capacity `json:"capacity"`
-	Body     *AcceptProposalJSONRequestBody
-}
-
-type AcceptProposalResponseObject interface {
-	VisitAcceptProposalResponse(w http.ResponseWriter) error
-}
-
-type AcceptProposal200JSONResponse ScenarioResponse
-
-func (response AcceptProposal200JSONResponse) VisitAcceptProposalResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AcceptProposal400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response AcceptProposal400JSONResponse) VisitAcceptProposalResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AcceptProposal404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response AcceptProposal404JSONResponse) VisitAcceptProposalResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AcceptProposal409JSONResponse struct{ ConflictJSONResponse }
-
-func (response AcceptProposal409JSONResponse) VisitAcceptProposalResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AcceptProposal422JSONResponse struct {
-	UnprocessableEntityJSONResponse
-}
-
-func (response AcceptProposal422JSONResponse) VisitAcceptProposalResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AcceptProposal500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response AcceptProposal500JSONResponse) VisitAcceptProposalResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -2675,12 +2674,12 @@ type StrictServerInterface interface {
 	// ListScenarios The four plans (9, 10, 11, 12) with their evaluations (UC-09, UC-14)
 	// (GET /scenarios)
 	ListScenarios(ctx context.Context, request ListScenariosRequestObject) (ListScenariosResponseObject, error)
-	// CalculateProposals Generate proposals for all four plans (UC-10)
+	// ReplaceScenarios Replace all four plans at once — store a Generate, or undo it ("Cofnij") (UC-10)
+	// (PUT /scenarios)
+	ReplaceScenarios(ctx context.Context, request ReplaceScenariosRequestObject) (ReplaceScenariosResponseObject, error)
+	// CalculateProposals Compute proposals for all four plans — step 1 of "Generuj plany" (UC-10)
 	// (POST /scenarios/calculate)
 	CalculateProposals(ctx context.Context, request CalculateProposalsRequestObject) (CalculateProposalsResponseObject, error)
-	// AcceptProposal Accept a proposal — replace the plan's tables and assignments (UC-10)
-	// (PUT /scenarios/{capacity}/assignments)
-	AcceptProposal(ctx context.Context, request AcceptProposalRequestObject) (AcceptProposalResponseObject, error)
 	// DeleteAssignment Move the guest's whole cluster back to the unseated tray (UC-11)
 	// (DELETE /scenarios/{capacity}/assignments/{guestId})
 	DeleteAssignment(ctx context.Context, request DeleteAssignmentRequestObject) (DeleteAssignmentResponseObject, error)
@@ -3041,6 +3040,37 @@ func (sh *strictHandler) ListScenarios(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ReplaceScenarios operation middleware
+func (sh *strictHandler) ReplaceScenarios(w http.ResponseWriter, r *http.Request) {
+	var request ReplaceScenariosRequestObject
+
+	var body ReplaceScenariosJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReplaceScenarios(ctx, request.(ReplaceScenariosRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReplaceScenarios")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReplaceScenariosResponseObject); ok {
+		if err := validResponse.VisitReplaceScenariosResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // CalculateProposals operation middleware
 func (sh *strictHandler) CalculateProposals(w http.ResponseWriter, r *http.Request) {
 	var request CalculateProposalsRequestObject
@@ -3058,39 +3088,6 @@ func (sh *strictHandler) CalculateProposals(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CalculateProposalsResponseObject); ok {
 		if err := validResponse.VisitCalculateProposalsResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// AcceptProposal operation middleware
-func (sh *strictHandler) AcceptProposal(w http.ResponseWriter, r *http.Request, capacity Capacity) {
-	var request AcceptProposalRequestObject
-
-	request.Capacity = capacity
-
-	var body AcceptProposalJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.AcceptProposal(ctx, request.(AcceptProposalRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "AcceptProposal")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(AcceptProposalResponseObject); ok {
-		if err := validResponse.VisitAcceptProposalResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

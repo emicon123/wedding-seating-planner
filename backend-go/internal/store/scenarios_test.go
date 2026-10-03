@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
+	"github.com/wojtekrpi/stoliki/backend-go/internal/scenarios"
 	"github.com/wojtekrpi/stoliki/backend-go/internal/seating"
 )
 
@@ -87,6 +88,15 @@ func TestScenariosGet(t *testing.T) {
 	}
 }
 
+// replaceOne replaces a single plan through ReplacePlans (the only replace the store has).
+func replaceOne(ctx context.Context, s *Scenarios, capacity int, expected int64, p seating.Plan) (scenarios.PlanState, error) {
+	out, err := s.ReplacePlans(ctx, []scenarios.PlanReplace{{Capacity: capacity, ExpectedVersion: expected, Plan: p}})
+	if err != nil {
+		return scenarios.PlanState{}, err
+	}
+	return out[0], nil
+}
+
 func TestScenariosReplacePlan(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newScenarios(t, 4)
@@ -94,7 +104,7 @@ func TestScenariosReplacePlan(t *testing.T) {
 	t.Run("replaces tables, seats and pins and bumps the version", func(t *testing.T) {
 		p := layout(10, []int64{1, 2}, []int64{3})
 		p.Tables[0].Seats[1].Pinned = true
-		got, err := s.ReplacePlan(ctx, 10, 1, p)
+		got, err := replaceOne(ctx, s, 10, 1, p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +117,7 @@ func TestScenariosReplacePlan(t *testing.T) {
 		}
 
 		// a second replace drops everything the first one stored
-		got, err = s.ReplacePlan(ctx, 10, 2, layout(10, []int64{4}))
+		got, err = replaceOne(ctx, s, 10, 2, layout(10, []int64{4}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +129,7 @@ func TestScenariosReplacePlan(t *testing.T) {
 
 	t.Run("stale version is ErrVersionConflict and changes nothing", func(t *testing.T) {
 		before, _ := s.Get(ctx, 10)
-		_, err := s.ReplacePlan(ctx, 10, before.Version-1, layout(10, []int64{1}))
+		_, err := replaceOne(ctx, s, 10, before.Version-1, layout(10, []int64{1}))
 		if !errors.Is(err, apperr.ErrVersionConflict) {
 			t.Fatalf("err = %v, want ErrVersionConflict", err)
 		}
@@ -138,14 +148,14 @@ func TestScenariosReplacePlan(t *testing.T) {
 	})
 
 	t.Run("unknown capacity", func(t *testing.T) {
-		if _, err := s.ReplacePlan(ctx, 8, 1, layout(8)); !errors.Is(err, apperr.ErrNotFound) {
+		if _, err := replaceOne(ctx, s, 8, 1, layout(8)); !errors.Is(err, apperr.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
 	})
 
 	t.Run("unknown guest rolls everything back", func(t *testing.T) {
 		before, _ := s.Get(ctx, 12)
-		_, err := s.ReplacePlan(ctx, 12, before.Version, layout(12, []int64{1, 999}))
+		_, err := replaceOne(ctx, s, 12, before.Version, layout(12, []int64{1, 999}))
 		if !errors.Is(err, apperr.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
@@ -155,10 +165,124 @@ func TestScenariosReplacePlan(t *testing.T) {
 	})
 }
 
+func TestScenariosReplacePlans(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newScenarios(t, 6)
+	versions := map[int]int64{9: 2, 10: 1, 11: 1, 12: 1} // fresh database: migration 00002 bumps plan 9
+
+	pinned := layout(10, []int64{1, 2}, []int64{3})
+	pinned.Tables[0].Seats[1].Pinned = true
+	reps := func(v map[int]int64) []scenarios.PlanReplace {
+		return []scenarios.PlanReplace{
+			{Capacity: 9, ExpectedVersion: v[9], Plan: layout(9, []int64{1, 2, 3}, []int64{4, 5, 6})},
+			{Capacity: 10, ExpectedVersion: v[10], Plan: pinned},
+			{Capacity: 11, ExpectedVersion: v[11], Plan: layout(11, []int64{1, 2, 3, 4, 5, 6})},
+			{Capacity: 12, ExpectedVersion: v[12], Plan: layout(12)}, // empty plan
+		}
+	}
+
+	t.Run("a stale version on one plan changes none of the four", func(t *testing.T) {
+		before, err := s.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := map[int]int64{9: 2, 10: 1, 11: 1, 12: 5} // 12 is stale, 9..11 are fine
+		_, err = s.ReplacePlans(ctx, reps(stale))
+		var sv apperr.StaleVersion
+		if !errors.Is(err, apperr.ErrVersionConflict) || !errors.As(err, &sv) || sv.Capacity != 12 || sv.Current != 1 {
+			t.Fatalf("err = %v, want StaleVersion for plan 12 at version 1", err)
+		}
+		after, _ := s.List(ctx)
+		if !slices.EqualFunc(before, after, func(a, b scenarios.PlanState) bool { return a.Version == b.Version && plansEqual(a.Plan, b.Plan) }) {
+			t.Errorf("plans changed despite the conflict:\nbefore %+v\nafter  %+v", before, after)
+		}
+	})
+
+	t.Run("an unknown guest in the last plan rolls back the earlier ones", func(t *testing.T) {
+		bad := reps(versions)
+		bad[3].Plan = layout(12, []int64{1, 999})
+		if _, err := s.ReplacePlans(ctx, bad); !errors.Is(err, apperr.ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		for _, st := range mustList(t, s) {
+			if st.Version != versions[st.Plan.Capacity] || len(st.Plan.Tables) != 0 {
+				t.Errorf("plan %d = %+v, want untouched", st.Plan.Capacity, st)
+			}
+		}
+	})
+
+	t.Run("an unknown capacity rolls everything back", func(t *testing.T) {
+		bad := append(reps(versions)[:3], scenarios.PlanReplace{Capacity: 8, ExpectedVersion: 1, Plan: layout(8)})
+		if _, err := s.ReplacePlans(ctx, bad); !errors.Is(err, apperr.ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		for _, st := range mustList(t, s) {
+			if st.Version != versions[st.Plan.Capacity] || len(st.Plan.Tables) != 0 {
+				t.Errorf("plan %d = %+v, want untouched", st.Plan.Capacity, st)
+			}
+		}
+	})
+
+	t.Run("replaces all four, bumps four versions, keeps pins and empty tables", func(t *testing.T) {
+		got, err := s.ReplacePlans(ctx, reps(versions))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 4 {
+			t.Fatalf("got %d plans", len(got))
+		}
+		for i, c := range []int{9, 10, 11, 12} {
+			if got[i].Plan.Capacity != c || got[i].Version != versions[c]+1 {
+				t.Errorf("plan %d = capacity %d version %d", i, got[i].Plan.Capacity, got[i].Version)
+			}
+		}
+		if at, _ := tableOf(got[0].Plan); len(at) != 6 || at[4] != 2 {
+			t.Errorf("plan 9 seats = %v", at)
+		}
+		if _, pin := tableOf(got[1].Plan); !pin[2] || pin[1] || pin[3] {
+			t.Errorf("plan 10 pins = %v", pin)
+		}
+		if len(got[3].Plan.Tables) != 0 {
+			t.Errorf("plan 12 should be empty: %+v", got[3].Plan)
+		}
+		if stored := mustList(t, s); !slices.EqualFunc(got, stored, func(a, b scenarios.PlanState) bool { return a.Version == b.Version && plansEqual(a.Plan, b.Plan) }) {
+			t.Errorf("returned states differ from stored:\n%+v\n%+v", got, stored)
+		}
+	})
+
+	t.Run("a second replace drops what the first stored", func(t *testing.T) {
+		next := map[int]int64{9: 3, 10: 2, 11: 2, 12: 2}
+		in := reps(next)
+		in[0].Plan = layout(9, []int64{1}, nil, nil) // empty tables are kept
+		got, err := s.ReplacePlans(ctx, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at, _ := tableOf(got[0].Plan); len(at) != 1 || len(got[0].Plan.Tables) != 3 || got[0].Version != 4 {
+			t.Errorf("plan 9 = %+v", got[0])
+		}
+	})
+}
+
+func mustList(t *testing.T, s *Scenarios) []scenarios.PlanState {
+	t.Helper()
+	got, err := s.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func plansEqual(a, b seating.Plan) bool {
+	return a.Capacity == b.Capacity && slices.EqualFunc(a.Tables, b.Tables, func(x, y seating.Table) bool {
+		return x.Number == y.Number && slices.Equal(x.Seats, y.Seats)
+	})
+}
+
 func TestScenariosSeatCluster(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newScenarios(t, 4)
-	if _, err := s.ReplacePlan(ctx, 11, 1, layout(11, []int64{1}, []int64{2}, nil)); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, 11, 1, layout(11, []int64{1}, []int64{2}, nil)); err != nil { // version 2
 		t.Fatal(err)
 	}
 
@@ -223,7 +347,7 @@ func TestScenariosUnseatCluster(t *testing.T) {
 	s, _ := newScenarios(t, 3)
 	p := layout(10, []int64{1, 2}, []int64{3})
 	p.Tables[0].Seats[0].Pinned = true
-	if _, err := s.ReplacePlan(ctx, 10, 1, p); err != nil {
+	if _, err := replaceOne(ctx, s, 10, 1, p); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.UnseatCluster(ctx, 10, []int64{1, 2})
@@ -263,7 +387,7 @@ func TestScenariosRemoveTableRenumbers(t *testing.T) {
 	s, _ := newScenarios(t, 5)
 	p := layout(10, []int64{1}, []int64{2, 3}, []int64{4}, []int64{5})
 	p.Tables[2].Seats[0].Pinned = true
-	if _, err := s.ReplacePlan(ctx, 10, 1, p); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, 10, 1, p); err != nil { // version 2
 		t.Fatal(err)
 	}
 
@@ -307,10 +431,10 @@ func TestScenariosClearPlan(t *testing.T) {
 	s, db := newScenarios(t, 4)
 	p := layout(10, []int64{1, 2}, []int64{3})
 	p.Tables[0].Seats[1].Pinned = true
-	if _, err := s.ReplacePlan(ctx, 10, 1, p); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, 10, 1, p); err != nil { // version 2
 		t.Fatal(err)
 	}
-	if _, err := s.ReplacePlan(ctx, 11, 1, layout(11, []int64{4})); err != nil { // version 2
+	if _, err := replaceOne(ctx, s, 11, 1, layout(11, []int64{4})); err != nil { // version 2
 		t.Fatal(err)
 	}
 	plan11Before, _ := s.Get(ctx, 11)
@@ -394,7 +518,7 @@ func TestScenariosDeletedGuestLeavesItsSeat(t *testing.T) {
 	mustCreate(t, gs, "A", nil)
 	mustCreate(t, gs, "B", nil)
 	s := NewScenarios(db)
-	if _, err := s.ReplacePlan(ctx, 10, 1, layout(10, []int64{1, 2})); err != nil {
+	if _, err := replaceOne(ctx, s, 10, 1, layout(10, []int64{1, 2})); err != nil {
 		t.Fatal(err)
 	}
 	if err := gs.Delete(ctx, 1); err != nil {

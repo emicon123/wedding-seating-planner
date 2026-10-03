@@ -56,11 +56,11 @@ func shapeOf(t reflect.Type) bodyShape {
 // "METHOD route-suffix" (the route pattern is matched by suffix because the API is mounted
 // under the configurable base path). The CSV import body is not JSON and is not listed.
 var bodyOps = map[string]bodyShape{
-	"POST /guests":                                    shapeOf(reflect.TypeFor[oapi.GuestCreate]()),
-	"PATCH /guests":                                   shapeOf(reflect.TypeFor[oapi.GuestBulkToggle]()),
-	"PATCH /guests/{guestId}":                         shapeOf(reflect.TypeFor[oapi.GuestUpdate]()),
-	"PUT /guest-links/{linkKey}":                      shapeOf(reflect.TypeFor[oapi.GuestLinkUpsert]()),
-	"PUT /scenarios/{capacity}/assignments":           shapeOf(reflect.TypeFor[oapi.AcceptPlan]()),
+	"POST /guests":               shapeOf(reflect.TypeFor[oapi.GuestCreate]()),
+	"PATCH /guests":              shapeOf(reflect.TypeFor[oapi.GuestBulkToggle]()),
+	"PATCH /guests/{guestId}":    shapeOf(reflect.TypeFor[oapi.GuestUpdate]()),
+	"PUT /guest-links/{linkKey}": shapeOf(reflect.TypeFor[oapi.GuestLinkUpsert]()),
+	"PUT /scenarios":             shapeOf(reflect.TypeFor[oapi.ScenariosReplace]()),
 	"PUT /scenarios/{capacity}/assignments/{guestId}": shapeOf(reflect.TypeFor[oapi.AssignmentSet]()),
 }
 

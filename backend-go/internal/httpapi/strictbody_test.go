@@ -30,9 +30,9 @@ func TestStrictBodyRejectsMissingRequiredAndUnknownFields(t *testing.T) {
 		{"update: missing version", http.MethodPatch, "/guests/1", `{"notes":"x"}`, 400, "version"},
 		{"toggle: unknown field", http.MethodPatch, "/guests", `{"guestIds":[1],"enabled":true,"x":1}`, 400, "x"},
 		{"toggle: missing enabled", http.MethodPatch, "/guests", `{"guestIds":[1]}`, 400, "enabled"},
-		{"accept: unknown field", http.MethodPut, "/scenarios/10/assignments", `{"basedOnVersion":1,"tables":[],"extra":1}`, 400, "extra"},
-		{"accept: missing tables", http.MethodPut, "/scenarios/10/assignments", `{"basedOnVersion":1}`, 400, "tables"},
-		{"accept: missing basedOnVersion", http.MethodPut, "/scenarios/10/assignments", `{"tables":[]}`, 400, "basedOnVersion"},
+		{"replace: unknown field", http.MethodPut, "/scenarios", `{"plans":[],"extra":1}`, 400, "extra"},
+		{"replace: missing plans", http.MethodPut, "/scenarios", `{}`, 400, "plans"},
+		{"replace: null plans", http.MethodPut, "/scenarios", `{"plans":null}`, 400, "plans"},
 		{"seat: unknown field", http.MethodPut, "/scenarios/10/assignments/1", `{"tableNumber":1,"pinned":false,"x":1}`, 400, "x"},
 		{"seat: missing pinned", http.MethodPut, "/scenarios/10/assignments/1", `{"tableNumber":1}`, 400, "pinned"},
 		{"seat: missing tableNumber", http.MethodPut, "/scenarios/10/assignments/1", `{"pinned":true}`, 400, "tableNumber"},
@@ -53,11 +53,11 @@ func TestStrictBodyRejectsMissingRequiredAndUnknownFields(t *testing.T) {
 		})
 	}
 
-	t.Run("nested objects of a body stay lenient (TableLayout has no additionalProperties:false)", func(t *testing.T) {
+	t.Run("nested objects of a body stay lenient (a PlanTable can be sent back as a table)", func(t *testing.T) {
 		// A PlanTable-shaped table (extra fill/score/clusters) must be accepted by the decoder; the
 		// request then fails later (stale/unknown version is irrelevant here), never as bad_request.
-		rec := do(h, http.MethodPut, api+"/scenarios/10/assignments",
-			`{"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,2],"fill":2,"score":0,"clusters":[]}]}`)
+		rec := do(h, http.MethodPut, api+"/scenarios",
+			`{"plans":[{"capacity":10,"basedOnVersion":1,"tables":[{"number":1,"guestIds":[1,2],"fill":2,"score":0,"clusters":[]}]}]}`)
 		if rec.Code == http.StatusBadRequest {
 			t.Fatalf("nested extra fields must not be rejected: %s", rec.Body)
 		}

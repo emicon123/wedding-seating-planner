@@ -34,19 +34,31 @@ func (s *Server) CalculateProposals(ctx context.Context, _ oapi.CalculateProposa
 	return oapi.CalculateProposals200JSONResponse{Data: data, Meta: metaOf(ctx), Page: oapi.Page{Total: &total}}, nil
 }
 
-// AcceptProposal implements acceptProposal: replace the plan with the given layout.
-func (s *Server) AcceptProposal(ctx context.Context, req oapi.AcceptProposalRequestObject) (oapi.AcceptProposalResponseObject, error) {
+// ReplaceScenarios implements replaceScenarios: all four plans replaced atomically (Generate
+// and its undo), or nothing changes.
+func (s *Server) ReplaceScenarios(ctx context.Context, req oapi.ReplaceScenariosRequestObject) (oapi.ReplaceScenariosResponseObject, error) {
 	if req.Body == nil {
 		return nil, badRequest("", "Request body is required.")
 	}
-	if req.Body.BasedOnVersion < 1 {
-		return nil, badRequest("basedOnVersion", "basedOnVersion is required and must be at least 1.")
+	for _, p := range req.Body.Plans {
+		if p.BasedOnVersion < 1 {
+			return nil, badRequest("basedOnVersion", "basedOnVersion is required and must be at least 1.")
+		}
 	}
-	ev, err := s.plans.Accept(ctx, int(req.Capacity), int64(req.Body.BasedOnVersion), fromAcceptPlan(*req.Body))
+	in, err := fromScenariosReplace(*req.Body)
 	if err != nil {
 		return nil, err
 	}
-	return oapi.AcceptProposal200JSONResponse{Data: toScenario(ev), Meta: metaOf(ctx)}, nil
+	all, err := s.plans.Replace(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	data := make([]oapi.Scenario, len(all))
+	for i, ev := range all {
+		data[i] = toScenario(ev)
+	}
+	total := len(data)
+	return oapi.ReplaceScenarios200JSONResponse{Data: data, Meta: metaOf(ctx), Page: oapi.Page{Total: &total}}, nil
 }
 
 // SetAssignment implements setAssignment: move the guest's whole cluster, set its pin.

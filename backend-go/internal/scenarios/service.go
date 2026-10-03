@@ -3,6 +3,7 @@ package scenarios
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/wojtekrpi/stoliki/backend-go/internal/apperr"
@@ -15,7 +16,9 @@ import (
 type Store interface {
 	List(ctx context.Context) ([]PlanState, error)
 	Get(ctx context.Context, capacity int) (PlanState, error)
-	ReplacePlan(ctx context.Context, capacity int, expectedVersion int64, p seating.Plan) (PlanState, error)
+	// ReplacePlans writes all given plans in ONE transaction; any stale ExpectedVersion rolls
+	// everything back (apperr.ErrVersionConflict). Returns the new states ordered by capacity.
+	ReplacePlans(ctx context.Context, ps []PlanReplace) ([]PlanState, error)
 	SeatCluster(ctx context.Context, capacity int, members []int64, tableNumber int, pinned bool) (PlanState, error)
 	UnseatCluster(ctx context.Context, capacity int, members []int64) (PlanState, error)
 	AddTable(ctx context.Context, capacity int) (PlanState, error)
@@ -41,10 +44,27 @@ type Proposal struct {
 	Eval           seating.Evaluation
 }
 
+// PlanInput is one plan of a bulk replace as the client sent it (one ScenarioLayout): the
+// version it replaces and the tables to store. A seat is Pinned when its guest was listed in
+// the layout's pinnedGuestIds.
+type PlanInput struct {
+	Capacity int
+	BasedOn  int64
+	Tables   []seating.Table
+}
+
+// PlanReplace is what the store writes for one plan: the complete plan, to be stored when the
+// stored version still equals ExpectedVersion.
+type PlanReplace struct {
+	Capacity        int
+	ExpectedVersion int64
+	Plan            seating.Plan
+}
+
 // Capacities are the four plans, in the order they are listed and proposed.
 var Capacities = [4]int{9, 10, 11, 12}
 
-// Service evaluates, proposes, accepts and edits the four plans. It holds no state: every
+// Service evaluates, proposes, replaces and edits the four plans. It holds no state: every
 // call reads what it needs, so evaluations are never stale (nothing derived is stored).
 type Service struct {
 	plans  Store
@@ -89,40 +109,66 @@ func (s *Service) Calculate(ctx context.Context) ([]Proposal, error) {
 	return out, nil
 }
 
-// Accept replaces the plan's tables and assignments with the given layout (normally a
-// proposal's tables). It validates the layout (table numbers 1..k without gaps or repeats, every
-// guest known and at most once), keeps the pins of clusters that were pinned in the stored plan,
-// seats each cluster's disabled members with it, and stores the result under the optimistic
-// lock: a stale basedOn is apperr.ErrVersionConflict. Violations do not block saving.
-func (s *Service) Accept(ctx context.Context, capacity int, basedOn int64, tables []seating.Table) (Evaluated, error) {
+// Replace stores all four plans at once (Generate and its undo): the capacities must be 9, 10,
+// 11 and 12, each exactly once. Per plan it validates the layout (table numbers 1..k without gaps
+// or repeats, every guest known and at most once), spreads each pin to every seat of the pinned
+// cluster (a cluster is pinned when any listed member is), and seats each cluster's disabled
+// members with it. The store then writes everything in one transaction under the optimistic lock
+// of every plan: a stale BasedOn on any plan is apperr.ErrVersionConflict and nothing is
+// changed. Invalid input is apperr.Validation (field "plans") before anything is written.
+// Violations do not block saving. Returns the four evaluated plans ordered 9..12.
+func (s *Service) Replace(ctx context.Context, in []PlanInput) ([]Evaluated, error) {
+	if err := checkCapacities(in); err != nil {
+		return nil, err
+	}
 	g, err := s.graph(ctx)
 	if err != nil {
-		return Evaluated{}, err
+		return nil, err
 	}
-	current, err := s.plans.Get(ctx, capacity)
-	if err != nil {
-		return Evaluated{}, err
-	}
-	if current.Version != basedOn { // early out; ReplacePlan re-checks atomically
-		return Evaluated{}, apperr.ErrVersionConflict
-	}
-	layout, err := validLayout(g, capacity, tables)
-	if err != nil {
-		return Evaluated{}, err
-	}
-	pinnedClusters := pinnedClusterKeys(g, current.Plan)
-	for ti := range layout.Tables {
-		for si, seat := range layout.Tables[ti].Seats {
-			if c, ok := g.ClusterOf(seat.Guest); ok && pinnedClusters[c.Key] {
-				layout.Tables[ti].Seats[si].Pinned = true
+	reps := make([]PlanReplace, len(in))
+	for i, p := range in {
+		layout, err := validLayout(g, p.Capacity, p.Tables)
+		if err != nil {
+			return nil, err
+		}
+		pinned := pinnedClusterKeys(g, layout)
+		for ti := range layout.Tables {
+			for si, seat := range layout.Tables[ti].Seats {
+				if c, ok := g.ClusterOf(seat.Guest); ok && pinned[c.Key] {
+					layout.Tables[ti].Seats[si].Pinned = true
+				}
 			}
 		}
+		reps[i] = PlanReplace{Capacity: p.Capacity, ExpectedVersion: p.BasedOn, Plan: seating.ExpandDisabled(g, layout)}
 	}
-	stored, err := s.plans.ReplacePlan(ctx, capacity, basedOn, seating.ExpandDisabled(g, layout))
+	sort.Slice(reps, func(i, j int) bool { return reps[i].Capacity < reps[j].Capacity })
+	states, err := s.plans.ReplacePlans(ctx, reps)
 	if err != nil {
-		return Evaluated{}, err
+		return nil, err
 	}
-	return Evaluated{State: stored, Eval: seating.Evaluate(g, stored.Plan)}, nil
+	out := make([]Evaluated, len(states))
+	for i, st := range states {
+		out[i] = Evaluated{State: st, Eval: seating.Evaluate(g, st.Plan)}
+	}
+	return out, nil
+}
+
+// checkCapacities requires exactly the four capacities, each once.
+func checkCapacities(in []PlanInput) error {
+	if len(in) != len(Capacities) {
+		return apperr.Validation{Field: "plans", Message: fmt.Sprintf("Exactly %d plans are required (capacities 9, 10, 11, 12).", len(Capacities))}
+	}
+	seen := map[int]bool{}
+	for _, p := range in {
+		if !slices.Contains(Capacities[:], p.Capacity) {
+			return apperr.Validation{Field: "plans", Message: fmt.Sprintf("Unknown capacity %d.", p.Capacity)}
+		}
+		if seen[p.Capacity] {
+			return apperr.Validation{Field: "plans", Message: fmt.Sprintf("Capacity %d appears more than once.", p.Capacity)}
+		}
+		seen[p.Capacity] = true
+	}
+	return nil
 }
 
 // Seat moves the guest's WHOLE cluster (every member, disabled ones included) to the table and
@@ -180,7 +226,7 @@ func (s *Service) RemoveTable(ctx context.Context, capacity, number int) (Evalua
 }
 
 // Reset deletes the plan: all its tables, assignments and pins go and the version is bumped
-// (so an older proposal is stale), leaving an empty plan. Not version-checked.
+// (so an older Generate or undo is stale), leaving an empty plan. Not version-checked.
 func (s *Service) Reset(ctx context.Context, capacity int) (Evaluated, error) {
 	return s.edit(ctx, func() (PlanState, error) { return s.plans.ClearPlan(ctx, capacity) })
 }
@@ -209,11 +255,11 @@ func (s *Service) graph(ctx context.Context) (seating.Graph, error) {
 	return seating.BuildGraph(sg, sl), nil
 }
 
-// validLayout checks an accepted layout and returns it as a Plan with tables ordered 1..k. The
+// validLayout checks one plan's layout and returns it as a Plan with tables ordered 1..k. The
 // input is not modified.
 func validLayout(g seating.Graph, capacity int, tables []seating.Table) (seating.Plan, error) {
 	bad := func(msg string, args ...any) error {
-		return apperr.Validation{Field: "tables", Message: fmt.Sprintf(msg, args...)}
+		return apperr.Validation{Field: "plans", Message: fmt.Sprintf("Plan %d: ", capacity) + fmt.Sprintf(msg, args...)}
 	}
 	out := seating.Plan{Capacity: capacity, Tables: make([]seating.Table, len(tables))}
 	for i, t := range tables {

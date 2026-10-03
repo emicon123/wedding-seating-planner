@@ -7,7 +7,7 @@ import "sort"
 // (the table of its smallest seated enabled member), carrying the cluster's pin
 // flag (any seat of the cluster pinned). Existing seats of those disabled
 // members elsewhere are moved. Clusters without a seated enabled member and
-// guests unknown to the graph are left untouched. Used when a proposal is accepted.
+// guests unknown to the graph are left untouched. Used when the plans are replaced (PUT /scenarios).
 func ExpandDisabled(g Graph, p Plan) Plan {
 	tableIdx := map[GuestID]int{} // enabled guest -> table index (first seat)
 	pinned := map[GuestID]bool{}  // cluster key -> any seat pinned
