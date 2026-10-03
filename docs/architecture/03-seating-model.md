@@ -138,6 +138,8 @@ flowchart TD
 
 *Measured before task 011 (task 008 Phase B, on the Pi, ARM64, 4 cores; `go test -bench ProposeFixture ./internal/seating`, synthetic fixture of 106 guests in 25 clusters):* 4 restarts × up to 400 000 steps per capacity (`min(400 000, 16 000 × movable items)`; 25 items hit the cap), temperature 6 → 0.8 geometric, constant seeds. `Propose` ≈ 57-64 ms per capacity (9: 63 ms, 10: 64 ms, 11: 57 ms, 12: 57 ms); `Generate` (four capacities, sequential, no goroutines needed) ≈ 240 ms. Capacity-12 score on the fixture: 306 (pack + repair + improve alone: 253), equal to the best of 12 independent 3M-step runs; a single restart reaches it in ~90% of seeds, so four restarts make a miss very unlikely.
 
+*Measured after task 011 (isolation objective; same Pi, benchmark and fixture; `annealIsoWeight = 1`, scrambled restart seeds, same 4 × up to 400 000 steps):* `Propose` ≈ 68-81 ms per capacity (9: 76 ms, 10: 81 ms, 11: 71 ms, 12: 68 ms); `Generate` (four capacities, sequential) ≈ 296 ms (live `POST /scenarios/calculate` on the real list: 0.43 s including HTTP). Still a heuristic: on the live list (2026-10-03, 107 enabled guests) a 3M-step × 24-run search finds the same objective at capacities 9, 10 and 11 but a 12% higher score at capacity 12 (558 vs 498, both with 0 isolated guests); at capacity 9 the 9 isolated guests (4 families) at k = 12 are structural (the long run does not remove them; k = 13 leaves 2).
+
 ## Manual edits and violations
 
 - A move or pin addressed to any guest applies to that guest's **whole cluster, disabled members included**. A split can only arise from link changes (e.g. a new group-0 link between guests at different tables) and then shows as a `cluster_split` violation; the next move of that cluster reunites it.
