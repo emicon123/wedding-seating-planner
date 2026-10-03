@@ -61,15 +61,17 @@ const Floor = 8                       // minimum guests per table when k > 1 (wa
 func Weight(l LinkLevel) float64      // Preferred 1.0, Acceptable 0.5, else 0
 const IsolationPenalty = 1            // satisfaction taken from each isolated guest (task 011, §8)
 
-type Guest struct { ID GuestID; Enabled bool }
+type Guest struct { ID GuestID; Enabled bool; Child bool }   // Child: task 014, §10
 type Link  struct { A, B GuestID; Level LinkLevel }
 
 type Cluster struct {
     Key     GuestID   // smallest member id
     Members []GuestID // all members, sorted
     Enabled []GuestID // enabled members, sorted
+    Adults  []GuestID // enabled members that are not Child, sorted (task 014)
 }
-func (c Cluster) SeatedSize() int
+func (c Cluster) SeatedSize() int   // len(Enabled): seats (fill, capacity, floor, k)
+func (c Cluster) AdultSize() int    // len(Adults): weight in satisfaction and isolation (task 014)
 
 type Graph struct { /* clusters, guest→cluster index, cluster-pair affinity, warnings (unexported fields) */ }
 func BuildGraph(guests []Guest, links []Link) Graph   // union-find over level-0 links of ALL guests
@@ -93,7 +95,7 @@ type Evaluation struct {
 type Summary struct { TableCount, Seated, Unseated, ViolationCount, Isolated int; Score float64; NeedsRecalculation bool } // Isolated: task 011, not in the contract
 type TableEval  struct { Number, Fill int; Score float64; Clusters []Placement }
 type Placement  struct { ClusterKey GuestID; Guests []GuestID; Pinned bool } // enabled members only
-type GuestScore struct { Guest GuestID; Table int /*0 = unseated*/; Satisfaction float64; PreferredTotal, PreferredAtTable, FallbackAtTable, StrangersAtTable int; Isolated bool /*task 011, not in the contract*/ }
+type GuestScore struct { Guest GuestID; Table int /*0 = unseated*/; Satisfaction float64; PreferredTotal, PreferredAtTable, FallbackAtTable, StrangersAtTable int /*adults only; all 0 for a child, task 014*/; Isolated bool /*task 011, not in the contract*/ }
 type Violation  struct { Code ViolationCode; Table int /*0 = none*/; Guests []GuestID }
 type DataWarning struct { Code WarningCode; Guests []GuestID }
 
@@ -921,3 +923,116 @@ Generate = five `Propose` calls in parallel; the mixed one does one or two solve
 | Reusing plan 12's proposal for the mixed k0 | deferred | Only if B1 measures Generate > 5 s (identical input ⇒ identical result when pins match). |
 
 Audit: SRP kept (seating decides k; scenarios orchestrates; store maps rows; httpapi maps keys). DRY: one key mapping per boundary; size rule written once (contract + 03-seating-model) and implemented once (client). No new package, no new dependency. Determinism and budgets unchanged.
+
+## 10. Task 014 — Children are not scored (they still take seats)
+
+Rules and worked examples D–H: [../03-seating-model.md](../03-seating-model.md) § Children (authoritative). In one line: **seats count every enabled guest, scores count enabled adults.** No migration, no API shape change (descriptions only: `Guest.isChild`, `GuestScore.*`, `PlanTable.score`, `PlanSummary.score`, `SeatingPlan.guestScores`). Packages touched: `seating` (core), `guests` (`ToSeating`), nothing else (both graph builders — `guests.Service.Graph` and `scenarios.Service.graph` — already go through `guests.ToSeating`, so the flag reaches every path: list, get, calculate, replace, per-plan edits).
+
+### 10.1 Data flow of the flag
+
+```mermaid
+flowchart LR
+    DB["guest.is_child"] -->|"store: rowToGuest"| G["guests.Guest.IsChild"]
+    G -->|"guests.ToSeating (the one projection)"| SG["seating.Guest{ID, Enabled, Child}"]
+    SG -->|"BuildGraph"| GR["Graph: child map + Cluster.Adults"]
+    GR --> EV["Evaluate: adults scored, children all-zero GuestScore"]
+    GR --> IT["newItems: adults[] = AdultSize → gain, hasPartner, ΔI"]
+```
+
+*Legend:* one projection (`ToSeating`, DRY), one derived value (`Cluster.Adults`) read by both consumers. Rejected: passing a separate `children` set to `Evaluate`/`Propose` (every call site would have to supply it; the Graph already is "the guest data the core needs"); a `Weight`-per-guest abstraction (YAGNI: one flag, weight 0 or 1).
+
+### 10.2 `graph.go`
+
+```go
+type Guest struct { ID GuestID; Enabled bool; Child bool }
+type Cluster struct { Key GuestID; Members, Enabled, Adults []GuestID }
+func (c Cluster) AdultSize() int { return len(c.Adults) }
+
+// Graph gets one unexported field: child map[GuestID]bool (first occurrence wins, like enabled).
+// BuildGraph appends id to c.Adults when enabled[id] && !child[id].
+
+// hasPartners: a partner must have AdultSize() > 0 (was SeatedSize() > 0).
+// preferredTotals: sums the partners' AdultSize() (was SeatedSize()).
+```
+
+`buildWarnings` (oversize) and everything about clusters/affinity: **unchanged** (seat-based). `guests.ToSeating`: `seating.Guest{ID: g.ID, Enabled: g.Enabled, Child: g.IsChild}`.
+
+### 10.3 `evaluate.go`
+
+Per table `ti`, per cluster key `k` at the table:
+
+```go
+adultsAt := func(o GuestID) int  // number of !g.child[id] among atTable[ti][o] (enabled guests of o at this table)
+for o ≠ k: n := adultsAt(o); prefAt / fallAt / strangers += n; sat += Weight(lvl)·n   // adults only
+isolated := hasPartner[k] && prefAt+fallAt == 0
+if isolated { sat -= IsolationPenalty }
+for each member gid (sorted):
+    if g.child[gid] { scores = append(scores, GuestScore{Guest: gid, Table: t.Number}); continue } // all 0, Isolated false; adds nothing
+    // adult: exactly as before (te.Score += sat; Summary.Isolated++ if isolated)
+```
+
+Unseated: a child's `GuestScore{Guest: id}` (PreferredTotal 0); an adult's as before. **Unchanged:** `Fill`, `Seated`, `Unseated`, `Placement`s, violations, `NeedsRecalculation`, `TableCount`. Postcondition (testable): with no child in the graph, `Evaluate` returns exactly what it returned before task 014.
+
+### 10.4 `propose.go`: weights
+
+```go
+type items struct {
+    // … as before; size[] stays the SEATS (fill, capacity, floor, pack order, k, total) …
+    adults []int // per item: cluster AdultSize() — the weight in gain and isolation (task 014)
+}
+// newItems:
+//   it.adults = append(it.adults, c.AdultSize())
+//   gain[a][b]    = 2 · Weight(lvl) · adults[a] · adults[b]       (was size·size; still an integer)
+//   hasPartner[a] = partners[key] && adults[a] > 0                  (a children-only item can never be isolated)
+//   nbr[a]        = { b : gain[a][b] > 0 }                          (unchanged definition → children-only items have no neighbours)
+// objective(): iso += adults[a] (was size[a])
+// moveDelta / swapDelta: every `size[x] · ([after] − [before])` term in ΔI becomes `adults[x] · (…)`; pairΔ formulas unchanged
+```
+
+**Key fact, restated:** `gain[a][b] > 0` ⇔ affinity and `adults[a] ≥ 1` and `adults[b] ≥ 1`; so for an item with `adults[a] ≥ 1`, `affTo[a][t] == 0` ⇔ no partner item with an adult at `t` ⇔ Evaluate's adults-only `prefAt + fallAt == 0` (items are atomic in Propose). The delta tables of §8.3 stay the specification with `size` → `adults` in the ΔI column. A children-only item has `gain` 0 to everyone, `hasPartner` false, weight 0 and no neighbours: moving it has delta `(0, 0)` (a swap with it is worth only the other item's move), so the anneal may drift it (ties are accepted), `improve` never moves it on its own, and `hasAffinity` ignores it.
+
+**Unchanged:** `size` everywhere seats are counted (`place`/`unplace` fill, capacity and floor checks, `pack` largest-first order, `minTables`, `it.total`, `(k+1)·Floor ≤ total`, `packExact`), pins, PRNG, budgets, `annealIsoWeight`, `proposeMixed` (its `objective().iso` is now isolated **adults** — the k0 / k0 + 1 rule follows without code change).
+
+Score integrality: `2·w·A_a·A_b` is an integer (w ∈ {1, ½}); scores stay whole numbers; a guest's own satisfaction may still end in ,5.
+
+### 10.5 Tests (B1) — real code paths, no mocks
+
+**graph / guests:** `Cluster.Adults` and `AdultSize` with an enabled child, a disabled child, a disabled adult; `hasPartners` false when the only partner has children only; `preferredTotals` counts adults; `guests.ToSeating` maps `IsChild`.
+
+**Evaluate** (`evaluate_test.go`):
+
+| # | Case | Expected |
+|---|---|---|
+| C1 | family K[5/2] —1— F[2/2] at one table | Anna, Piotr +2 each; Ola, Marek +2 each; three children `GuestScore` all 0; table score 8; `PreferredAtTable` of Ola = 2 |
+| C2 | adult with a stranger family [4/1] at the table | `StrangersAtTable` = 1 (adults only); satisfaction unchanged by the children |
+| C3 | example E: E[2/2] —1— T[2/0] (Tomek disabled), apart | E not isolated, satisfaction 0, `PreferredTotal` 0; T's children all 0 |
+| C4 | children-only cluster at a table with strangers | fill counts 2, scores 0, `Summary.Isolated` unchanged |
+| C5 | isolated family [5/2] | `Summary.Isolated` = 2, table score includes −2, the three children `Isolated == false` |
+| C6 | flip `Child` on random guests of the generated instances | `Violations`, `Fill`, `Seated`, `Unseated`, `NeedsRecalculation`, `Placement`s identical |
+| C7 | unseated child | `GuestScore{Guest}` all 0 |
+| C8 | no child anywhere | every existing `evaluate_test` / `isolation_test` expectation unchanged |
+
+**Deltas** (`propose_test.go` / `anneal_test.go`): D10 moving a children-only item: delta (0, 0); D11 isolated family [5/2] moves to its partner: ΔI = −2; D12 a partner [4/1] leaves `c`'s table: `c` becomes isolated, ΔI = +adults[c]; D13 swap involving a children-only item and a partner item.
+
+**Property** (extends the §8.7 property test): generated instances get random `Child` flags (~25% of guests, plus at least one children-only cluster and one partner-of-only-children); every predicted delta equals the recomputed `objective()` difference; `Evaluate(toPlan)` gives `Summary.Score == objective().score` and `Summary.Isolated == objective().iso`.
+
+**Propose:** example D (pins K → 1, L → 2; F joins L; `Summary.Isolated` 2; score 10); example E/F (T placed, both children 0, E never isolated, all fills in [8, 12]); example H both variants as mixed plans (3 tables; 2 tables); determinism (run twice); **all-adult regression:** every existing Propose/mixed/oracle expectation is unchanged because no existing fixture has a child — if any expectation must change, justify it in the commit message (never weaken).
+
+**scenarios / httpapi** (real SQLite): a guest created with `isChild: true` in a seated family → `GET /scenarios` and `POST /scenarios/calculate` give that child `satisfaction 0` and zeros, `fill` includes the child, adults' scores adults-only; `PATCH` a guest's `isChild` changes scores but no `fill`/violation.
+
+**Diagnostic / tuning inputs:** the JSON of `STOLIKI_DIAG_INPUT` / `STOLIKI_TUNE_INPUT` gets an optional `"child": bool` per guest (default false, old files still load); the §8.6 `jq` recipe becomes `guests: [.data[] | {id, enabled, child: .isChild}]`.
+
+**Time:** re-run `BenchmarkProposeTight` (`generate5`) and a live `POST /scenarios/calculate`; expected unchanged (≈ 4 s; same budget, same work per step); record in 03-seating-model § Auto-seating ("Task 014").
+
+### 10.6 Pattern evaluation and audit (task 014)
+
+| Candidate | Verdict | Reason |
+|---|---|---|
+| `Cluster.Adults` derived in `BuildGraph` | **adopted** | One derived value read by Evaluate and newItems (DRY); the same shape as `Enabled`. |
+| Per-guest weight (`Weight float64` on `Guest`) | rejected | Only 0/1 is needed (YAGNI); integer arithmetic of the optimiser would be lost. |
+| Strategy "scoring policy" | rejected | One rule. |
+| Contract field `GuestScore.counted` / `summary.adultScore` | rejected | The client knows `isChild` from `GET /guests`; a child's zeros are documented. |
+| Floor counts adults only | rejected (default kept) | A child takes a seat; the floor is about a table not looking empty. Open to the user (glossary A-22). |
+| Children-only clusters attracted to their family's friends | rejected | That would be scoring children (the opposite of the requirement); edge case (A-22). |
+
+Audit: SRP kept (seats vs weights are two arrays with two names, `size` / `adults`, never mixed); no new package or dependency; determinism, budgets, objective order and the mixed-plan rule unchanged in code shape; the only semantic change is the weight.

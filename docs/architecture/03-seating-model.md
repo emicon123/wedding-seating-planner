@@ -4,7 +4,7 @@ The rules the seating code (`backend-go/internal/seating`, pure Go, no I/O) impl
 
 ## Inputs and outputs
 
-- **Input:** all guests, each with an `enabled` flag; links (pair, level); and, per scenario, its capacity ∈ {9, 10, 11, 12} and whether it is the **mixed plan** (capacity 12, `Plan.Mixed`), its current tables, assignments and pins.
+- **Input:** all guests, each with an `enabled` flag and an `isChild` flag (task 014); links (pair, level); and, per scenario, its capacity ∈ {9, 10, 11, 12} and whether it is the **mixed plan** (capacity 12, `Plan.Mixed`), its current tables, assignments and pins.
 - **Outputs:**
   - `Clusters(guests, links)` → clusters (all members, plus the enabled subset) + cluster affinities + data warnings.
   - `Evaluate(scenario state)` → per guest/table/scenario satisfaction, fill, violations, and **`needsRecalculation` = (at least one violation)**. Called on every scenario read and after every mutation.
@@ -14,7 +14,8 @@ The rules the seating code (`backend-go/internal/seating`, pure Go, no I/O) impl
 ## Who counts
 
 - **Clusters** are connected components of the group-0 graph over **all** guests, disabled ones included. Disabling the guest who wrote a family's group-0 list does not split the family.
-- Only **enabled** members take seats, count towards fill and are scored. A cluster's *seated size* is its number of enabled members. A cluster with seated size 0 is ignored by Propose and Evaluate.
+- Only **enabled** members take seats and count towards fill. A cluster's *seated size* is its number of enabled members. A cluster with seated size 0 is ignored by Propose and Evaluate.
+- Only **enabled adults** are scored (task 014, § Children): children take seats but neither receive nor give satisfaction and are never isolated. A cluster's *adult weight* is its number of enabled adults; it replaces the seated size wherever satisfaction or isolation is counted, never where seats are counted.
 - **Affinity** is a relation between whole clusters. It is computed from the links of all members, disabled ones included: if any member of A has a level-1 (or level-2) link to any member of B, then A↔B has that level. If the data contains both levels between the same two clusters (should not happen), level 1 wins and a `conflicting_link_levels` data warning lists the guests involved. No other combining logic exists.
 
 ## Rules, in strict priority order
@@ -36,35 +37,39 @@ w(1) = 1.0, w(2) = 0.5, w(none) = 0
 
 IsolationPenalty = 1
 
-satisfaction(g) = Σ over ENABLED table-mates h with cluster(h) ≠ cluster(g) of w(affinity(cluster(g), cluster(h)))
-                  − (IsolationPenalty if isolated(g))
-table score     = Σ satisfaction(g) for g at the table
+adult(h)        = h is enabled AND NOT h.isChild
+
+satisfaction(g) = 0                                                        if g is a child (task 014)
+                = Σ over ADULT table-mates h with cluster(h) ≠ cluster(g) of w(affinity(cluster(g), cluster(h)))
+                  − (IsolationPenalty if isolated(g))                      otherwise
+table score     = Σ satisfaction(g) for g at the table   (= Σ over the adults at the table)
 scenario score  = Σ table scores
 ```
 
-Also reported per enabled guest for the UI: `preferredTotal` (enabled effective group-1 companions), `preferredAtTable`, `fallbackAtTable` (group-2 people at the table), `strangersAtTable`. The weights and the penalty are fixed in code.
+Also reported per enabled guest for the UI: `preferredTotal` (enabled adult effective group-1 companions), `preferredAtTable`, `fallbackAtTable` (group-2 adults at the table), `strangersAtTable` (other adults at the table); all **adults only**, and all 0 for a child (task 014). The weights and the penalty are fixed in code.
 
-The table and scenario scores are always whole numbers (a group-2 pair of clusters of sizes a and b adds 0.5·b to each of a's members and 0.5·a to each of b's, a·b in total; the penalty is a whole number per guest). Only a single guest's satisfaction can end in ,5. Scores can now be negative.
+The table and scenario scores are always whole numbers (a group-2 pair of clusters with adult weights a and b adds 0.5·b to each of a's adults and 0.5·a to each of b's, a·b in total; the penalty is a whole number per guest). Only a single guest's satisfaction can end in ,5. Scores can now be negative.
 
 ### Isolation ("bez znajomych przy stole")
 
 ```
-partners(A)   = clusters B ≠ A with a group-1 or group-2 affinity to A and at least one ENABLED member
-                (seated or not, anywhere; group-0 mates never count — they are A itself)
-isolated(g)   = g is enabled AND seated
+partners(A)   = clusters B ≠ A with a group-1 or group-2 affinity to A and at least one ENABLED ADULT
+                (seated or not, anywhere; group-0 mates never count — they are A itself;
+                 a cluster whose enabled members are all children is no partner, task 014)
+isolated(g)   = g is an enabled ADULT AND seated
                 AND partners(cluster(g)) ≠ ∅
-                AND no enabled guest of any cluster in partners(cluster(g)) sits at g's table
-              ⇔ g is seated, has partners, and preferredAtTable(g) + fallbackAtTable(g) = 0
+                AND no enabled adult of any cluster in partners(cluster(g)) sits at g's table
+              ⇔ g is a seated adult, has partners, and preferredAtTable(g) + fallbackAtTable(g) = 0
 ```
 
-- **Per guest, the whole cluster at once:** isolation is a property of the cluster at its table, so every enabled member of an isolated cluster is isolated (Michał, Martyna, Zuzia and Zosia: four isolated guests, −4 on the score).
+- **Per guest, the whole cluster at once:** isolation is a property of the cluster at its table, so every enabled **adult** of an isolated cluster is isolated; its children are not (Michał, Martyna, Zuzia and Zosia, all adults: four isolated guests, −4 on the score; if Zuzia and Zosia were children: two, −2, task 014).
 - **No partners at all → never isolated** (satisfaction 0, as before): nothing can be done for them. Same when every partner cluster is fully disabled.
 - **Partner exists but cannot be at the table** (unseated, an oversized cluster, or capacity/floor make it impossible) → isolated. Shown, not hidden.
 - **Unseated guests** are not isolated (they have no table; `unseated_guests` already covers them).
 - **Not a violation.** `needsRecalculation` and the violation list are unchanged: "Przelicz" cannot help when isolation is unavoidable at the fewest tables, and a plan with an avoidable isolation made by hand is a quality issue, like low satisfaction. The UI marks isolated guests and counts them per plan ([diagrams/003-frontend-design.md](diagrams/003-frontend-design.md) §12).
 - **Two numbers, two roles.** The displayed satisfaction takes −1 per isolated guest (what the user sees in the scores). The optimiser does **not** trade that −1 against satisfaction: it compares layouts by the pair (isolated guests ↑, scenario score ↓), lexicographically (rule 5 before rule 6). Within an equal isolated count, "higher score" is the same as "higher group-1/2 satisfaction", since the penalty part is then equal.
 
-**Worked examples** (capacity 12; sizes in brackets; gains are scenario points: a group-1 pair of clusters of sizes a and b adds 2·a·b, group 2 adds a·b).
+**Worked examples** (capacity 12; sizes in brackets, all members adults; gains are scenario points: a group-1 pair of clusters of adult weights a and b adds 2·a·b, group 2 adds a·b — with adults only, the weight equals the size).
 
 *A. The Michał case (a shared partner).* M[4] —1— P[2] —1— Q[6] —1— R[2]; strangers S1[4], S2[4], S3[2]; 24 guests, k = 2, both tables exactly 12 (floor and capacity).
 
@@ -79,6 +84,62 @@ M can never sit with Q and P together (4 + 2 + 6 = 12 leaves R alone, which is l
 *B. Unavoidable at the fewest tables.* M[4] whose only partner is X[10]: 14 > 12, so they never share a table. M (4) and X (10) are isolated in every plan; the plan is valid, has no violation, and the 14 guests carry the "bez znajomych przy stole" marker. Nothing the optimiser does changes it; the user can only change links.
 
 *C. Avoidable only with one more table.* M[3] —1— P[5]; strangers [6], [2], [5], [3]; 24 guests. k = 2 (two tables of 12): M + P = 8 would need exactly 4 more seats and no cluster or pair of clusters makes 4, so M and P sit apart, both isolated (8 isolated guests). With k = 3 (three tables of exactly 8): {M, P}, {6, 2}, {5, 3}, nobody isolated. Fewest tables wins (rule 3 before rule 5), so the plan has 2 tables and 8 isolated guests. Whether an extra table is worth it is the user's call; Propose never adds one on its own. The diagnostic in [diagrams/003-backend-design.md](diagrams/003-backend-design.md) §8.6 reports these k vs k + 1 numbers on the real data.
+
+## Children (task 014)
+
+User requirement (2026-10-03): "Czy dzieci i ich zadowolenie wlicza się do wyniku?? (Nie powinno)". Children (`isChild`) **take seats but are not scored**.
+
+```mermaid
+flowchart TD
+    G["guest"] --> E{"enabled?"}
+    E -- no --> X["ignored by every plan (no seat, no fill, no score)"]
+    E -- yes --> S["takes a seat: fill, capacity, floor of 8, cluster integrity, Potrzebne stoły, unseated_guests"]
+    S --> C{"isChild?"}
+    C -- yes --> K["not scored: satisfaction 0, adds 0 to anyone, never isolated, every GuestScore number 0"]
+    C -- no --> A["scored: satisfaction from ADULT table-mates; can be isolated (partners = clusters with an enabled adult)"]
+```
+
+*Legend:* hard rules (rules 1–4, 7) see seats; soft rules (5, 6) see adults. One flag, read in one place per concern (a cluster's adult weight); no new rule, no Strategy.
+
+**What changes, exactly.**
+
+| Concern | Counts | Unchanged? |
+|---|---|---|
+| Fill, capacity, floor of 8, k, feasibility, oversized cluster, "Potrzebne stoły" (mixed-plan table sizes) | every enabled guest (children included) | yes |
+| Cluster integrity, moves, pins, `ExpandDisabled`, violations, `needsRecalculation` | every member | yes |
+| Affinity between clusters (from links of all members, disabled included) | — | yes |
+| A guest's satisfaction | adults receive from adult table-mates; a child receives 0 | **changed** |
+| Partners (for isolation), `preferredTotal`, `preferredAtTable`, `fallbackAtTable`, `strangersAtTable` | adults only; 0 for a child | **changed** |
+| Isolated guests (score penalty, the optimiser's first objective, the mixed plan's k0 / k0 + 1 rule) | adults only | **changed** |
+| Optimiser weights: pair gain `2·w·A_a·A_b`, isolated seats `A_a` | adult weight `A` instead of seated size | **changed** |
+
+**Edge cases.**
+
+- *Cluster with only children enabled* (the parents declined): it takes its seats and sits together, counts towards fill and the floor, scores 0 and is never isolated. Its adult weight is 0, so nothing pulls it towards any table: it lands where packing and the hard rules put it (deterministic, as everything else). Flagged as assumption A-22 in the glossary.
+- *Partner cluster of only children*: it is **not** a partner. An adult whose only partner it is has no partners, so is never isolated, and sitting next to it adds 0.
+- *Adult cluster with children* (a family): its adults are scored and can be isolated; its children are not. Its weight in the optimiser is the number of its adults.
+- *Floor*: counts children (A-22). A table of 5 adults + 3 children has fill 8 and meets the floor.
+
+**Worked examples** (capacity 12; `[seats / adults]`).
+
+*D. A family with children no longer outweighs a couple of friends.* F[2/2] —1— K[5/2] (Anna, Piotr, three children) and F —1— L[3/3]; K and L are pinned to different tables, strangers fill both tables to ≥ 8, so F joins one of them.
+
+| F sits with | Isolated (before → after task 014) | Pair points before (`2·size·size`) | Pair points after (`2·adults·adults`) | Displayed score after | Chosen |
+|---|---|---|---|---|---|
+| K | L: 3 → 3 | 20 | 8 | 8 − 3 = 5 | before (iso 3 < 5) |
+| L | K: 5 → **2** | 12 | 12 | 12 − 2 = 10 | **after** (iso 2 < 3, and a higher score) |
+
+The three children made K count as five people both in the gain and in the isolation count; now K weighs two.
+
+*E. A partner cluster of only children.* Tomek (disabled, declined) is in group 0 with his children Zosia and Kuba (enabled): cluster T = [2/0]. Ewa and Jan E[2/2] have a group-1 link to Tomek, and no other link. Before: T was E's partner (sitting together +8; apart, E isolated −2). After: T is no partner, so E has no partners: never isolated, satisfaction 0 at any table; T's children 0.
+
+*F. A cluster of only children.* T of example E: 2 seats at one table, counted in fill and the floor, both `GuestScore`s all 0, no isolation mark. Anneal moves of T change nothing in the objective (delta (0, 0)), `improve` never moves it (no strict improvement), so it stays where packing put it.
+
+*G. Fill and floor unchanged.* 5 adults + 3 children → fill 8, no `under_floor`; 5 + 2 → fill 7, `under_floor` (k > 1); 10 + 3 at capacity 12 → fill 13, `over_capacity`; mixed plan, 6 + 3 → a 9-seat table.
+
+*H. The mixed plan counts isolated adults.* Example C with M = 1 adult + 2 children [3/1], P[5/5]: at k0 = 2 the isolated count is 1 + 5 = 6 (was 8); k0 + 1 = 3 gives 0, so still 3 tables. If M's adult is disabled (M = [2/0]), P has no partner, k0 = 2 has 0 isolated and the mixed plan keeps **2** tables (before task 014: 3).
+
+**Consequences to know.** Displayed table and plan scores drop (on the live list of 2026-10-03, plan 12: 594 of which 112 — 19% — was children's own satisfaction, plus the part children gave to adults) and are **not comparable** with scores from before task 014. The "Bez znajomych przy stole: N os." counts can drop too (children are no longer counted). The optimiser may pick different layouts (example D), so a Generate after the deploy can change plans the user knew.
 
 ## Feasibility of table count k
 
@@ -129,7 +190,7 @@ flowchart TD
 ```
 
 *Legend:*
-- **Objective of the optimiser (task 011).** A layout is better when it has **fewer isolated guests**, or the same number and a **higher scenario score** (lexicographic pair, never a weighted sum, so no "big M" and no overflow question). The repair step, anneal, the restart winner and improve all compare by this pair. Pack is unchanged (it only builds a starting layout).
+- **Objective of the optimiser (task 011; adults only since task 014).** A layout is better when it has **fewer isolated guests** (isolated **adults**), or the same number and a **higher scenario score** (adults' satisfaction; every weight is an adult weight, § Children) (lexicographic pair, never a weighted sum, so no "big M" and no overflow question). The repair step, anneal, the restart winner and improve all compare by this pair. Pack is unchanged (it only builds a starting layout).
 - **Two stages.** Everything up to the "yes" into **J** decides **feasibility and the table count k**; the anneal and improve stages only improve (isolated guests, score) of a layout that is already feasible. They never change k, never break a hard rule (capacity, floor 8 — waived for k = 1, clusters atomic, pinned clusters never move; oversized clusters are not items at all), so every intermediate layout is feasible. The result is never worse than the layout the anneal started from in (isolated guests, score): the best-seen layout includes the start, and improve only accepts strict improvements. Isolation never increases k (rule 3 before rule 5).
 - **Isolation is a heuristic target, too.** Like the score, "fewest isolated guests" is what the search finds, not a proven minimum; improve tries every single move and every swap, so a layout where one such step would remove an isolation without breaking a hard rule is never returned.
 - **Why annealing.** Greedy packing fills tables to capacity; on nearly full tables almost every single move or swap breaks capacity or the floor, so a strict-improvement local search stops early (task 008 audit on the real list: capacity 12 scored 172 against ≈ 308 reachable). Accepting some worse steps lets the search leave those local optima. It is still a **heuristic, not a proven optimum**; it reaches the best known score on the ~100-guest test fixture.
@@ -143,6 +204,8 @@ flowchart TD
 
 *Measured after task 012 (larger budget; same Pi, 4 cores, live list of 2026-10-03: 107 enabled guests, 46 clusters, 100 affinity pairs; the live ids file is never committed):* 32 restarts × 1.48M steps (the old 4 × 400k was well below what capacity 12 needs), temperature 6 → 3 (a warmer end finds the deep basins of nearly full tables more often than the former 0.8; the final `improve` settles the layout). Objective (isolated guests, score) over 24 seed offsets: capacities 9, 10, 11 give (9, 357), (0, 558), (0, 590) in 24/24; capacity 12 gives (0, 568) in 9/24, (0, 566) in 7, (0, 560) in 7, (0, 562) in 1, never below the earlier 3M × 24 reference (558); a 128 restarts × 4M run reaches 568 in 3/3, which is taken as the optimum, so 568 is a ~40% chance per seed offset and the deployed constants return it for this list. Former budget at capacity 12: (0, 498). `Propose` ≈ 0.77-0.85 s per capacity on the live list (was ≈ 0.1 s); `Generate` (four capacities in parallel goroutines) ≈ 3.2 s (was ≈ 0.4 s sequential). Synthetic tight fixture (`tightFixture(4)`, 46 clusters at capacity 12, one free seat): former pipeline 392, now 408 = best of three 128 × 3M runs. A smaller budget misses capacity 12 more often (objective range over 8-24 seed offsets; the first two at the former end temperature 0.8): 8 × 400k gives 522-556, 16 × 1M 532-568; at 6 → 3: 32 × 1M 558-568, 32 × 1.5M 560-568. Capacities 9-11 already match at 8 × 400k.
 
+*Task 014 (children not scored):* the budget and the pipeline are unchanged (the weights change, not the work per step); B1 re-measures `generate5` and `POST /scenarios/calculate` on the live list and records the numbers here.
+
 *Measured after task 013 (five plans incl. mixed; live list 2026-10-03, 107 enabled guests; `POST /scenarios/calculate` inside the container):* ≈ 4.1 s wall time for all five plans (the four capacities and the mixed plan run in parallel on the 4 cores; the mixed plan costs one solve while plan 12 has 0 isolated guests, up to two otherwise, worst case ≈ 4.8 s). `BenchmarkProposeTight` `generate5` ≈ 4.0 s idle, ≈ 6.1 s while another CPU-heavy process is running. Peak container memory stays ≈ 8 MB.
 
 ## The mixed plan ("Mieszany", task 013)
@@ -153,7 +216,7 @@ User requirement (2026-10-03): "plan mieszany — różne stoły od 9 do 12 (min
 
 - *k0* = the table count the 12-seat rules give (the smallest feasible k at capacity 12, found exactly as in § Feasibility, with this plan's own pins).
 - If *(k0 + 1)·8 ≤ N*, the layout at *k0 + 1* is also solved (same pins; a pin to a table above k0 is honoured at k0 + 1 and released at k0, as everywhere).
-- **Choose k0 + 1 only if its isolated-guest count is strictly lower** than at k0. Otherwise k0. Never more than k0 + 1. Score never justifies the extra table (a k0 + 1 layout with fewer isolated guests wins even with a lower score; equal isolated counts keep k0 whatever the scores).
+- **Choose k0 + 1 only if its isolated-guest count (isolated adults, task 014) is strictly lower** than at k0. Otherwise k0. Never more than k0 + 1. Score never justifies the extra table (a k0 + 1 layout with fewer isolated guests wins even with a lower score; equal isolated counts keep k0 whatever the scores).
 - If no k is feasible (best-effort fallback of § Feasibility), the mixed plan returns that best-effort plan, like the 12-seat plan; no k0 + 1 attempt.
 - Shortcut (same result, saves time): if the k0 layout has 0 isolated guests, k0 + 1 cannot be strictly better, so it is not solved.
 

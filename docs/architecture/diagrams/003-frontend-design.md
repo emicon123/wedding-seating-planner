@@ -550,3 +550,25 @@ The size of a mixed-plan table as its fill changes is the state machine in [001-
 ### 13.5 Pattern check
 
 No new library, no client store, no new hook. Two pure modules (`plans.ts`, `tableSizes.ts`) and props. Rejected: a server field for sizes (derivable, DRY); a per-plan-kind component tree (`MixedPlanCard`) — one `PlanCard` with a small `isMixed` branch in the header (KISS); a "table inventory" input (the user chose "Algorytm sam dobiera rozmiary").
+
+## 14. Children are not scored (task 014)
+
+Rule: [../03-seating-model.md](../03-seating-model.md) § Children. **No contract shape change**: the server sends every enabled guest's `GuestScore`, and a child's is all zeros (`satisfaction 0`, `preferredTotal/AtTable 0`, `fallbackAtTable 0`, `strangersAtTable 0`); adults' numbers count adults only; `PlanTable.score` and `PlanSummary.score` are adults-only. Only descriptions changed in `docs/openapi.yaml`; regenerate `schema.d.ts` (comments only).
+
+**What follows without code:** `isIsolated` (`satisfaction < 0`) is never true for a child, so `isolatedCount` — the "Bez znajomych przy stole: N os." lines on `PlanCard` / `PlanDetailPage` and the mixed plan's `EXTRA_TABLE_NOTE` — already counts adults only. `GuestScoreMark` already returns `null` for a child's zeros (`preferredTotal 0 && fallbackAtTable 0 && !isolated`). Scores come from the server.
+
+**What changes (small, explicit):**
+
+| Place | Change |
+|---|---|
+| `GuestDetailsPanel` → `Satisfaction` | When `details.guest.isChild`: render one muted line instead of the block: **"Dziecko — nie wlicza się do zadowolenia (zajmuje miejsce przy stole)."** (today it would say "Ten gość nie ma preferowanych osób" and "Obcych przy stole: 0", which is misleading). Companion list unchanged. |
+| `GuestDetailsPanel` (adults) | "Obcych przy stole: N" → **"Obcych dorosłych przy stole: N"** (the number now counts adults). |
+| `PlanFigures` "Zadowolenie" figure | `title` (tooltip) **"Suma zadowolenia dorosłych — dzieci się nie liczą"**, so the drop in scores after the deploy is explained where the number is. No new figure. |
+| `GuestScoreMark` | No code change; a test pins that a child's zero score renders nothing. |
+| Copy | the three strings above go to `domain/labels.ts` (`CHILD_NOT_SCORED`, `STRANGERS_ADULTS_LABEL`, `SCORE_ADULTS_HINT`). |
+
+The child's seat, name, chip, drag-and-drop and print entry are unchanged (a child still takes a seat). No new control, no filter, no client-side scoring.
+
+**Tests (B2):** fixtures in `features/plans/fixtures.ts` get a child (a `Guest` with `isChild: true` seated with a family, `GuestScore` all zeros); `GuestScoreMark` renders nothing for it; `GuestDetailsPanel` shows the child line and not "Ten gość nie ma preferowanych osób" / "Obcych"; an adult shows "Obcych dorosłych przy stole: N"; `isolatedCount` ignores the child (satisfaction 0); `PlanFigures` score figure has the tooltip text. Typecheck, lint, test, build green.
+
+Pattern check: one conditional and three strings; no hook, no context, no contract field (the client already has `isChild` from `GET /guests`). Rejected: hiding the child in the plan (it takes a seat), a client-side recomputation of scores (the server is the single source).
